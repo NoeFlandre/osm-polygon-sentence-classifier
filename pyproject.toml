@@ -1,0 +1,88 @@
+[project]
+name = "osm-polygon-sentence-classifier"
+version = "0.1.0"
+description = "A sentence classifier for OSM polygon descriptions, starting with landuse."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "NoeFlandre" },
+]
+keywords = [
+    "openstreetmap",
+    "wikidata",
+    "sentence-classification",
+    "landuse",
+    "machine-learning",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/NoeFlandre/osm-polygon-sentence-classifier"
+Repository = "https://github.com/NoeFlandre/osm-polygon-sentence-classifier"
+Issues = "https://github.com/NoeFlandre/osm-polygon-sentence-classifier/issues"
+Documentation = "https://noeflandre.github.io/osm-polygon-sentence-classifier/"
+
+[project.optional-dependencies]
+training = [
+    "trackio>=0.26,<1",
+]
+docs = [
+    "mkdocs-material>=9.6,<10",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4,<5",
+    "pytest>=8,<9",
+    "ruff>=0.14,<0.15",
+    "ty>=0.0.65,<0.1",
+]
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-config", "--strict-markers"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+src = ["src", "tests"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "C4",
+    "SIM",
+    "PT",
+    "RUF100",
+]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["osm_polygon_sentence_classifier"]
+
+[tool.ty.src]
+include = ["src", "tests"]

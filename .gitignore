@@ -1,1 +1,30 @@
 .worktrees/
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.ty_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+site/
+
+# Project data and experiment outputs never belong in this repository.
+data/
+models/
+checkpoints/
+runs/
+outputs/
+tracking/
+*.parquet
+*.sqlite
+*.sqlite3
+*.jsonl
+
+# Credentials and local configuration never belong in this repository.
+.env
+.env.*
+!.env.example
