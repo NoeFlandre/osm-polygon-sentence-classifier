@@ -260,6 +260,43 @@ def test_audit_wraps_schema_contract_and_identifier_failures_with_row_numbers() 
         audit_rows([valid, invalid_contract])
 
 
+def test_audit_rejects_extra_columns_on_a_subsequent_row() -> None:
+    valid = _row(
+        sentence_id="sentence-1",
+        polygon_id="polygon-1",
+        label="yes",
+        text="Valid",
+    )
+    extra_column = valid.copy()
+    extra_column["unexpected_column"] = "not in the contract"
+
+    with pytest.raises(DatasetAuditError, match=r"row 2.*unexpected columns"):
+        audit_rows([valid, extra_column])
+
+
+def test_audit_rejects_reordered_columns_on_a_subsequent_row() -> None:
+    valid = _row(
+        sentence_id="sentence-1",
+        polygon_id="polygon-1",
+        label="yes",
+        text="Valid",
+    )
+    reordered = {
+        column: valid[column]
+        for column in (
+            LANDUSE_DATASET_CONTRACT.required_columns[:2]
+            + (
+                LANDUSE_DATASET_CONTRACT.required_columns[3],
+                LANDUSE_DATASET_CONTRACT.required_columns[2],
+            )
+            + LANDUSE_DATASET_CONTRACT.required_columns[4:]
+        )
+    }
+
+    with pytest.raises(DatasetAuditError, match=r"row 2.*required column order"):
+        audit_rows([valid, reordered])
+
+
 def test_audit_consumes_a_one_pass_iterator_without_materializing_rows() -> None:
     rows = _balanced_rows()
 
@@ -300,7 +337,7 @@ def test_write_audit_artifacts_uses_only_the_approved_audit_directory(
 ) -> None:
     result = audit_rows(_balanced_rows(), validation_fraction=0.5, seed=7)
     approved_root = ProjectConfig().data_root
-    mkdir_paths: list[Path] = []
+    prepared_paths: list[Path] = []
     writes: dict[Path, str] = {}
 
     class RecordingManagedPaths:
@@ -311,15 +348,8 @@ def test_write_audit_artifacts_uses_only_the_approved_audit_directory(
             assert relative_path == "audit/landuse"
             return approved_root / relative_path
 
-    def record_mkdir(
-        path: Path,
-        *,
-        parents: bool = False,
-        exist_ok: bool = False,
-    ) -> None:
-        assert parents is True
-        assert exist_ok is True
-        mkdir_paths.append(path)
+    def record_prepare(path: Path) -> None:
+        prepared_paths.append(path)
 
     def record_write_json(path: Path, payload: object) -> None:
         writes[path] = json.dumps(payload, indent=2, sort_keys=True) + "\n"
@@ -328,7 +358,10 @@ def test_write_audit_artifacts_uses_only_the_approved_audit_directory(
         "osm_polygon_sentence_classifier.dataset_audit.ManagedPaths",
         RecordingManagedPaths,
     )
-    monkeypatch.setattr(Path, "mkdir", record_mkdir)
+    monkeypatch.setattr(
+        "osm_polygon_sentence_classifier.dataset_audit._prepare_audit_directory",
+        record_prepare,
+    )
     monkeypatch.setattr(
         "osm_polygon_sentence_classifier.dataset_audit._write_json",
         record_write_json,
@@ -337,7 +370,7 @@ def test_write_audit_artifacts_uses_only_the_approved_audit_directory(
     report_path, manifest_path = write_audit_artifacts(result)
 
     audit_directory = approved_root / "audit/landuse"
-    assert mkdir_paths == [audit_directory]
+    assert prepared_paths == [audit_directory]
     assert (report_path, manifest_path) == (
         audit_directory / "audit_report.json",
         audit_directory / "split_manifest.json",
@@ -446,3 +479,36 @@ def test_write_audit_artifacts_rejects_a_symlinked_audit_directory(
 
     assert outside_report.read_text(encoding="utf-8") == "report sentinel\n"
     assert outside_manifest.read_text(encoding="utf-8") == "manifest sentinel\n"
+
+
+@pytest.mark.skipif(
+    not all(hasattr(os, flag) for flag in ("O_DIRECTORY", "O_NOFOLLOW")),
+    reason="directory no-following is not available on this platform",
+)
+def test_write_audit_artifacts_rejects_an_intermediate_directory_symlink(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    result = audit_rows(_balanced_rows(), validation_fraction=0.5, seed=7)
+    outside_directory = tmp_path / "outside"
+    outside_directory.mkdir()
+    audit_directory = tmp_path / "audit" / "landuse"
+    audit_directory.parent.symlink_to(outside_directory, target_is_directory=True)
+
+    class TemporaryManagedPaths:
+        def __init__(self, config: ProjectConfig) -> None:
+            assert config == ProjectConfig()
+
+        def child(self, relative_path: str) -> Path:
+            assert relative_path == "audit/landuse"
+            return audit_directory
+
+    monkeypatch.setattr(
+        "osm_polygon_sentence_classifier.dataset_audit.ManagedPaths",
+        TemporaryManagedPaths,
+    )
+
+    with pytest.raises(DatasetAuditError, match="audit artifact"):
+        write_audit_artifacts(result)
+
+    assert not (outside_directory / "landuse").exists()

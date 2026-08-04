@@ -42,6 +42,19 @@ def test_symlink_that_escapes_the_root_is_rejected(tmp_path: Path) -> None:
         resolve_managed_path(root, "escape/file.json")
 
 
+def test_symlinked_directory_component_is_rejected_even_when_it_stays_inside(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "approved"
+    root.mkdir()
+    target = root / "real"
+    target.mkdir()
+    (root / "audit").symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(ManagedPathError, match="symlink"):
+        resolve_managed_path(root, "audit/landuse")
+
+
 def test_application_paths_use_the_fixed_project_root() -> None:
     paths = ManagedPaths(ProjectConfig())
 

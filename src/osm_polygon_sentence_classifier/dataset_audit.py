@@ -7,6 +7,7 @@ import math
 import os
 from collections import Counter
 from collections.abc import Iterable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
@@ -19,7 +20,7 @@ from .dataset_contract import (
     DatasetContractError,
 )
 from .dataset_loader import DatasetSplit, split_for_polygon
-from .paths import ManagedPaths
+from .paths import ManagedPathError, ManagedPaths
 
 CounterItems = tuple[tuple[str, int], ...]
 TrainableLabelCounts = tuple[tuple[str, CounterItems], ...]
@@ -193,12 +194,6 @@ def audit_rows(
     except StopIteration:
         first_row = None
 
-    if first_row is not None:
-        try:
-            contract.validate_columns(first_row.keys())
-        except DatasetContractError as error:
-            raise _wrap_contract_error(1, error) from error
-
     label_counts = Counter(dict.fromkeys(contract.supported_label_values, 0))
     split_row_counts: Counter[str] = Counter(dict.fromkeys(("train", "validation"), 0))
     split_polygon_counts: Counter[str] = Counter(
@@ -227,6 +222,7 @@ def audit_rows(
 
     for row_number, row in enumerate(stream, start=1):
         try:
+            contract.validate_columns(row.keys())
             contract.validate_row(row)
         except DatasetContractError as error:
             raise _wrap_contract_error(row_number, error) from error
@@ -351,6 +347,86 @@ def audit_rows(
     )
 
 
+def _prepare_audit_directory(audit_directory: Path) -> None:
+    """Create the fixed audit path without following directory symlinks."""
+
+    root = audit_directory.parent.parent
+    components = (audit_directory.parent.name, audit_directory.name)
+    directory_flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        directory_flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        directory_flags |= os.O_NOFOLLOW
+
+    supports_directory_fds = all(
+        function in getattr(os, "supports_dir_fd", ())
+        for function in (os.open, os.mkdir)
+    ) and all(hasattr(os, flag) for flag in ("O_DIRECTORY", "O_NOFOLLOW"))
+
+    if not supports_directory_fds:
+        _prepare_audit_directory_without_directory_fds(root, components)
+        return
+
+    directory_fd: int | None = None
+    try:
+        directory_fd = os.open(root, directory_flags)
+        for component in components:
+            try:
+                child_fd = os.open(
+                    component,
+                    directory_flags,
+                    dir_fd=directory_fd,
+                )
+            except FileNotFoundError:
+                with suppress(FileExistsError):
+                    os.mkdir(component, 0o777, dir_fd=directory_fd)
+                child_fd = os.open(
+                    component,
+                    directory_flags,
+                    dir_fd=directory_fd,
+                )
+            os.close(directory_fd)
+            directory_fd = child_fd
+    except OSError as error:
+        raise DatasetAuditError(
+            f"unable to prepare audit artifact directory: {audit_directory}"
+        ) from error
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
+def _prepare_audit_directory_without_directory_fds(
+    root: Path, components: tuple[str, str]
+) -> None:
+    """Fallback directory preparation for platforms without directory FDs."""
+
+    current = root
+    if current.is_symlink():
+        raise DatasetAuditError(
+            f"audit artifact directory must not contain a symlink: {current}"
+        )
+    if not current.exists():
+        with suppress(FileExistsError):
+            current.mkdir()
+    if not current.is_dir():
+        raise DatasetAuditError(f"audit artifact path is not a directory: {current}")
+
+    for component in components:
+        current /= component
+        if current.is_symlink():
+            raise DatasetAuditError(
+                f"audit artifact directory must not contain a symlink: {current}"
+            )
+        if not current.exists():
+            with suppress(FileExistsError):
+                current.mkdir()
+        if not current.is_dir():
+            raise DatasetAuditError(
+                f"audit artifact path is not a directory: {current}"
+            )
+
+
 def _write_json(path: Path, payload: object) -> None:
     no_follow = getattr(os, "O_NOFOLLOW", 0)
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | no_follow
@@ -358,9 +434,7 @@ def _write_json(path: Path, payload: object) -> None:
     file_fd: int | None = None
     try:
         if os.open in getattr(os, "supports_dir_fd", ()):
-            directory_flags = (
-                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | no_follow
-            )
+            directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | no_follow
             directory_fd = os.open(path.parent, directory_flags)
             file_fd = os.open(
                 path.name,
@@ -373,6 +447,7 @@ def _write_json(path: Path, payload: object) -> None:
             with output:
                 output.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
         else:
+
             def opener(file_path: str, open_flags: int) -> int:
                 return os.open(file_path, open_flags | no_follow, 0o666)
 
@@ -410,8 +485,13 @@ def write_audit_artifacts(
 ) -> tuple[Path, Path]:
     """Write the explicit derived report and split manifest under audit/landuse."""
 
-    audit_directory = ManagedPaths(config).child("audit/landuse")
-    audit_directory.mkdir(parents=True, exist_ok=True)
+    try:
+        audit_directory = ManagedPaths(config).child("audit/landuse")
+    except ManagedPathError as error:
+        raise DatasetAuditError(
+            "unable to prepare audit artifact directory under the managed root"
+        ) from error
+    _prepare_audit_directory(audit_directory)
     report_path = _safe_artifact_path(audit_directory, "audit_report.json")
     manifest_path = _safe_artifact_path(audit_directory, "split_manifest.json")
     _write_json(report_path, result.report.to_dict())
