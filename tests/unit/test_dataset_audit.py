@@ -1,7 +1,7 @@
 import json
 import os
 from collections.abc import Iterator
-from dataclasses import FrozenInstanceError, is_dataclass
+from dataclasses import FrozenInstanceError, is_dataclass, replace
 from itertools import count
 from pathlib import Path
 
@@ -188,6 +188,90 @@ def test_audit_counts_labels_polygons_splits_and_training_text_metrics() -> None
 
     with pytest.raises(FrozenInstanceError):
         report.total_rows = 0  # type: ignore[misc]
+
+
+def test_audit_uses_custom_training_labels_for_counts_and_conflicts() -> None:
+    custom_contract = replace(
+        LANDUSE_DATASET_CONTRACT,
+        supported_label_values=("negative", "positive", "uncertain"),
+        training_label_values=("negative", "positive"),
+    )
+    train_polygon = _polygon_for_split("train", seed=23)
+    validation_polygon = _polygon_for_split("validation", seed=23)
+
+    def custom_row(
+        *, sentence_id: str, polygon_id: str, label: str, text: str, content_hash: str
+    ) -> dict[str, object]:
+        row = _row(
+            sentence_id=sentence_id,
+            polygon_id=polygon_id,
+            label=label,
+            text=text,
+            sentence_content_hash=content_hash,
+        )
+        return row
+
+    rows = [
+        custom_row(
+            sentence_id="train-negative",
+            polygon_id=train_polygon,
+            label="negative",
+            text="Train negative",
+            content_hash="conflicting-hash",
+        ),
+        custom_row(
+            sentence_id="train-positive",
+            polygon_id=train_polygon,
+            label="positive",
+            text="Train positive",
+            content_hash="conflicting-hash",
+        ),
+        custom_row(
+            sentence_id="train-uncertain",
+            polygon_id=train_polygon,
+            label="uncertain",
+            text="Train uncertain",
+            content_hash="train-uncertain-hash",
+        ),
+        custom_row(
+            sentence_id="validation-negative",
+            polygon_id=validation_polygon,
+            label="negative",
+            text="Validation negative",
+            content_hash="validation-negative-hash",
+        ),
+        custom_row(
+            sentence_id="validation-positive",
+            polygon_id=validation_polygon,
+            label="positive",
+            text="Validation positive",
+            content_hash="validation-positive-hash",
+        ),
+        custom_row(
+            sentence_id="validation-uncertain",
+            polygon_id=validation_polygon,
+            label="uncertain",
+            text="Validation uncertain",
+            content_hash="validation-uncertain-hash",
+        ),
+    ]
+
+    report = audit_rows(
+        rows,
+        validation_fraction=0.5,
+        seed=23,
+        contract=custom_contract,
+    ).report
+
+    assert report.trainable_rows == 4
+    assert report.trainable_label_counts == (
+        ("train", (("negative", 1), ("positive", 1))),
+        ("validation", (("negative", 1), ("positive", 1))),
+    )
+    assert report.mixed_label_polygons == 2
+    assert report.conflicting_content_hash_groups == 1
+    assert report.review_required_reasons == ("content_hash_label_conflicts",)
+    assert report.ready is False
 
 
 def test_audit_counts_duplicate_hash_risks_and_split_readiness_reasons() -> None:

@@ -199,12 +199,14 @@ def audit_rows(
         first_row = None
 
     label_counts = Counter(dict.fromkeys(contract.supported_label_values, 0))
+    training_label_values = contract.training_label_values
+    training_label_set = frozenset(training_label_values)
     split_row_counts: Counter[str] = Counter(dict.fromkeys(("train", "validation"), 0))
     split_polygon_counts: Counter[str] = Counter(
         dict.fromkeys(("train", "validation"), 0)
     )
     trainable_label_counts: dict[str, Counter[str]] = {
-        split: Counter(dict.fromkeys(("no", "yes"), 0))
+        split: Counter(dict.fromkeys(training_label_values, 0))
         for split in ("train", "validation")
     }
     language_counts: Counter[str] = Counter()
@@ -255,7 +257,7 @@ def audit_rows(
         split_row_counts[row_split] += 1
         total_rows += 1
 
-        if label not in ("no", "yes"):
+        if label not in training_label_set:
             continue
 
         trainable_rows += 1
@@ -298,13 +300,13 @@ def audit_rows(
         for content_hash, count in hash_counts.items()
     )
     mixed_label_polygons = sum(
-        labels.issuperset({"no", "yes"}) for labels in polygon_labels.values()
+        labels.issuperset(training_label_set) for labels in polygon_labels.values()
     )
     cross_split_duplicate_groups = sum(
         splits.issuperset({"train", "validation"}) for splits in hash_splits.values()
     )
     conflicting_content_hash_groups = sum(
-        labels.issuperset({"no", "yes"}) for labels in hash_labels.values()
+        labels.issuperset(training_label_set) for labels in hash_labels.values()
     )
 
     review_reasons: set[str] = set()
@@ -314,7 +316,8 @@ def audit_rows(
         review_reasons.add("cross_split_duplicate_groups")
     for row_split in ("train", "validation"):
         if any(
-            trainable_label_counts[row_split][label] == 0 for label in ("no", "yes")
+            trainable_label_counts[row_split][label] == 0
+            for label in training_label_values
         ):
             review_reasons.add(f"{row_split}_split_missing_label")
 
