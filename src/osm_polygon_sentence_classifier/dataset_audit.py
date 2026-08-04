@@ -347,30 +347,24 @@ def audit_rows(
     )
 
 
-def _prepare_audit_directory(audit_directory: Path) -> None:
-    """Create the fixed audit path without following directory symlinks."""
-
-    root = audit_directory.parent.parent
-    components = (audit_directory.parent.name, audit_directory.name)
-    directory_flags = os.O_RDONLY
-    if hasattr(os, "O_DIRECTORY"):
-        directory_flags |= os.O_DIRECTORY
-    if hasattr(os, "O_NOFOLLOW"):
-        directory_flags |= os.O_NOFOLLOW
-
-    supports_directory_fds = all(
+def _directory_fd_supported() -> bool:
+    return all(hasattr(os, flag) for flag in ("O_DIRECTORY", "O_NOFOLLOW")) and all(
         function in getattr(os, "supports_dir_fd", ())
         for function in (os.open, os.mkdir)
-    ) and all(hasattr(os, flag) for flag in ("O_DIRECTORY", "O_NOFOLLOW"))
+    )
 
-    if not supports_directory_fds:
-        _prepare_audit_directory_without_directory_fds(root, components)
-        return
 
-    directory_fd: int | None = None
+def _open_directory_no_follow(path: Path, *, create: bool) -> int:
+    """Open every directory component without following symlinks."""
+
+    if not _directory_fd_supported():
+        raise OSError("directory no-follow support is unavailable")
+
+    absolute_path = Path(os.path.abspath(path))
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    directory_fd = os.open(absolute_path.anchor, directory_flags)
     try:
-        directory_fd = os.open(root, directory_flags)
-        for component in components:
+        for component in absolute_path.parts[1:]:
             try:
                 child_fd = os.open(
                     component,
@@ -378,6 +372,8 @@ def _prepare_audit_directory(audit_directory: Path) -> None:
                     dir_fd=directory_fd,
                 )
             except FileNotFoundError:
+                if not create:
+                    raise
                 with suppress(FileExistsError):
                     os.mkdir(component, 0o777, dir_fd=directory_fd)
                 child_fd = os.open(
@@ -387,32 +383,33 @@ def _prepare_audit_directory(audit_directory: Path) -> None:
                 )
             os.close(directory_fd)
             directory_fd = child_fd
+        return directory_fd
+    except OSError:
+        os.close(directory_fd)
+        raise
+
+
+def _prepare_audit_directory(audit_directory: Path) -> None:
+    """Create the fixed audit path without following directory symlinks."""
+
+    try:
+        if _directory_fd_supported():
+            directory_fd = _open_directory_no_follow(audit_directory, create=True)
+            os.close(directory_fd)
+        else:
+            _prepare_audit_directory_without_directory_fds(audit_directory)
     except OSError as error:
         raise DatasetAuditError(
             f"unable to prepare audit artifact directory: {audit_directory}"
         ) from error
-    finally:
-        if directory_fd is not None:
-            os.close(directory_fd)
 
 
-def _prepare_audit_directory_without_directory_fds(
-    root: Path, components: tuple[str, str]
-) -> None:
+def _prepare_audit_directory_without_directory_fds(audit_directory: Path) -> None:
     """Fallback directory preparation for platforms without directory FDs."""
 
-    current = root
-    if current.is_symlink():
-        raise DatasetAuditError(
-            f"audit artifact directory must not contain a symlink: {current}"
-        )
-    if not current.exists():
-        with suppress(FileExistsError):
-            current.mkdir()
-    if not current.is_dir():
-        raise DatasetAuditError(f"audit artifact path is not a directory: {current}")
-
-    for component in components:
+    absolute_path = Path(os.path.abspath(audit_directory))
+    current = Path(absolute_path.anchor)
+    for component in absolute_path.parts[1:]:
         current /= component
         if current.is_symlink():
             raise DatasetAuditError(
@@ -433,9 +430,8 @@ def _write_json(path: Path, payload: object) -> None:
     directory_fd: int | None = None
     file_fd: int | None = None
     try:
-        if os.open in getattr(os, "supports_dir_fd", ()):
-            directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | no_follow
-            directory_fd = os.open(path.parent, directory_flags)
+        if _directory_fd_supported():
+            directory_fd = _open_directory_no_follow(path.parent, create=False)
             file_fd = os.open(
                 path.name,
                 flags,
