@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -351,10 +352,15 @@ def audit_rows(
 
 
 def _write_json(path: Path, payload: object) -> None:
-    path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    def opener(file_path: str, flags: int) -> int:
+        no_follow = getattr(os, "O_NOFOLLOW", 0)
+        return os.open(file_path, flags | no_follow, 0o666)
+
+    try:
+        with open(path, "w", encoding="utf-8", opener=opener) as output:
+            output.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    except OSError as error:
+        raise DatasetAuditError(f"unable to write audit artifact: {path}") from error
 
 
 def _safe_artifact_path(audit_directory: Path, filename: str) -> Path:

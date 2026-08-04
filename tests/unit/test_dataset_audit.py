@@ -11,6 +11,7 @@ from osm_polygon_sentence_classifier.dataset_audit import (
     AuditReport,
     AuditResult,
     DatasetAuditError,
+    _write_json,
     audit_rows,
     write_audit_artifacts,
 )
@@ -319,26 +320,18 @@ def test_write_audit_artifacts_uses_only_the_approved_audit_directory(
         assert exist_ok is True
         mkdir_paths.append(path)
 
-    def record_write_text(
-        path: Path,
-        data: str,
-        *,
-        encoding: str | None = None,
-        errors: str | None = None,
-        newline: str | None = None,
-    ) -> int:
-        assert encoding == "utf-8"
-        assert errors is None
-        assert newline is None
-        writes[path] = data
-        return len(data)
+    def record_write_json(path: Path, payload: object) -> None:
+        writes[path] = json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
     monkeypatch.setattr(
         "osm_polygon_sentence_classifier.dataset_audit.ManagedPaths",
         RecordingManagedPaths,
     )
     monkeypatch.setattr(Path, "mkdir", record_mkdir)
-    monkeypatch.setattr(Path, "write_text", record_write_text)
+    monkeypatch.setattr(
+        "osm_polygon_sentence_classifier.dataset_audit._write_json",
+        record_write_json,
+    )
 
     report_path, manifest_path = write_audit_artifacts(result)
 
@@ -363,6 +356,20 @@ def test_write_audit_artifacts_uses_only_the_approved_audit_directory(
         "yes": 2,
     }
     assert json.loads(writes[manifest_path]) == dict(result.split_manifest)
+
+
+def test_write_json_rejects_a_final_symlink_without_following_it(
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path / "outside.json"
+    outside.write_text("sentinel\n", encoding="utf-8")
+    artifact_path = tmp_path / "audit_report.json"
+    artifact_path.symlink_to(outside)
+
+    with pytest.raises(DatasetAuditError, match="audit artifact"):
+        _write_json(artifact_path, {"ready": True})
+
+    assert outside.read_text(encoding="utf-8") == "sentinel\n"
 
 
 def test_write_audit_artifacts_rejects_symlinked_final_paths_without_writing(
