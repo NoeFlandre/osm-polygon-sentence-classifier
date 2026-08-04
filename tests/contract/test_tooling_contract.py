@@ -1,4 +1,7 @@
+import re
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).parents[2]
 
@@ -39,15 +42,73 @@ def test_ci_runs_locked_tests_and_static_checks() -> None:
     assert "uv run ty check" in content
 
 
+_USES_LINE = re.compile(r"^\s*(?:-\s*)?uses:")
+_ACTION_LINE = re.compile(
+    r"^\s*(?:-\s*)?uses:\s+(?P<action>[^\s@]+)@"
+    r"(?P<sha>[0-9a-f]{40})(?:\s+#.*)?\s*$"
+)
+
+
+def _action_references(content: str) -> list[tuple[str, str]]:
+    references = []
+    for line in content.splitlines():
+        if _USES_LINE.match(line):
+            match = _ACTION_LINE.fullmatch(line)
+            assert match is not None, f"invalid action reference: {line!r}"
+            references.append((match["action"], match["sha"]))
+    return references
+
+
 def _assert_action_pin(content: str, action: str, sha: str) -> None:
-    prefix = f"uses: {action}@"
-    assert content.count(prefix) == 1
-    assert f"{prefix}{sha}" in content
+    references = _action_references(content)
+    assert references.count((action, sha)) == 1
+
+
+def _assert_workflow_action_references(
+    content: str, expected: tuple[tuple[str, str], ...]
+) -> None:
+    assert sorted(_action_references(content)) == sorted(expected)
+
+
+def test_action_pin_rejects_malformed_prefix_and_extra_unpinned_reference() -> None:
+    sha = "11bd71901bbe5b1630ceea73d27597364c9af683"
+    invalid_workflows = (
+        f"uses: actions/checkout@{sha}trailing\n",
+        f"uses: actions/checkout@{sha}\nuses: example/action@main\n",
+    )
+
+    for content in invalid_workflows:
+        with pytest.raises(AssertionError):
+            _assert_action_pin(content, "actions/checkout", sha)
 
 
 def test_workflows_use_full_sha_action_pins_and_never_publish() -> None:
     ci = _text(".github/workflows/ci.yml")
     pages = _text(".github/workflows/docs.yml")
+
+    expected_ci = (
+        (
+            "actions/checkout",
+            "11bd71901bbe5b1630ceea73d27597364c9af683",
+        ),
+        (
+            "astral-sh/setup-uv",
+            "08807647e7069bb48b6ef5acd8ec9567f424441b",
+        ),
+    )
+    expected_pages = expected_ci + (
+        (
+            "actions/upload-pages-artifact",
+            "56afc609e74202658d3ffba0e8f6dda462b719fa",
+        ),
+        (
+            "actions/deploy-pages",
+            "d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e",
+        ),
+    )
+
+    _assert_workflow_action_references(ci, expected_ci)
+    _assert_workflow_action_references(pages, expected_pages)
 
     for workflow in (ci, pages):
         _assert_action_pin(
