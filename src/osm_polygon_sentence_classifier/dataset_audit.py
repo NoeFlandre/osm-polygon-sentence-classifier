@@ -352,15 +352,39 @@ def audit_rows(
 
 
 def _write_json(path: Path, payload: object) -> None:
-    def opener(file_path: str, flags: int) -> int:
-        no_follow = getattr(os, "O_NOFOLLOW", 0)
-        return os.open(file_path, flags | no_follow, 0o666)
-
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | no_follow
+    directory_fd: int | None = None
+    file_fd: int | None = None
     try:
-        with open(path, "w", encoding="utf-8", opener=opener) as output:
-            output.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        if os.open in getattr(os, "supports_dir_fd", ()):
+            directory_flags = (
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | no_follow
+            )
+            directory_fd = os.open(path.parent, directory_flags)
+            file_fd = os.open(
+                path.name,
+                flags,
+                0o666,
+                dir_fd=directory_fd,
+            )
+            output = os.fdopen(file_fd, "w", encoding="utf-8")
+            file_fd = None
+            with output:
+                output.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        else:
+            def opener(file_path: str, open_flags: int) -> int:
+                return os.open(file_path, open_flags | no_follow, 0o666)
+
+            with open(path, "w", encoding="utf-8", opener=opener) as output:
+                output.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     except OSError as error:
         raise DatasetAuditError(f"unable to write audit artifact: {path}") from error
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        if directory_fd is not None:
+            os.close(directory_fd)
 
 
 def _safe_artifact_path(audit_directory: Path, filename: str) -> Path:

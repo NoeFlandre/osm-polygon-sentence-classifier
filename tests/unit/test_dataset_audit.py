@@ -1,4 +1,5 @@
 import json
+import os
 from collections.abc import Iterator
 from dataclasses import FrozenInstanceError, is_dataclass
 from itertools import count
@@ -400,6 +401,47 @@ def test_write_audit_artifacts_rejects_symlinked_final_paths_without_writing(
     )
 
     with pytest.raises(DatasetAuditError, match="symlink"):
+        write_audit_artifacts(result)
+
+    assert outside_report.read_text(encoding="utf-8") == "report sentinel\n"
+    assert outside_manifest.read_text(encoding="utf-8") == "manifest sentinel\n"
+
+
+@pytest.mark.skipif(
+    not all(hasattr(os, flag) for flag in ("O_DIRECTORY", "O_NOFOLLOW"))
+    or os.open not in os.supports_dir_fd,
+    reason="directory-FD no-following is not available on this platform",
+)
+def test_write_audit_artifacts_rejects_a_symlinked_audit_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    result = audit_rows(_balanced_rows(), validation_fraction=0.5, seed=7)
+    outside_directory = tmp_path / "outside"
+    outside_directory.mkdir()
+    outside_report = outside_directory / "audit_report.json"
+    outside_manifest = outside_directory / "split_manifest.json"
+    outside_report.write_text("report sentinel\n", encoding="utf-8")
+    outside_manifest.write_text("manifest sentinel\n", encoding="utf-8")
+
+    audit_directory = tmp_path / "audit" / "landuse"
+    audit_directory.parent.mkdir()
+    audit_directory.symlink_to(outside_directory, target_is_directory=True)
+
+    class TemporaryManagedPaths:
+        def __init__(self, config: ProjectConfig) -> None:
+            assert config == ProjectConfig()
+
+        def child(self, relative_path: str) -> Path:
+            assert relative_path == "audit/landuse"
+            return audit_directory
+
+    monkeypatch.setattr(
+        "osm_polygon_sentence_classifier.dataset_audit.ManagedPaths",
+        TemporaryManagedPaths,
+    )
+
+    with pytest.raises(DatasetAuditError, match="audit artifact"):
         write_audit_artifacts(result)
 
     assert outside_report.read_text(encoding="utf-8") == "report sentinel\n"
