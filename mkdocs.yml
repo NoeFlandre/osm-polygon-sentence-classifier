@@ -1,0 +1,46 @@
+site_name: OSM Polygon Sentence Classifier
+site_description: A safe, landuse-first sentence classifier for OSM polygon descriptions.
+site_url: https://noeflandre.github.io/osm-polygon-sentence-classifier/
+repo_name: NoeFlandre/osm-polygon-sentence-classifier
+repo_url: https://github.com/NoeFlandre/osm-polygon-sentence-classifier
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - tables
+  - toc:
+      permalink: true
+
+exclude_docs: |
+  superpowers/*
+  **/.DS_Store
+
+nav:
+  - Home: index.md
+  - Guides:
+      - Getting started: guides/getting-started.md
+      - Development: guides/development.md
+      - Data policy: guides/data-policy.md
+  - Architecture:
+      - Overview: architecture/overview.md
+  - Reference:
+      - Grid5000 boundary: reference/grid5000-boundary.md
