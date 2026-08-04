@@ -4,10 +4,6 @@ import pytest
 
 from osm_polygon_sentence_classifier import __version__
 from osm_polygon_sentence_classifier.config import (
-    APPROVED_DATA_ROOT,
-    PROJECT_NAME,
-    SOURCE_DATASET_ID,
-    TARGET_MODEL_REPOSITORY_ID,
     ConfigurationError,
     ProjectConfig,
 )
@@ -20,11 +16,18 @@ def test_package_exposes_the_foundation_version() -> None:
 def test_default_config_identifies_the_landuse_task() -> None:
     config = ProjectConfig()
 
-    assert config.project_name == PROJECT_NAME == "osm-polygon-sentence-classifier"
+    assert config.project_name == "osm-polygon-sentence-classifier"
     assert config.task_name == "landuse"
-    assert config.source_dataset_id == SOURCE_DATASET_ID
-    assert config.target_model_repository_id == TARGET_MODEL_REPOSITORY_ID
-    assert config.data_root == APPROVED_DATA_ROOT
+    assert (
+        config.source_dataset_id == "NoeFlandre/osm-polygon-wikidata-sentence-relevance"
+    )
+    assert (
+        config.target_model_repository_id
+        == "NoeFlandre/osm-polygon-sentence-classifier"
+    )
+    assert config.data_root == Path(
+        "/Volumes/Seagate M3/projects/osm-polygon-sentence-classifier"
+    )
 
 
 def test_data_root_cannot_be_replaced_by_another_local_directory(
