@@ -5,9 +5,11 @@ Train a sentence classifier for OSM polygon descriptions, starting with the
 
 ## Status
 
-The repository currently contains the safe, testable project foundation. It
-does not download data, train a model, submit Grid'5000 jobs, authenticate to
-Hugging Face, or publish remote artifacts.
+The repository contains a safe, testable project foundation and one explicit
+data-consuming command: `audit-landuse-dataset`. The audit consumes the pinned
+dataset in streaming mode and writes only a derived Hugging Face cache, JSON
+report, and polygon split manifest beneath the approved external data root. It
+does not train a model, upload or publish artifacts, or submit Grid'5000 jobs.
 
 ## Data and model repositories
 
@@ -17,7 +19,18 @@ Hugging Face, or publish remote artifacts.
 
 All local datasets, checkpoints, models, and experiment logs must be kept
 beneath the external data root. Nothing in this repository downloads or
-creates them yet.
+creates training outputs. The audit's cache and `audit/landuse` report and
+manifest are the only current derived data outputs.
+
+Run the audit only when the pinned dataset review is explicitly authorized:
+
+```bash
+audit-landuse-dataset
+```
+
+The command writes `audit_report.json` and `split_manifest.json` beneath
+`/Volumes/Seagate M3/projects/osm-polygon-sentence-classifier/audit/landuse`.
+Review-required results are written before the command exits with status 2.
 
 ## Development
 

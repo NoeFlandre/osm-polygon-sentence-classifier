@@ -31,6 +31,9 @@ Repository = "https://github.com/NoeFlandre/osm-polygon-sentence-classifier"
 Issues = "https://github.com/NoeFlandre/osm-polygon-sentence-classifier/issues"
 Documentation = "https://noeflandre.github.io/osm-polygon-sentence-classifier/"
 
+[project.scripts]
+audit-landuse-dataset = "osm_polygon_sentence_classifier.audit_cli:main"
+
 [project.optional-dependencies]
 training = [
     "datasets>=4,<5",
