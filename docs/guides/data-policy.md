@@ -32,3 +32,23 @@ quality/documentation gates.
 Credentials are used only by an explicitly authorized external CLI or runtime
 authentication flow. They must never be committed to the repository or placed
 in its documentation.
+
+## Sentence-level readiness policy
+
+The classifier consumes sentence text, so readiness is evaluated at the
+content-hash level rather than by requiring one label per polygon. The audit
+reports `mixed_label_polygons` as a diagnostic; different sentences in one
+polygon may legitimately have different trainable labels. It also retains
+`cross_polygon_duplicate_groups` as a diagnostic.
+
+The readiness blockers are exactly:
+
+- `content_hash_label_conflicts`: one content-hash group contains both
+  trainable labels, `no` and `yes`.
+- `cross_split_duplicate_groups`: one content-hash group has rows assigned to
+  both deterministic polygon splits.
+- `<split>_split_missing_label`: a train or validation split lacks `no` or
+  `yes` trainable rows.
+
+The report stores these reasons in sorted order. The CLI writes the report and
+manifest before exiting with status 2 whenever any blocker remains.

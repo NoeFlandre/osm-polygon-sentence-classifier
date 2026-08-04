@@ -9,7 +9,9 @@ The current milestone is a safe local foundation plus an explicit review-only
 landuse dataset audit. It establishes small package boundaries, managed data
 paths, Trackio settings, tests, quality tooling, and public documentation. The
 audit may stream the pinned dataset and write only its approved cache, report,
-and split manifest; it does not train or submit remote jobs.
+and split manifest; it does not train or submit remote jobs. Audit readiness is
+sentence-level: mixed-label polygons are diagnostic, while contradictory or
+cross-split duplicate sentence hashes remain blockers.
 
 Start with the [getting-started guide](guides/getting-started.md), review the
 [data policy](guides/data-policy.md), and read the

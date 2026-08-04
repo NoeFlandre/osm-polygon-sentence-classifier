@@ -165,8 +165,11 @@ def test_audit_counts_labels_polygons_splits_and_training_text_metrics() -> None
     assert report.text_length_min == 2
     assert report.text_length_max == 4
     assert report.text_length_mean == pytest.approx(3.25)
-    assert report.review_required_reasons == ("polygon_label_conflicts",)
-    assert report.ready is False
+    assert report.mixed_label_polygons == 2
+    assert report.cross_split_duplicate_groups == 0
+    assert report.conflicting_content_hash_groups == 0
+    assert report.review_required_reasons == ()
+    assert report.ready is True
 
     expected_manifest = tuple(
         sorted(
@@ -219,12 +222,102 @@ def test_audit_counts_duplicate_hash_risks_and_split_readiness_reasons() -> None
     assert report.duplicate_hash_groups == 1
     assert report.duplicate_rows_beyond_first == 2
     assert report.cross_polygon_duplicate_groups == 1
-    assert report.conflicting_polygons == 1
+    assert report.mixed_label_polygons == 1
+    assert report.cross_split_duplicate_groups == 1
+    assert report.conflicting_content_hash_groups == 1
     assert report.review_required_reasons == (
-        "cross_polygon_duplicate_groups",
-        "polygon_label_conflicts",
+        "content_hash_label_conflicts",
+        "cross_split_duplicate_groups",
         "validation_split_missing_label",
     )
+    assert report.ready is False
+
+
+def test_same_hash_with_both_trainable_labels_is_a_content_hash_blocker() -> None:
+    train_polygon = _polygon_for_split("train", seed=13)
+    validation_polygon = _polygon_for_split("validation", seed=13)
+    rows = [
+        _row(
+            sentence_id="conflict-no",
+            polygon_id=train_polygon,
+            label="no",
+            text="Same sentence",
+            sentence_content_hash="conflicting-hash",
+        ),
+        _row(
+            sentence_id="conflict-yes",
+            polygon_id=train_polygon,
+            label="yes",
+            text="Same sentence",
+            sentence_content_hash="conflicting-hash",
+        ),
+        _row(
+            sentence_id="validation-no",
+            polygon_id=validation_polygon,
+            label="no",
+            text="Validation no",
+        ),
+        _row(
+            sentence_id="validation-yes",
+            polygon_id=validation_polygon,
+            label="yes",
+            text="Validation yes",
+        ),
+    ]
+
+    report = audit_rows(rows, validation_fraction=0.5, seed=13).report
+
+    assert report.duplicate_hash_groups == 1
+    assert report.duplicate_rows_beyond_first == 1
+    assert report.cross_polygon_duplicate_groups == 0
+    assert report.cross_split_duplicate_groups == 0
+    assert report.conflicting_content_hash_groups == 1
+    assert report.mixed_label_polygons == 2
+    assert report.review_required_reasons == ("content_hash_label_conflicts",)
+    assert report.ready is False
+
+
+def test_duplicate_hash_spanning_splits_is_a_cross_split_blocker() -> None:
+    train_polygon = _polygon_for_split("train", seed=17)
+    validation_polygon = _polygon_for_split("validation", seed=17)
+    rows = [
+        _row(
+            sentence_id="split-train-no",
+            polygon_id=train_polygon,
+            label="no",
+            text="Repeated sentence",
+            sentence_content_hash="cross-split-hash",
+        ),
+        _row(
+            sentence_id="split-train-yes",
+            polygon_id=train_polygon,
+            label="yes",
+            text="Train yes",
+        ),
+        _row(
+            sentence_id="split-validation-no",
+            polygon_id=validation_polygon,
+            label="no",
+            text="Repeated sentence",
+            sentence_content_hash="cross-split-hash",
+        ),
+        _row(
+            sentence_id="split-validation-yes",
+            polygon_id=validation_polygon,
+            label="yes",
+            text="Validation yes",
+        ),
+    ]
+
+    report = audit_rows(rows, validation_fraction=0.5, seed=17).report
+
+    assert report.duplicate_hash_groups == 1
+    assert report.duplicate_rows_beyond_first == 1
+    assert report.cross_polygon_duplicate_groups == 1
+    assert report.cross_split_duplicate_groups == 1
+    assert report.conflicting_content_hash_groups == 0
+    assert report.mixed_label_polygons == 2
+    assert report.review_required_reasons == ("cross_split_duplicate_groups",)
     assert report.ready is False
 
 
@@ -383,12 +476,17 @@ def test_write_audit_artifacts_uses_only_the_approved_audit_directory(
 
     report_payload = json.loads(writes[report_path])
     assert report_payload["dataset_id"] == LANDUSE_DATASET_CONTRACT.dataset_id
-    assert report_payload["ready"] is False
+    assert report_payload["ready"] is True
     assert report_payload["label_counts"] == {
         "no": 2,
         "uncertain": 2,
         "yes": 2,
     }
+    assert report_payload["mixed_label_polygons"] == 2
+    assert report_payload["cross_split_duplicate_groups"] == 0
+    assert report_payload["conflicting_content_hash_groups"] == 0
+    assert "conflicting_polygons" not in report_payload
+    assert "polygon_label_conflicts" not in writes[report_path]
     assert json.loads(writes[manifest_path]) == dict(result.split_manifest)
 
 

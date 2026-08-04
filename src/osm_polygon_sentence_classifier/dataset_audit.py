@@ -67,7 +67,9 @@ class AuditReport:
     duplicate_hash_groups: int
     duplicate_rows_beyond_first: int
     cross_polygon_duplicate_groups: int
-    conflicting_polygons: int
+    mixed_label_polygons: int
+    cross_split_duplicate_groups: int
+    conflicting_content_hash_groups: int
     review_required_reasons: tuple[str, ...]
     ready: bool
 
@@ -94,13 +96,15 @@ class AuditReport:
 
         return {
             "config": self.config,
-            "conflicting_polygons": self.conflicting_polygons,
+            "conflicting_content_hash_groups": self.conflicting_content_hash_groups,
             "cross_polygon_duplicate_groups": self.cross_polygon_duplicate_groups,
+            "cross_split_duplicate_groups": self.cross_split_duplicate_groups,
             "dataset_id": self.dataset_id,
             "duplicate_hash_groups": self.duplicate_hash_groups,
             "duplicate_rows_beyond_first": self.duplicate_rows_beyond_first,
             "label_counts": dict(self.label_counts),
             "language_counts": dict(self.language_counts),
+            "mixed_label_polygons": self.mixed_label_polygons,
             "parquet_sha256": self.parquet_sha256,
             "ready": self.ready,
             "region": self.region,
@@ -210,6 +214,8 @@ def audit_rows(
     polygon_labels: dict[str, set[str]] = {}
     hash_counts: Counter[str] = Counter()
     hash_polygons: dict[str, set[str]] = {}
+    hash_labels: dict[str, set[str]] = {}
+    hash_splits: dict[str, set[DatasetSplit]] = {}
     text_length_count = 0
     text_length_total = 0
     text_length_min: int | None = None
@@ -277,6 +283,8 @@ def audit_rows(
         if isinstance(sentence_content_hash, str) and sentence_content_hash:
             hash_counts[sentence_content_hash] += 1
             hash_polygons.setdefault(sentence_content_hash, set()).add(polygon_id)
+            hash_labels.setdefault(sentence_content_hash, set()).add(label)
+            hash_splits.setdefault(sentence_content_hash, set()).add(row_split)
 
     for row_split in polygon_splits.values():
         split_polygon_counts[row_split] += 1
@@ -289,15 +297,21 @@ def audit_rows(
         count > 1 and len(hash_polygons[content_hash]) > 1
         for content_hash, count in hash_counts.items()
     )
-    conflicting_polygons = sum(
+    mixed_label_polygons = sum(
         labels.issuperset({"no", "yes"}) for labels in polygon_labels.values()
+    )
+    cross_split_duplicate_groups = sum(
+        splits.issuperset({"train", "validation"}) for splits in hash_splits.values()
+    )
+    conflicting_content_hash_groups = sum(
+        labels.issuperset({"no", "yes"}) for labels in hash_labels.values()
     )
 
     review_reasons: set[str] = set()
-    if conflicting_polygons:
-        review_reasons.add("polygon_label_conflicts")
-    if cross_polygon_duplicate_groups:
-        review_reasons.add("cross_polygon_duplicate_groups")
+    if conflicting_content_hash_groups:
+        review_reasons.add("content_hash_label_conflicts")
+    if cross_split_duplicate_groups:
+        review_reasons.add("cross_split_duplicate_groups")
     for row_split in ("train", "validation"):
         if any(
             trainable_label_counts[row_split][label] == 0 for label in ("no", "yes")
@@ -338,7 +352,9 @@ def audit_rows(
         duplicate_hash_groups=duplicate_hash_groups,
         duplicate_rows_beyond_first=duplicate_rows_beyond_first,
         cross_polygon_duplicate_groups=cross_polygon_duplicate_groups,
-        conflicting_polygons=conflicting_polygons,
+        mixed_label_polygons=mixed_label_polygons,
+        cross_split_duplicate_groups=cross_split_duplicate_groups,
+        conflicting_content_hash_groups=conflicting_content_hash_groups,
         review_required_reasons=reasons,
         ready=not reasons,
     )

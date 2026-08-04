@@ -19,11 +19,11 @@
 
 - [x] **Step 1: Write failing reducer tests**
 
-Build exact-contract in-memory rows containing `no`, `yes`, and `uncertain` labels. Require the audit to count all labels, count only `no`/`yes` as trainable, count polygons, preserve deterministic split assignments, count languages and sources, calculate training text-length statistics, and report polygons containing both training labels as conflicts.
+Build exact-contract in-memory rows containing `no`, `yes`, and `uncertain` labels. Require the audit to count all labels, count only `no`/`yes` as trainable, count polygons, preserve deterministic split assignments, count languages and sources, calculate training text-length statistics, and retain mixed-label polygons as a diagnostic rather than a readiness gate.
 
 - [x] **Step 2: Write failing duplicate and split-readiness tests**
 
-Use repeated `sentence_content_hash` values in one polygon and across two polygons. Require the report to distinguish duplicate hash groups from cross-polygon duplicate groups and to add a review reason when a split lacks one of the training labels.
+Use repeated `sentence_content_hash` values in one polygon and across two polygons, including both trainable labels and both deterministic splits. Require the report to distinguish duplicate hash groups from cross-polygon duplicate groups, identify content-hash label conflicts and cross-split duplicate groups as blockers, and add a review reason when a split lacks one of the training labels.
 
 - [x] **Step 3: Write failing validation and streaming tests**
 
@@ -41,7 +41,8 @@ Run:
 PYTHONPATH=src .venv/bin/pytest tests/unit/test_dataset_audit.py tests/unit/test_audit_cli.py -q
 ```
 
-Expected: collection fails because the audit modules do not exist yet.
+Expected: the existing audit fails the new policy assertions because it lacks
+sentence-level hash metrics and still gates readiness on polygon labels.
 
 ### Task 2: Implement the streaming audit and CLI
 
@@ -58,11 +59,11 @@ Expected: collection fails because the audit modules do not exist yet.
 
 - [x] **Step 1: Implement immutable audit result types**
 
-Use frozen/slotted dataclasses with tuple-based sorted counters. Include the pinned dataset identity/provenance, split parameters, total and trainable row counts, label/polygon/split counts, language/source counts, duplicate metrics, conflicting-polygon count, text-length statistics, review reasons, and a sorted `(polygon_id, split)` manifest.
+Use frozen/slotted dataclasses with tuple-based sorted counters. Include the pinned dataset identity/provenance, split parameters, total and trainable row counts, label/polygon/split counts, language/source counts, duplicate metrics, `mixed_label_polygons` and sentence-level hash blocker counts, text-length statistics, review reasons, and a sorted `(polygon_id, split)` manifest.
 
 - [x] **Step 2: Implement the streaming reducer**
 
-Consume rows through `itertools.chain` after validating the first row’s exact columns. Validate every row, require non-empty string `sentence_id` and `polygon_id`, skip `uncertain` only from training counters, assign deterministic splits with `split_for_polygon`, and retain only counters/sets needed for the report. Track duplicate sentence hashes only for trainable rows and identify hashes spanning multiple polygons.
+Consume rows through `itertools.chain` after validating the first row’s exact columns. Validate every row, require non-empty string `sentence_id` and `polygon_id`, skip `uncertain` only from training counters, assign deterministic splits with `split_for_polygon`, and retain only counters/sets needed for the report. Track duplicate sentence hashes only for trainable rows, including their labels and deterministic split memberships; keep cross-polygon duplicates and mixed-label polygons diagnostic, and use only content-hash label conflicts, cross-split duplicates, and split-level missing-label reasons for readiness.
 
 - [x] **Step 3: Implement JSON artifact writing under the fixed root**
 
@@ -92,9 +93,9 @@ git diff --check
 
 Expected: all tests and checks pass without accessing the real dataset during unit tests.
 
-- [ ] **Step 7: Commit the completed audit**
+- [x] **Step 7: Commit the completed audit**
 
 ```bash
-git add pyproject.toml README.md docs/guides/data-policy.md docs/architecture/overview.md src/osm_polygon_sentence_classifier/dataset_audit.py src/osm_polygon_sentence_classifier/audit_cli.py tests/unit/test_dataset_audit.py tests/unit/test_audit_cli.py docs/superpowers/plans/2026-08-04-landuse-audit.md
-git commit -m "feat: add landuse dataset audit"
+git add pyproject.toml README.md docs/index.md docs/guides/data-policy.md docs/architecture/overview.md src/osm_polygon_sentence_classifier/dataset_audit.py src/osm_polygon_sentence_classifier/audit_cli.py tests/unit/test_dataset_audit.py tests/unit/test_audit_cli.py docs/superpowers/plans/2026-08-04-landuse-audit.md
+git commit -m "fix: align audit readiness with sentence labels"
 ```

@@ -32,6 +32,10 @@ audit-landuse-dataset
 The command writes `audit_report.json` and `split_manifest.json` beneath
 `/Volumes/Seagate M3/projects/osm-polygon-sentence-classifier/audit/landuse`.
 Review-required results are written before the command exits with status 2.
+Readiness is sentence-level: `mixed_label_polygons` and
+`cross_polygon_duplicate_groups` are diagnostics, while duplicate content
+hashes crossing the polygon split or carrying both `no` and `yes` labels are
+blockers. Split-level missing-label reasons remain blockers as well.
 
 ## Development
 
