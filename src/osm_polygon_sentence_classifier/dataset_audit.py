@@ -357,6 +357,22 @@ def _write_json(path: Path, payload: object) -> None:
     )
 
 
+def _safe_artifact_path(audit_directory: Path, filename: str) -> Path:
+    """Reject final symlinks and resolved paths outside the audit directory."""
+
+    artifact_path = audit_directory / filename
+    if artifact_path.is_symlink():
+        raise DatasetAuditError(f"artifact path must not be a symlink: {artifact_path}")
+
+    resolved_directory = audit_directory.resolve()
+    resolved_artifact = artifact_path.resolve()
+    if not resolved_artifact.is_relative_to(resolved_directory):
+        raise DatasetAuditError(
+            f"artifact path must remain beneath the audit directory: {artifact_path}"
+        )
+    return artifact_path
+
+
 def write_audit_artifacts(
     result: AuditResult,
     *,
@@ -366,8 +382,8 @@ def write_audit_artifacts(
 
     audit_directory = ManagedPaths(config).child("audit/landuse")
     audit_directory.mkdir(parents=True, exist_ok=True)
-    report_path = audit_directory / "audit_report.json"
-    manifest_path = audit_directory / "split_manifest.json"
+    report_path = _safe_artifact_path(audit_directory, "audit_report.json")
+    manifest_path = _safe_artifact_path(audit_directory, "split_manifest.json")
     _write_json(report_path, result.report.to_dict())
     _write_json(manifest_path, dict(result.split_manifest))
     return report_path, manifest_path

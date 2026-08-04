@@ -363,3 +363,37 @@ def test_write_audit_artifacts_uses_only_the_approved_audit_directory(
         "yes": 2,
     }
     assert json.loads(writes[manifest_path]) == dict(result.split_manifest)
+
+
+def test_write_audit_artifacts_rejects_symlinked_final_paths_without_writing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    result = audit_rows(_balanced_rows(), validation_fraction=0.5, seed=7)
+    audit_directory = tmp_path / "audit" / "landuse"
+    audit_directory.mkdir(parents=True)
+    outside_report = tmp_path / "outside-report.json"
+    outside_manifest = tmp_path / "outside-manifest.json"
+    outside_report.write_text("report sentinel\n", encoding="utf-8")
+    outside_manifest.write_text("manifest sentinel\n", encoding="utf-8")
+    (audit_directory / "audit_report.json").symlink_to(outside_report)
+    (audit_directory / "split_manifest.json").symlink_to(outside_manifest)
+
+    class TemporaryManagedPaths:
+        def __init__(self, config: ProjectConfig) -> None:
+            assert config == ProjectConfig()
+
+        def child(self, relative_path: str) -> Path:
+            assert relative_path == "audit/landuse"
+            return audit_directory
+
+    monkeypatch.setattr(
+        "osm_polygon_sentence_classifier.dataset_audit.ManagedPaths",
+        TemporaryManagedPaths,
+    )
+
+    with pytest.raises(DatasetAuditError, match="symlink"):
+        write_audit_artifacts(result)
+
+    assert outside_report.read_text(encoding="utf-8") == "report sentinel\n"
+    assert outside_manifest.read_text(encoding="utf-8") == "manifest sentinel\n"
