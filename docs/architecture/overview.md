@@ -9,8 +9,11 @@ The foundation keeps the first interfaces narrow and local:
   rejects absolute, traversal, or escaping-symlink paths.
 - `dataset_contract.py` defines the pinned landuse schema, supported labels,
   and source provenance.
-- `dataset_loader.py` exposes the lazy pinned-source loader and deterministic
-  polygon split function.
+- `dataset_loader.py` exposes the lazy pinned-source loader, deterministic
+  polygon split function, and the two-pass `iter_clean_training_examples`
+  boundary. Future training code must consume only that clean iterator: it
+  excludes contradictory sentence-content-hash groups and duplicate
+  representatives without writing a cleaned dataset.
 - `dataset_audit.py` reduces the stream to immutable counts, sentence-level
   content-hash readiness reasons, and a sorted polygon split manifest;
   `audit_cli.py` writes those derived artifacts beneath `audit/landuse`.

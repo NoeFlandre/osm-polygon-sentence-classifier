@@ -19,6 +19,7 @@ __all__ = [
     "DatasetSplit",
     "TrainingExample",
     "TrainingLabel",
+    "iter_clean_training_examples",
     "iter_training_examples",
     "load_streaming_rows",
     "split_for_polygon",
@@ -73,6 +74,59 @@ def split_for_polygon(
     return "validation" if value < validation_fraction else "train"
 
 
+def _training_label_for_row(
+    row: Mapping[str, object],
+    *,
+    contract: DatasetContract,
+) -> TrainingLabel | None:
+    label = row[contract.label_column]
+    if label not in contract.training_label_values:
+        return None
+    if label not in ("no", "yes"):
+        raise DatasetLoaderError(f"unsupported training label: {label!r}")
+    return cast(TrainingLabel, label)
+
+
+def _training_example_from_row(
+    row: Mapping[str, object],
+    *,
+    label: TrainingLabel,
+    validation_fraction: float,
+    seed: int,
+) -> TrainingExample:
+    sentence_id = _require_identifier("sentence_id", row["sentence_id"])
+    polygon_id = _require_identifier("polygon_id", row["polygon_id"])
+    return TrainingExample(
+        sentence_id=sentence_id,
+        polygon_id=polygon_id,
+        text=cast(str, row["sentence_text_normalized"]),
+        label=label,
+        split=split_for_polygon(
+            polygon_id,
+            validation_fraction=validation_fraction,
+            seed=seed,
+        ),
+    )
+
+
+def _validated_rows(
+    rows: Iterable[Mapping[str, object]],
+    *,
+    contract: DatasetContract,
+) -> Iterator[Mapping[str, object]]:
+    for row in rows:
+        contract.validate_columns(row.keys())
+        contract.validate_row(row)
+        yield row
+
+
+def _usable_sentence_content_hash(row: Mapping[str, object]) -> str | None:
+    content_hash = row.get("sentence_content_hash")
+    if not isinstance(content_hash, str) or not content_hash.strip():
+        return None
+    return content_hash
+
+
 def iter_training_examples(
     rows: Iterable[Mapping[str, object]],
     *,
@@ -95,23 +149,80 @@ def iter_training_examples(
         label = row[contract.label_column]
         if label not in contract.training_label_values:
             continue
-        if label not in ("no", "yes"):
-            raise DatasetLoaderError(f"unsupported training label: {label!r}")
-        training_label = cast(TrainingLabel, label)
-
-        sentence_id = _require_identifier("sentence_id", row["sentence_id"])
-        polygon_id = _require_identifier("polygon_id", row["polygon_id"])
-        text = cast(str, row["sentence_text_normalized"])
-        yield TrainingExample(
-            sentence_id=sentence_id,
-            polygon_id=polygon_id,
-            text=text,
+        training_label = _training_label_for_row(row, contract=contract)
+        if training_label is None:
+            continue
+        yield _training_example_from_row(
+            row,
             label=training_label,
-            split=split_for_polygon(
-                polygon_id,
+            validation_fraction=validation_fraction,
+            seed=seed,
+        )
+
+
+def iter_clean_training_examples(
+    rows_factory: Callable[[], Iterable[Mapping[str, object]]],
+    *,
+    validation_fraction: float = 0.2,
+    seed: int = 42,
+    contract: DatasetContract = LANDUSE_DATASET_CONTRACT,
+) -> Iterator[TrainingExample]:
+    """Yield deduplicated training examples from two fresh lazy streams.
+
+    ``rows_factory`` is called exactly twice and must return a fresh,
+    independently iterable stream on each call. The first pass validates every
+    row and records only the trainable labels seen for each usable sentence
+    content hash. Hashes with both training labels are excluded completely.
+    The second pass validates every row again, skips ``uncertain`` rows and
+    contradictory hashes, and emits only the first trainable occurrence of
+    each remaining usable hash. Rows without a usable hash retain the ordinary
+    iterator behavior.
+    """
+
+    _validate_validation_fraction(validation_fraction)
+    first_stream = rows_factory()
+    second_stream = rows_factory()
+    first_iterator = iter(first_stream)
+    second_iterator = iter(second_stream)
+    if first_iterator is second_iterator:
+        raise DatasetLoaderError("rows_factory must return a fresh stream on each call")
+
+    labels_by_hash: dict[str, set[TrainingLabel]] = {}
+    for row in _validated_rows(first_iterator, contract=contract):
+        label = _training_label_for_row(row, contract=contract)
+        if label is None:
+            continue
+        content_hash = _usable_sentence_content_hash(row)
+        if content_hash is not None:
+            labels_by_hash.setdefault(content_hash, set()).add(label)
+
+    contradictory_hashes = {
+        content_hash
+        for content_hash, labels in labels_by_hash.items()
+        if len(labels) > 1
+    }
+    emitted_hashes: set[str] = set()
+    for row in _validated_rows(second_iterator, contract=contract):
+        label = _training_label_for_row(row, contract=contract)
+        if label is None:
+            continue
+        content_hash = _usable_sentence_content_hash(row)
+        if content_hash is None:
+            yield _training_example_from_row(
+                row,
+                label=label,
                 validation_fraction=validation_fraction,
                 seed=seed,
-            ),
+            )
+            continue
+        if content_hash in contradictory_hashes or content_hash in emitted_hashes:
+            continue
+        emitted_hashes.add(content_hash)
+        yield _training_example_from_row(
+            row,
+            label=label,
+            validation_fraction=validation_fraction,
+            seed=seed,
         )
 
 

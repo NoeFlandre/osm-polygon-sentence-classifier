@@ -14,6 +14,7 @@ from osm_polygon_sentence_classifier.dataset_loader import (
     DatasetSplit,
     TrainingExample,
     TrainingLabel,
+    iter_clean_training_examples,
     iter_training_examples,
     load_streaming_rows,
     split_for_polygon,
@@ -26,6 +27,7 @@ def _row(
     polygon_id: object = "polygon-1",
     text: str = "Normalized sentence.",
     label: str = "yes",
+    content_hash: object = None,
 ) -> dict[str, object]:
     row = dict.fromkeys(LANDUSE_DATASET_CONTRACT.required_columns)
     row.update(
@@ -34,6 +36,7 @@ def _row(
             "polygon_id": polygon_id,
             "region": "afghanistan",
             "sentence_text_normalized": text,
+            "sentence_content_hash": content_hash,
             "landuse_relevance": label,
         }
     )
@@ -174,6 +177,158 @@ def test_iter_training_examples_is_lazy() -> None:
     assert yielded == 1
     assert next(examples).sentence_id == "sentence-2"
     assert yielded == 2
+
+
+def test_clean_iterator_calls_a_fresh_rows_factory_exactly_twice() -> None:
+    calls = 0
+
+    def rows_factory():
+        nonlocal calls
+        calls += 1
+        return iter([_row(content_hash="hash-1")])
+
+    examples = list(iter_clean_training_examples(rows_factory))
+
+    assert calls == 2
+    assert [example.sentence_id for example in examples] == ["sentence-1"]
+
+
+def test_clean_iterator_excludes_every_row_from_a_conflicting_hash_group() -> None:
+    rows = [
+        _row(
+            sentence_id="negative",
+            polygon_id="polygon-negative",
+            label="no",
+            content_hash="conflict",
+        ),
+        _row(
+            sentence_id="positive",
+            polygon_id="polygon-positive",
+            label="yes",
+            content_hash="conflict",
+        ),
+    ]
+
+    examples = list(iter_clean_training_examples(lambda: iter(rows)))
+
+    assert examples == []
+
+
+def test_clean_iterator_keeps_only_the_first_same_label_hash_representative() -> None:
+    rows = [
+        _row(
+            sentence_id="first",
+            polygon_id="polygon-first",
+            text="First representative.",
+            label="yes",
+            content_hash="duplicate",
+        ),
+        _row(
+            sentence_id="second",
+            polygon_id="polygon-second",
+            text="Second duplicate.",
+            label="yes",
+            content_hash="duplicate",
+        ),
+    ]
+
+    examples = list(iter_clean_training_examples(lambda: iter(rows)))
+
+    assert [(example.sentence_id, example.text) for example in examples] == [
+        ("first", "First representative.")
+    ]
+
+
+def test_clean_iterator_places_a_repeated_hash_in_at_most_one_split() -> None:
+    polygons_by_split: dict[DatasetSplit, str] = {}
+    for index in range(100):
+        polygon_id = f"polygon-{index}"
+        split = split_for_polygon(
+            polygon_id,
+            validation_fraction=0.5,
+            seed=42,
+        )
+        polygons_by_split.setdefault(split, polygon_id)
+        if len(polygons_by_split) == 2:
+            break
+
+    assert set(polygons_by_split) == {"train", "validation"}
+    rows = [
+        _row(
+            sentence_id=split,
+            polygon_id=polygon_id,
+            label="no",
+            content_hash="cross-split",
+        )
+        for split, polygon_id in polygons_by_split.items()
+    ]
+
+    examples = list(
+        iter_clean_training_examples(
+            lambda: iter(rows),
+            validation_fraction=0.5,
+            seed=42,
+        )
+    )
+
+    assert len(examples) == 1
+    assert {example.split for example in examples} in (
+        {"train"},
+        {"validation"},
+    )
+
+
+def test_clean_iterator_ignores_uncertain_rows_when_finding_conflicts() -> None:
+    rows = [
+        _row(
+            sentence_id="uncertain",
+            label="uncertain",
+            content_hash="uncertain-shared",
+        ),
+        _row(
+            sentence_id="positive",
+            label="yes",
+            content_hash="uncertain-shared",
+        ),
+    ]
+
+    examples = list(iter_clean_training_examples(lambda: iter(rows)))
+
+    assert [(example.sentence_id, example.label) for example in examples] == [
+        ("positive", "yes")
+    ]
+
+
+def test_clean_iterator_preserves_each_trainable_row_without_a_usable_hash() -> None:
+    rows = [
+        _row(sentence_id="empty-hash", content_hash="", label="no"),
+        _row(sentence_id="missing-hash", content_hash=None, label="no"),
+    ]
+
+    examples = list(iter_clean_training_examples(lambda: iter(rows)))
+
+    assert [example.sentence_id for example in examples] == [
+        "empty-hash",
+        "missing-hash",
+    ]
+
+
+def test_clean_iterator_rejects_a_malformed_row_in_the_second_pass() -> None:
+    calls = 0
+
+    def rows_factory():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return iter([_row(content_hash="hash-1")])
+        malformed = _row(sentence_id="malformed", content_hash="hash-2")
+        malformed["unexpected"] = None
+        return iter([_row(content_hash="hash-1"), malformed])
+
+    with pytest.raises(DatasetContractError):
+        list(iter_clean_training_examples(rows_factory))
+
+    assert calls == 2
 
 
 def test_load_streaming_rows_passes_pinned_streaming_arguments_without_materializing() -> (

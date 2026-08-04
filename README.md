@@ -12,6 +12,12 @@ cache; the explicit artifact writer creates only the JSON report and polygon
 split manifest beneath the approved external data root. It does not train a
 model, upload or publish artifacts, or submit Grid'5000 jobs.
 
+The clean iterator `iter_clean_training_examples` is the only permitted
+training-input boundary. It requires two fresh lazy streams, validates both
+passes, excludes every trainable row in a contradictory sentence-content-hash
+group, and emits only the first representative for each remaining usable hash.
+It does not create a cleaned local dataset. Training is not implemented yet.
+
 ## Data and model repositories
 
 - Training source: [NoeFlandre/osm-polygon-wikidata-sentence-relevance](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance)
@@ -35,7 +41,8 @@ Review-required results are written before the command exits with status 2.
 Readiness is sentence-level: `mixed_label_polygons` and
 `cross_polygon_duplicate_groups` are diagnostics, while duplicate content
 hashes crossing the polygon split or carrying both `no` and `yes` labels are
-blockers. Split-level missing-label reasons remain blockers as well.
+removed by the clean training boundary. Split-level missing-label reasons
+remain blockers for the audited source.
 
 ## Development
 

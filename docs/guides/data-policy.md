@@ -52,3 +52,14 @@ The readiness blockers are exactly:
 
 The report stores these reasons in sorted order. The CLI writes the report and
 manifest before exiting with status 2 whenever any blocker remains.
+
+## Clean training input
+
+`iter_clean_training_examples` in `dataset_loader.py` is the only training
+input boundary. It receives a factory for fresh lazy streams and calls it twice:
+the first pass finds trainable sentence-content-hash groups carrying both
+`no` and `yes`, and the second pass excludes those groups and keeps only the
+first trainable representative of every other usable hash. `uncertain` rows
+are never emitted and do not create conflicts. Rows without a usable hash keep
+the existing per-row behavior. The iterator does not write a cleaned dataset;
+future training code must consume its output directly.
