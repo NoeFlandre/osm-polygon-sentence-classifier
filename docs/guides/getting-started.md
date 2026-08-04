@@ -5,6 +5,7 @@
 - Python 3.12 or newer
 - [uv](https://docs.astral.sh/uv/)
 - Git
+- just
 
 The Seagate volume is not required for this foundation. None of the commands
 below creates project datasets, checkpoints, models, Trackio run state, or

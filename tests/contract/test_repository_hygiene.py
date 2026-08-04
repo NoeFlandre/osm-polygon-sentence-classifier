@@ -19,6 +19,14 @@ def test_public_docs_name_the_exact_external_data_root() -> None:
 
 
 def test_public_docs_do_not_contain_literal_hugging_face_tokens() -> None:
-    for relative_path in ("README.md", "CONTRIBUTING.md"):
-        content = (ROOT / relative_path).read_text(encoding="utf-8")
-        assert "hf_" not in content
+    paths = [ROOT / "README.md", ROOT / "CONTRIBUTING.md"]
+    docs_root = ROOT / "docs"
+    paths.extend(
+        path
+        for path in sorted(docs_root.rglob("*.md"))
+        if "superpowers" not in path.relative_to(docs_root).parts
+    )
+
+    for path in paths:
+        content = path.read_text(encoding="utf-8")
+        assert "hf_" not in content, path
