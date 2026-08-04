@@ -33,6 +33,7 @@ Documentation = "https://noeflandre.github.io/osm-polygon-sentence-classifier/"
 
 [project.optional-dependencies]
 training = [
+    "datasets>=4,<5",
     "trackio>=0.26,<1",
 ]
 docs = [
