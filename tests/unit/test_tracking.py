@@ -1,5 +1,3 @@
-from pathlib import Path  # noqa: F401
-
 from osm_polygon_sentence_classifier.config import ProjectConfig
 from osm_polygon_sentence_classifier.tracking import (
     TRACKING_SUBDIRECTORY,
