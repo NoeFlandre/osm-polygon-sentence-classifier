@@ -21,8 +21,9 @@ The eventual model destination is the
 
 ## Audit and foundation boundary
 
-The audit is a review-only transformation. It validates and summarizes rows,
-assigns a deterministic polygon split, and writes only the report and manifest
+The audit is a review-only transformation. Its loader may populate the
+approved Hugging Face cache while streaming; the reducer validates and
+summarizes rows, and the explicit writer assigns the report and manifest
 described above. It does not train, upload or publish artifacts, or submit
 Grid'5000 work. The remaining foundation defines local configuration,
 containment-checked paths, future Trackio directory settings, tests, and

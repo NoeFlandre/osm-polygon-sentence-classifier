@@ -4,7 +4,7 @@
 
 **Goal:** Audit the pinned Afghanistan landuse dataset before training and write only a JSON audit report and deterministic polygon split manifest beneath the approved Seagate project-data root.
 
-**Architecture:** Keep the audit reducer pure and streaming: it validates rows through `LANDUSE_DATASET_CONTRACT`, counts label/polygon/language/source/text/duplicate risks, and returns immutable report values. A small CLI composes the existing lazy Hugging Face loader with the reducer and writes two derived JSON artifacts under `audit/landuse`; it never writes raw rows or starts training.
+**Architecture:** Keep the audit reducer pure and streaming: it validates rows through `LANDUSE_DATASET_CONTRACT`, counts label/polygon/language/source/text/duplicate risks, and returns immutable report values. A small CLI composes the existing lazy Hugging Face loader with the reducer; the loader may populate its approved Seagate cache, while the explicit writer writes two derived JSON artifacts under `audit/landuse` and never writes raw rows or starts training.
 
 **Tech Stack:** Python 3.12+, existing `datasets` optional extra, standard-library counters/JSON, pytest, Ruff, ty, and uv.
 
@@ -66,7 +66,7 @@ Consume rows through `itertools.chain` after validating the first row’s exact 
 
 - [x] **Step 3: Implement JSON artifact writing under the fixed root**
 
-Resolve `audit/landuse` with `ManagedPaths(config).child(...)`, create that directory only when the explicit writer is called, and write `audit_report.json` plus `split_manifest.json` with stable sorted JSON and a trailing newline. Never serialize raw sentences or full input rows.
+Resolve `audit/landuse` with `ManagedPaths(config).child(...)`, create that directory only when the explicit writer is called, and write `audit_report.json` plus `split_manifest.json` with stable sorted JSON and a trailing newline. The loader's separate Hugging Face cache is allowed only under the approved Seagate root. Never serialize raw sentences or full input rows.
 
 - [x] **Step 4: Implement the CLI entry point**
 

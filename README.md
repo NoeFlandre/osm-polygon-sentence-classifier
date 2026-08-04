@@ -7,9 +7,10 @@ Train a sentence classifier for OSM polygon descriptions, starting with the
 
 The repository contains a safe, testable project foundation and one explicit
 data-consuming command: `audit-landuse-dataset`. The audit consumes the pinned
-dataset in streaming mode and writes only a derived Hugging Face cache, JSON
-report, and polygon split manifest beneath the approved external data root. It
-does not train a model, upload or publish artifacts, or submit Grid'5000 jobs.
+dataset in streaming mode. Its loader may populate the approved Hugging Face
+cache; the explicit artifact writer creates only the JSON report and polygon
+split manifest beneath the approved external data root. It does not train a
+model, upload or publish artifacts, or submit Grid'5000 jobs.
 
 ## Data and model repositories
 
