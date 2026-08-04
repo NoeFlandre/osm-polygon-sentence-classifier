@@ -5,10 +5,11 @@ starting with the landuse task. The classifier is intended to support a
 landuse-first progression while keeping data, compute, and publication gates
 explicit.
 
-The current milestone is a safe local foundation. It establishes small package
-boundaries, managed data paths, Trackio settings, tests, quality tooling, and
-public documentation. It does not process the training dataset or submit
-remote jobs.
+The current milestone is a safe local foundation plus an explicit review-only
+landuse dataset audit. It establishes small package boundaries, managed data
+paths, Trackio settings, tests, quality tooling, and public documentation. The
+audit may stream the pinned dataset and write only its approved cache, report,
+and split manifest; it does not train or submit remote jobs.
 
 Start with the [getting-started guide](guides/getting-started.md), review the
 [data policy](guides/data-policy.md), and read the

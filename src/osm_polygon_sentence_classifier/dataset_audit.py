@@ -214,7 +214,10 @@ def audit_rows(
     polygon_labels: dict[str, set[str]] = {}
     hash_counts: Counter[str] = Counter()
     hash_polygons: dict[str, set[str]] = {}
-    text_lengths: list[int] = []
+    text_length_count = 0
+    text_length_total = 0
+    text_length_min: int | None = None
+    text_length_max: int | None = None
     total_rows = 0
     trainable_rows = 0
 
@@ -258,7 +261,19 @@ def audit_rows(
         language_counts[_counter_key(row["language"])] += 1
         source_counts[_counter_key(row["source"])] += 1
         text = cast(str, row["sentence_text_normalized"])
-        text_lengths.append(len(text))
+        text_length = len(text)
+        text_length_count += 1
+        text_length_total += text_length
+        text_length_min = (
+            text_length
+            if text_length_min is None
+            else min(text_length_min, text_length)
+        )
+        text_length_max = (
+            text_length
+            if text_length_max is None
+            else max(text_length_max, text_length)
+        )
         polygon_labels.setdefault(polygon_id, set()).add(label)
 
         sentence_content_hash = row.get("sentence_content_hash")
@@ -318,10 +333,10 @@ def audit_rows(
         ),
         language_counts=_sorted_counter(language_counts),
         source_counts=_sorted_counter(source_counts),
-        text_length_min=min(text_lengths) if text_lengths else None,
-        text_length_max=max(text_lengths) if text_lengths else None,
-        text_length_mean=(sum(text_lengths) / len(text_lengths))
-        if text_lengths
+        text_length_min=text_length_min,
+        text_length_max=text_length_max,
+        text_length_mean=(text_length_total / text_length_count)
+        if text_length_count
         else None,
         duplicate_hash_groups=duplicate_hash_groups,
         duplicate_rows_beyond_first=duplicate_rows_beyond_first,

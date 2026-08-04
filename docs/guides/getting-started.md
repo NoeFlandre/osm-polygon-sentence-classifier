@@ -7,9 +7,9 @@
 - Git
 - just
 
-The Seagate volume is not required for this foundation. None of the commands
-below creates project datasets, checkpoints, models, Trackio run state, or
-other project data.
+The Seagate volume is required only when running the explicit audit command.
+The quality commands below do not create project datasets, checkpoints, models,
+Trackio run state, or other project data.
 
 ## Local quality gates
 
@@ -37,6 +37,8 @@ To run the local hooks against the repository, use:
 uv run pre-commit run --all-files
 ```
 
-No command in this foundation downloads the training dataset, authenticates,
-or submits a Grid5000 job. Dependency installation may use the normal Python
-package index, but it does not access project data or remote training systems.
+The explicit `audit-landuse-dataset` command is the only command that streams
+the training dataset; it writes only its approved cache, report, and split
+manifest beneath the Seagate root. It does not authenticate, train, or submit a
+Grid5000 job. Dependency installation may use the normal Python package index,
+but quality commands do not access project data or remote training systems.
