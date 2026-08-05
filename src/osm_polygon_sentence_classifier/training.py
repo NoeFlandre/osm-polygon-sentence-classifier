@@ -2,6 +2,7 @@
 
 import math
 import os
+import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -54,6 +55,7 @@ class TrainingConfig:
     eval_steps: int = 100
     save_steps: int = 100
     run_name: str = "landuse-baseline"
+    model_revision: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -63,6 +65,13 @@ class TrainingConfig:
             raise TrainingError("model_name_or_path must be a non-empty string")
         if not isinstance(self.run_name, str) or not self.run_name.strip():
             raise TrainingError("run_name must be a non-empty string")
+        if self.model_revision is not None and (
+            not isinstance(self.model_revision, str)
+            or re.fullmatch(r"[0-9a-f]{40}", self.model_revision) is None
+        ):
+            raise TrainingError(
+                "model_revision must be exactly 40 lowercase hexadecimal characters"
+            )
 
         output_subdirectory = Path(self.output_subdirectory)
         if (
@@ -280,10 +289,15 @@ def train_landuse_classifier(
 
     with _managed_training_environment(effective_project_config):
         dependencies = _load_training_dependencies()
+        tokenizer_kwargs: dict[str, object] = {
+            "cache_dir": str(model_cache_directory),
+            "use_fast": True,
+        }
+        if training_config.model_revision is not None:
+            tokenizer_kwargs["revision"] = training_config.model_revision
         tokenizer = dependencies.auto_tokenizer.from_pretrained(
             training_config.model_name_or_path,
-            cache_dir=str(model_cache_directory),
-            use_fast=True,
+            **tokenizer_kwargs,
         )
         train_dataset = _make_tokenized_dataset(
             dependencies,
@@ -301,12 +315,17 @@ def train_landuse_classifier(
             contract=contract,
             tokenizer=tokenizer,
         )
+        model_kwargs: dict[str, object] = {
+            "cache_dir": str(model_cache_directory),
+            "num_labels": len(LABEL_TO_ID),
+            "id2label": ID_TO_LABEL,
+            "label2id": LABEL_TO_ID,
+        }
+        if training_config.model_revision is not None:
+            model_kwargs["revision"] = training_config.model_revision
         model = dependencies.auto_model_for_sequence_classification.from_pretrained(
             training_config.model_name_or_path,
-            cache_dir=str(model_cache_directory),
-            num_labels=len(LABEL_TO_ID),
-            id2label=ID_TO_LABEL,
-            label2id=LABEL_TO_ID,
+            **model_kwargs,
         )
         training_arguments = dependencies.training_arguments(
             **_training_argument_values(

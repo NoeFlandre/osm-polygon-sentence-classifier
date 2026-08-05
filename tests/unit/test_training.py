@@ -69,6 +69,14 @@ def test_training_config_rejects_an_unsafe_output_subdirectory(
         TrainingConfig(output_subdirectory=output_subdirectory)
 
 
+@pytest.mark.parametrize("model_revision", ["unpinned", "A" * 40, 42])
+def test_training_config_rejects_an_invalid_model_revision(
+    model_revision: object,
+) -> None:
+    with pytest.raises(TrainingError, match="model_revision"):
+        cast(Any, TrainingConfig)(model_revision=model_revision)
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -300,3 +308,40 @@ def test_training_reports_missing_optional_dependencies(
 
     with pytest.raises(TrainingError, match="optional 'training' dependencies"):
         training._load_training_dependencies()
+
+
+def test_training_passes_a_pinned_model_revision_to_both_loaders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from osm_polygon_sentence_classifier import training
+
+    _FakeDataset.created.clear()
+    _FakeTokenizer.from_pretrained_calls.clear()
+    _FakeTokenizer.save_pretrained_calls.clear()
+    _FakeModel.from_pretrained_calls.clear()
+    _FakeTrainingArguments.calls.clear()
+    _FakeDataCollator.calls.clear()
+    _FakeTrainer.init_calls.clear()
+    _FakeTrainer.save_model_calls.clear()
+
+    dependencies = training._TrainingDependencies(
+        iterable_dataset=_FakeDataset,
+        auto_tokenizer=_FakeTokenizer,
+        auto_model_for_sequence_classification=_FakeModel,
+        data_collator_with_padding=_FakeDataCollator,
+        training_arguments=_FakeTrainingArguments,
+        trainer=_FakeTrainer,
+    )
+    monkeypatch.setattr(training, "_load_training_dependencies", lambda: dependencies)
+    revision = "d" * 40
+
+    train_landuse_classifier(
+        rows_factory=lambda: iter([_row()]),
+        config=TrainingConfig(
+            model_name_or_path="test-model",
+            model_revision=revision,
+        ),
+    )
+
+    assert _FakeTokenizer.from_pretrained_calls[0]["revision"] == revision
+    assert _FakeModel.from_pretrained_calls[0]["revision"] == revision

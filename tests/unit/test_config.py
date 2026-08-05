@@ -37,6 +37,19 @@ def test_data_root_cannot_be_replaced_by_another_local_directory(
         ProjectConfig(data_root=tmp_path)
 
 
+def test_remote_config_allows_only_a_home_scoped_root() -> None:
+    root = Path.home() / "osm-polygon-sentence-classifier-data"
+
+    config = ProjectConfig.for_remote_root(root)
+
+    assert config.data_root == root
+
+
+def test_remote_config_rejects_a_root_outside_home(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError, match="remote data root"):
+        ProjectConfig.for_remote_root(tmp_path)
+
+
 def test_config_is_immutable() -> None:
     config = ProjectConfig()
 

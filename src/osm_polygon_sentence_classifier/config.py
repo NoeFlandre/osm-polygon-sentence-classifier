@@ -16,7 +16,7 @@ class ConfigurationError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class ProjectConfig:
-    """Non-secret configuration shared by future local and remote workflows."""
+    """Non-secret configuration for local or explicitly remote workflows."""
 
     data_root: Path = APPROVED_DATA_ROOT
 
@@ -28,6 +28,33 @@ class ProjectConfig:
                 f"{APPROVED_DATA_ROOT}"
             )
         object.__setattr__(self, "data_root", APPROVED_DATA_ROOT)
+
+    @classmethod
+    def for_remote_root(cls, data_root: Path) -> "ProjectConfig":
+        """Build a configuration rooted beneath the remote user's home.
+
+        The normal constructor remains locked to the approved Seagate root.
+        This narrow alternate constructor is for the Grid'5000 compute-node
+        worker, whose persistent home storage is a different machine-local
+        root. It rejects traversal and roots outside ``Path.home()``.
+        """
+
+        candidate = Path(data_root).expanduser()
+        if not candidate.is_absolute() or any(
+            part in (".", "..") for part in candidate.parts
+        ):
+            raise ConfigurationError("remote data root must be an absolute home path")
+        try:
+            root = candidate.resolve()
+            home = Path.home().resolve()
+        except RuntimeError as error:
+            raise ConfigurationError("remote data root cannot be resolved") from error
+        if root == Path("/") or not root.is_relative_to(home):
+            raise ConfigurationError("remote data root must be beneath the remote home")
+
+        config = cls()
+        object.__setattr__(config, "data_root", root)
+        return config
 
     @property
     def project_name(self) -> str:

@@ -45,13 +45,16 @@ operator contract:
    without a recorded job ID is ambiguous and fails closed; it must be
    reconciled manually before another submission is attempted.
 5. An existing submitted, queued, running, or terminal state for the same run
-   ID prevents a second submission. The planned request and immutable identity
-   are retained in state for inspection and later reconciliation.
-6. The remote worker is a fixed project-specific command. It validates Linux,
-   numeric `OAR_JOB_ID`, the exact source commit, a clean checkout, and one
-   visible CUDA device before invoking the existing training function. It does
-   not fall back to CPU or MPS. Persistent model/cache/checkpoint paths are
-   remote operator paths; allocation scratch is not used for durable outputs.
+   ID prevents a second submission. The planned request and immutable identity,
+   plus the exact SSH/OAR submission command, are retained in state for
+   inspection and later reconciliation.
+6. Before allocation, a read-only SSH guard requires the expected clean remote
+   checkout and exact source commit. The scheduled worker is then a fixed
+   project-specific command that validates Linux, numeric `OAR_JOB_ID`, the
+   same exact source commit, a clean checkout, and one visible CUDA device
+   before invoking the existing training function. It does not fall back to
+   CPU or MPS. Persistent model/cache/checkpoint paths are remote operator
+   paths; allocation scratch is not used for durable outputs.
 
 Stopping the local monitor is outside this first slice, but the durable state
 boundary is designed so a later status/resume command can inspect the same run
@@ -113,6 +116,7 @@ command with `--execute`.
 local plan
   -> canonical identity and fixed oarsub argv
   -> [--execute gate]
+  -> read-only remote clean-checkout guard
   -> usagepolicycheck site + total
   -> soft quota check
   -> write submitting intent atomically

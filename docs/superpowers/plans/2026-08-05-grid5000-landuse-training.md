@@ -87,13 +87,15 @@ Implement injected command execution with fixed argv and a bounded timeout.
 The execution sequence is strictly:
 
 1. reject any existing or ambiguous state;
-2. run `usagepolicycheck -l --sites <validated-site>`;
-3. run `usagepolicycheck -t`;
-4. read and parse the remote home soft quota and require the documented
+2. verify the pre-staged remote checkout has the exact source commit and no
+   working-tree changes;
+3. run `usagepolicycheck -l --sites <validated-site>`;
+4. run `usagepolicycheck -t`;
+5. read and parse the remote home soft quota and require the documented
    staging headroom;
-5. atomically persist `submitting` intent;
-6. invoke one `oarsub` request;
-7. require one numeric job ID and atomically persist `submitted` state.
+6. atomically persist `submitting` intent;
+7. invoke one `oarsub` request;
+8. require one numeric job ID and atomically persist `submitted` state.
 
 Fail closed on nonzero policy/quota commands, malformed quota output, missing
 soft headroom, state permission/symlink problems, malformed scheduler output,

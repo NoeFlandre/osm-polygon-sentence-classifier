@@ -28,13 +28,22 @@ The foundation keeps the first interfaces narrow and local:
   records and wires a Hugging Face sequence-classification Trainer. Model
   caches, checkpoints, outputs, and Trackio state are directed beneath the
   managed root; the module does not upload, publish, or submit Grid5000 work.
+- `grid5000.py` owns the plan-first Grid'5000 boundary: immutable run identity,
+  bounded one-GPU allocation, policy and soft-quota preflight, fixed SSH/OAR
+  argument construction, a read-only pre-staged-checkout guard, and restrictive
+  durable submission state. Plan mode is side-effect free; only an explicit
+  `--execute` path can submit, and it refuses existing or ambiguous state.
+- `grid5000_worker.py` validates the Linux compute node, OAR job identity,
+  exact clean checkout, and one visible CUDA GPU before invoking the existing
+  training boundary. It uses a home-scoped remote project root and has no
+  upload, retry, scheduler, or CPU-fallback responsibility.
 
-The audit command is the only current data-consuming command. It consumes the
-pinned dataset, writes only its managed cache, report, and manifest, and never
-trains, uploads, publishes, or submits Grid5000 work. The training entry point
-is an explicit local call; model evaluation policy, Grid5000 operators, and
-OAR integration remain deferred until their contracts and safety gates have
-been reviewed.
+The audit command is the only current data-consuming CLI command. It consumes
+the pinned dataset and writes only its managed cache, report, and manifest. The
+training entry point is an explicit call. The Grid'5000 planner consumes no
+dataset and makes no remote call; its explicit execution path is documented in
+the Grid'5000 operator reference and has not been invoked by this
+implementation.
 
 Audit readiness is based on sentence-only model inputs. Mixed labels within a
 polygon and duplicate hashes across polygons remain diagnostic metrics, while

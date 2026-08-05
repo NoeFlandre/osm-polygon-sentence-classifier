@@ -44,3 +44,4 @@ nav:
       - Overview: architecture/overview.md
   - Reference:
       - Grid5000 boundary: reference/grid5000-boundary.md
+      - Grid5000 operator: reference/grid5000-operator.md

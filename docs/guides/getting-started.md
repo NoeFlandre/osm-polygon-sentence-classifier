@@ -39,10 +39,23 @@ clean, two-pass iterator, tokenizes lazily through a Hugging Face
 `IterableDataset`, reports locally through Trackio, and writes its model
 output beneath the approved external data root.
 
-There is intentionally no training CLI or Grid'5000 submission command yet.
-Invoke the entry point only from an explicitly authorized training workflow
-after reviewing the landuse audit. The function does not authenticate to or
-upload to Hugging Face and does not submit remote jobs.
+The `grid5000-landuse` command is plan-first. It requires pinned source and
+model revisions, prints the deterministic run identity, and makes no remote
+call unless `submit --execute` is explicitly supplied:
+
+```bash
+uv run grid5000-landuse plan \
+  --site nancy \
+  --source-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  --model-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+```
+
+The execution path performs both Grid'5000 usage-policy checks, reads the home
+soft quota, records submission intent before OAR, and refuses duplicates or
+ambiguous state. It does not authenticate to or upload to Hugging Face, clean
+data automatically, retry submissions, or publish results. Review
+[`Grid'5000 operator`](../reference/grid5000-operator.md) before any explicit
+execution.
 
 To run the local hooks against the repository, use:
 
@@ -50,8 +63,10 @@ To run the local hooks against the repository, use:
 uv run pre-commit run --all-files
 ```
 
-The explicit `audit-landuse-dataset` command is the only command that streams
-the training dataset; it writes only its approved cache, report, and split
-manifest beneath the Seagate root. It does not authenticate, train, or submit a
-Grid5000 job. Dependency installation may use the normal Python package index,
-but quality commands do not access project data or remote training systems.
+The explicit `audit-landuse-dataset` command is the local review command that
+streams the training dataset; it writes only its approved cache, report, and
+split manifest beneath the Seagate root. The authorized Grid'5000 worker also
+streams the pinned dataset during training. The audit command itself does not
+authenticate, train, or submit a Grid'5000 job. Dependency installation may
+use the normal Python package index, but quality commands do not access project
+data or remote training systems.

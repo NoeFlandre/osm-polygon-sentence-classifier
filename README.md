@@ -6,7 +6,8 @@ Train a sentence classifier for OSM polygon descriptions, starting with the
 ## Status
 
 The repository contains a safe, testable project foundation, one explicit
-data-consuming command (`audit-landuse-dataset`), and a typed training module.
+review command (`audit-landuse-dataset`), a typed training module, and a
+plan-first Grid'5000 operator.
 The audit consumes the pinned dataset in streaming mode. Its loader may
 populate the approved Hugging Face cache; the explicit artifact writer creates
 only the JSON report and polygon split manifest beneath the approved external
@@ -25,10 +26,11 @@ remaining usable hash. Rows are processed incrementally as they arrive from
 each stream rather than materialized into an intermediate list, and no
 cleaned dataset is written.
 
-`train_landuse_classifier` is an execution boundary, not a CLI or a remote job
-operator. It should be invoked only by an explicitly authorized training
-workflow after the dataset audit has been reviewed. The default model and
-training settings are configurable through `TrainingConfig`.
+`train_landuse_classifier` is an execution boundary, not a dataset publishing
+command. It should be invoked only by an explicitly authorized training
+workflow after reviewing the landuse audit. The default model and training
+settings are configurable through `TrainingConfig`; Grid'5000 runs must
+additionally pin a model revision.
 
 ## Data and model repositories
 
@@ -72,6 +74,19 @@ The equivalent Just recipes are documented in
 
 ## Grid'5000
 
-Computation will run on Grid'5000 in a later milestone. The current safety
-boundary is documented in
-[`docs/reference/grid5000-boundary.md`](docs/reference/grid5000-boundary.md).
+Grid'5000 execution is plan-first and explicitly guarded. For a side-effect-
+free plan, provide the source and model commits:
+
+```bash
+uv run grid5000-landuse plan \
+  --site nancy \
+  --source-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  --model-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+```
+
+Only `submit --execute` can run policy checks, read the remote soft quota, or
+submit one bounded one-GPU night allocation. It records local intent before
+OAR and fails closed on duplicate or ambiguous state. No live Grid'5000 job,
+Hugging Face upload, or publication is performed by the implementation pass.
+See [`docs/reference/grid5000-operator.md`](docs/reference/grid5000-operator.md)
+for the complete contract.
