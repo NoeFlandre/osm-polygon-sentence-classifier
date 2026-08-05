@@ -17,6 +17,7 @@ from .config import ConfigurationError, ProjectConfig
 from .dataset_contract import LANDUSE_DATASET_CONTRACT
 from .grid5000 import (
     COMMAND_TIMEOUT_SECONDS,
+    MINIMUM_CUDA_CAPABILITY,
     REMOTE_DATA_SUBDIRECTORY,
     CommandResult,
     CommandRunner,
@@ -48,10 +49,10 @@ class WorkerFacts:
     cuda_device_name: str
 
 
-CudaProbe = Callable[[], tuple[bool, int, str]]
+CudaProbe = Callable[[], tuple[bool, int, str, tuple[int, int]]]
 
 
-def _default_cuda_probe() -> tuple[bool, int, str]:
+def _default_cuda_probe() -> tuple[bool, int, str, tuple[int, int]]:
     try:
         torch = cast(Any, import_module("torch"))
     except ModuleNotFoundError as error:
@@ -61,9 +62,12 @@ def _default_cuda_probe() -> tuple[bool, int, str]:
     available = bool(torch.cuda.is_available())
     count = int(torch.cuda.device_count())
     device_name = ""
+    capability = (0, 0)
     if available and count == 1:
         device_name = str(torch.cuda.get_device_name(0))
-    return available, count, device_name
+        raw_capability = torch.cuda.get_device_capability(0)
+        capability = (int(raw_capability[0]), int(raw_capability[1]))
+    return available, count, device_name, capability
 
 
 def _failed_command(result: CommandResult, label: str) -> None:
@@ -99,7 +103,7 @@ def _validate_checkout(
 
 def _validate_cuda(probe: CudaProbe) -> str:
     try:
-        cuda_available, device_count, device_name = probe()
+        cuda_available, device_count, device_name, capability = probe()
     except WorkerError:
         raise
     except Exception as error:
@@ -110,6 +114,12 @@ def _validate_cuda(probe: CudaProbe) -> str:
         raise WorkerError("worker must expose exactly one CUDA GPU")
     if not device_name.strip():
         raise WorkerError("CUDA device name is missing")
+    if capability < MINIMUM_CUDA_CAPABILITY:
+        minimum = ".".join(str(part) for part in MINIMUM_CUDA_CAPABILITY)
+        actual = ".".join(str(part) for part in capability)
+        raise WorkerError(
+            f"CUDA compute capability {actual} is below the required {minimum}"
+        )
     return device_name
 
 

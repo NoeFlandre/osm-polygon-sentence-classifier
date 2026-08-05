@@ -90,9 +90,11 @@ The equivalent Just recipes are documented in
 ## Grid'5000
 
 The autonomous command probes all configured Grid'5000 sites concurrently,
-selects a factually compatible GPU, derives the correct OAR queue/resource
-type from `oarnodes`, stages the exact checkout, submits one short job, and
-monitors it. The worker retains two complete, identity-bound checkpoints. If a
+selects a factually compatible GPU (including CUDA capability `>= 7.5`),
+derives the correct OAR queue/resource type from `oarnodes`, stages the exact
+checkout, submits one short job, and monitors it. The worker rechecks the
+assigned GPU before training and retains two complete, identity-bound
+checkpoints. If a
 job ends before producing a verified model, the controller continues only from
 the newest complete checkpoint, on the same site, with a bounded successor
 job; it never restarts from scratch. The default limit is three continuation

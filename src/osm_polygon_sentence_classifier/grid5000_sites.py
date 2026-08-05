@@ -10,6 +10,7 @@ from typing import Final, cast
 
 from .grid5000 import (
     _HOME_QUOTA_COMMAND,
+    MINIMUM_CUDA_CAPABILITY,
     CommandResult,
     CommandRunner,
     Grid5000ConfigurationError,
@@ -34,7 +35,7 @@ DEFAULT_SITES: Final[tuple[str, ...]] = (
 )
 DEFAULT_MAX_WORKERS: Final[int] = 4
 DEFAULT_GPU_MEMORY_MB: Final[int] = 8_000
-DEFAULT_CUDA_CAPABILITY: Final[tuple[int, int]] = (7, 0)
+DEFAULT_CUDA_CAPABILITY: Final[tuple[int, int]] = MINIMUM_CUDA_CAPABILITY
 _PROBE_TIMEOUT_SECONDS: Final[float] = 30.0
 _OAR_NODES_COMMAND: Final[str] = "oarnodes -J"
 _FREE_HOME_COMMAND: Final[str] = (

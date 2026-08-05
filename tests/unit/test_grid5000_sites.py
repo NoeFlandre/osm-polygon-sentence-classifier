@@ -185,6 +185,19 @@ def test_select_site_rejects_when_no_hard_compatible_site_exists() -> None:
         select_site((probe,), requirements=SiteRequirements(gpu_memory_mb=8_000))
 
 
+def test_default_requirements_reject_a_gpu_below_the_torch_capability_floor() -> None:
+    probe = SiteProbe(
+        name="lille",
+        reachable=True,
+        resources=tuple(parse_oarnodes_stdout(_inventory(_record(capability=7)))),
+        persistent_free_bytes=10 * 1024**3,
+        queued_jobs=0,
+    )
+
+    with pytest.raises(RuntimeError, match="compatible"):
+        select_site((probe,), requirements=SiteRequirements())
+
+
 def test_site_probe_evidence_uses_the_requested_requirements() -> None:
     probe = SiteProbe(
         name="grenoble",

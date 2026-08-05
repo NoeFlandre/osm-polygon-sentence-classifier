@@ -38,8 +38,10 @@ does not cancel the active scheduler job; `resume --run-id RUN_ID --execute`
 reattaches to the durable state.
 
 The compute worker validates Linux, OAR identity, exact checkout revision and
-cleanliness, and exactly one visible CUDA GPU before entering the existing
-training module. It runs the locked `training` dependency extra with the uv
+cleanliness, exactly one visible CUDA GPU, and CUDA capability `>= 7.5` before
+entering the existing training module. The site probe applies the same floor,
+while the worker rechecks the actual assigned device. It runs the locked
+`training` dependency extra with the uv
 environment and package cache in allocation-local `/tmp`. Durable model,
 checkpoint, dataset-cache, and Trackio paths remain below the managed remote
 run root. Each complete checkpoint carries the immutable run identity. A

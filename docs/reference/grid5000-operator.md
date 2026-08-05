@@ -93,8 +93,12 @@ The selected frontend receives a bounded SSH sequence that:
    `/tmp` environment/cache paths.
 
 The worker requires Linux, its numeric OAR job identity, the exact source
-commit, a clean checkout, and exactly one visible CUDA GPU. It streams the
-pinned dataset through the clean training iterator, saves two retained
+commit, a clean checkout, exactly one visible CUDA GPU, and CUDA compute
+capability at least `7.5`, matching the locked training wheel. The controller
+uses the same capability floor during site selection, and the worker checks the
+actual assigned device again before training so an incompatible allocation
+fails before consuming the training budget. It streams the pinned dataset
+through the clean training iterator, saves two retained
 identity-bound checkpoints, and writes the final model and Trackio data beneath
 the marked run root. A successor job is submitted only after the previous job
 has terminated, the controller has found complete checkpoint evidence, and the

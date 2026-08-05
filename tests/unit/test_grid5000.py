@@ -184,6 +184,17 @@ def test_worker_command_uses_allocation_local_locked_uv_environment() -> None:
     assert '"$HOME/osm-polygon-sentence-classifier-data/grid5000/runs/' in command
 
 
+def test_worker_command_leaves_remote_home_path_for_shell_expansion() -> None:
+    command = _plan().worker_command
+
+    expected_root = (
+        '--remote-data-root "$HOME/osm-polygon-sentence-classifier-data/'
+        f'grid5000/runs/{_plan().identity.run_id}"'
+    )
+
+    assert expected_root in command
+
+
 def test_resume_plan_requires_a_valid_checkpoint_on_the_worker() -> None:
     plan = Grid5000Plan(
         identity=_identity(),
@@ -412,7 +423,7 @@ def _valid_worker_kwargs(tmp_path: Path) -> dict[str, Any]:
         "environ": {"OAR_JOB_ID": "12345"},
         "platform_name": "linux",
         "git_runner": _git_runner(SOURCE_COMMIT),
-        "cuda_probe": lambda: (True, 1, "Test GPU"),
+        "cuda_probe": lambda: (True, 1, "Test GPU", (8, 0)),
     }
 
 
@@ -424,8 +435,8 @@ def _valid_worker_kwargs(tmp_path: Path) -> dict[str, Any]:
         {"environ": {"OAR_JOB_ID": "not-numeric"}},
         {"git_runner": _git_runner("c" * 40)},
         {"git_runner": _git_runner(SOURCE_COMMIT, dirty=" M file.py")},
-        {"cuda_probe": lambda: (False, 1, "")},
-        {"cuda_probe": lambda: (True, 2, "Test GPU")},
+        {"cuda_probe": lambda: (False, 1, "", (0, 0))},
+        {"cuda_probe": lambda: (True, 2, "Test GPU", (8, 0))},
     ],
 )
 def test_worker_preflight_rejects_unsafe_compute_environment(
@@ -444,6 +455,16 @@ def test_worker_preflight_returns_validated_facts(tmp_path: Path) -> None:
     assert facts.job_id == 12345
     assert facts.source_commit == SOURCE_COMMIT
     assert facts.cuda_device_name == "Test GPU"
+
+
+def test_worker_preflight_rejects_a_gpu_below_the_supported_cuda_capability(
+    tmp_path: Path,
+) -> None:
+    values = _valid_worker_kwargs(tmp_path)
+    values["cuda_probe"] = lambda: (True, 1, "Tesla P100", (6, 0))
+
+    with pytest.raises(WorkerError, match="compute capability"):
+        validate_compute_node(**values)  # type: ignore[arg-type]
 
 
 def test_worker_runs_training_only_after_preflight(tmp_path: Path) -> None:
@@ -488,7 +509,7 @@ def test_worker_runs_training_only_after_preflight(tmp_path: Path) -> None:
         environ={"OAR_JOB_ID": "12345"},
         platform_name="linux",
         git_runner=_git_runner(SOURCE_COMMIT),
-        cuda_probe=lambda: (True, 1, "Test GPU"),
+        cuda_probe=lambda: (True, 1, "Test GPU", (8, 0)),
         train=fake_train,
     )
 
@@ -533,7 +554,7 @@ def test_worker_requires_a_complete_checkpoint_for_continuation(
             environ={"OAR_JOB_ID": "12345"},
             platform_name="linux",
             git_runner=_git_runner(SOURCE_COMMIT),
-            cuda_probe=lambda: (True, 1, "Test GPU"),
+            cuda_probe=lambda: (True, 1, "Test GPU", (8, 0)),
             train=fake_train,
             require_checkpoint=True,
         )
@@ -590,7 +611,7 @@ def test_worker_passes_the_latest_checkpoint_to_training(
         environ={"OAR_JOB_ID": "12345"},
         platform_name="linux",
         git_runner=_git_runner(SOURCE_COMMIT),
-        cuda_probe=lambda: (True, 1, "Test GPU"),
+        cuda_probe=lambda: (True, 1, "Test GPU", (8, 0)),
         train=fake_train,
         require_checkpoint=True,
     )
@@ -640,7 +661,7 @@ def test_worker_requires_hugging_face_auth_before_publishing_or_tracking(
             },
             platform_name="linux",
             git_runner=_git_runner(SOURCE_COMMIT),
-            cuda_probe=lambda: (True, 1, "Test GPU"),
+            cuda_probe=lambda: (True, 1, "Test GPU", (8, 0)),
             train=fake_train,
         )
 

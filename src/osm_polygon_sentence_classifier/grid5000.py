@@ -14,7 +14,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Literal, Protocol, cast
+from typing import Final, Literal, Protocol, cast
 
 from .config import ProjectConfig
 from .dataset_contract import LANDUSE_DATASET_CONTRACT
@@ -27,6 +27,7 @@ DEFAULT_DAY_WALLTIME_SECONDS = 30 * 60
 # Eight GiB leaves room for two resumable checkpoints, the final model,
 # metadata, and publication artifacts beneath the persistent home quota.
 MINIMUM_HOME_HEADROOM_BYTES = 8 * 1024**3
+MINIMUM_CUDA_CAPABILITY: Final[tuple[int, int]] = (7, 5)
 COMMAND_TIMEOUT_SECONDS = 120.0
 REMOTE_CHECKOUT_SUBDIRECTORY = "osm-polygon-sentence-classifier"
 REMOTE_DATA_SUBDIRECTORY = "osm-polygon-sentence-classifier-data"
@@ -394,14 +395,23 @@ class Grid5000Plan:
             self.identity.model_revision,
             "--training-config-json",
             self.identity.training_config_json,
-            "--remote-data-root",
-            (
-                f'"$HOME/{REMOTE_DATA_SUBDIRECTORY}/{REMOTE_RUNS_SUBDIRECTORY}/'
-                f'{self.identity.run_id}"'
-            ),
         )
+        worker_command = shlex.join(
+            (
+                *worker_args[:2],
+                "--no-dev",
+                "--extra",
+                "training",
+                *worker_args[2:],
+            )
+        )
+        remote_data_root = (
+            f'"$HOME/{REMOTE_DATA_SUBDIRECTORY}/{REMOTE_RUNS_SUBDIRECTORY}/'
+            f'{self.identity.run_id}"'
+        )
+        worker_command += f" --remote-data-root {remote_data_root}"
         if self.resume_from_checkpoint:
-            worker_args += ("--require-checkpoint",)
+            worker_command += " --require-checkpoint"
         return (
             f'cd "$HOME/{REMOTE_CHECKOUT_SUBDIRECTORY}" && '
             "umask 077 && "
@@ -409,16 +419,7 @@ class Grid5000Plan:
             'export UV_CACHE_DIR="/tmp/osm-polygon-sentence-classifier-${OAR_JOB_ID}-uv-cache" && '
             'uv_bin="$(command -v uv || true)"; '
             '[ -n "$uv_bin" ] || uv_bin="$HOME/.local/bin/uv"; '
-            'test -x "$uv_bin" && exec "$uv_bin" '
-            + shlex.join(
-                (
-                    *worker_args[:2],
-                    "--no-dev",
-                    "--extra",
-                    "training",
-                    *worker_args[2:],
-                )
-            )
+            'test -x "$uv_bin" && exec "$uv_bin" ' + worker_command
         )
 
     @property
@@ -882,6 +883,7 @@ __all__ = [
     "GRID5000_DATASET_REVISION",
     "MAX_DAY_WALLTIME_SECONDS",
     "MAX_WALLTIME_SECONDS",
+    "MINIMUM_CUDA_CAPABILITY",
     "MINIMUM_HOME_HEADROOM_BYTES",
     "CommandResult",
     "CommandRunner",
