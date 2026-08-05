@@ -16,7 +16,7 @@ The autonomous identity pins:
 The execution contract is:
 
 - probe all configured frontends with bounded, fixed-argument SSH;
-- select a reachable site with a compatible GPU and at least 4 GiB of
+- select a reachable site with a compatible GPU and at least 8 GiB of
   persistent soft-quota headroom;
 - derive OAR queue, resource type, production property, and Europe/Paris policy
   from live facts and the requested short walltime;
@@ -25,6 +25,8 @@ The execution contract is:
 - run policy and quota checks immediately before one OAR submission;
 - record durable intent before OAR and refuse ambiguous resubmission;
 - monitor one job, with at most one sequential 20-minute replacement trial;
+- retain two identity-bound checkpoints and submit at most three bounded
+  successor jobs when a terminal job has no verified completion;
 - verify the completion manifest and remote Hub facts before success cleanup; and
 - remove only the exact marked successful run root unless retention is requested.
 
@@ -40,7 +42,11 @@ cleanliness, and exactly one visible CUDA GPU before entering the existing
 training module. It runs the locked `training` dependency extra with the uv
 environment and package cache in allocation-local `/tmp`. Durable model,
 checkpoint, dataset-cache, and Trackio paths remain below the managed remote
-run root. The completion manifest contains no token or raw scheduler output.
+run root. Each complete checkpoint carries the immutable run identity. A
+successor worker must find the newest complete identity-matching checkpoint and
+passes it to `Trainer.train(resume_from_checkpoint=...)`; it never silently
+starts a continuation from scratch. The completion manifest contains no token
+or raw scheduler output.
 
 The local state root is the approved external data volume:
 

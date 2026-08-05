@@ -9,7 +9,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from .config import ProjectConfig
 from .grid5000 import (
@@ -49,6 +49,7 @@ from .tracking import ensure_trackio_resources, settings_for
 from .training import TrainingConfig
 
 PolicyType = Literal["auto", "day", "night"]
+_UNSET = object()
 
 
 class AutonomousRunError(RuntimeError):
@@ -66,6 +67,7 @@ class AutonomousRunConfig:
     walltime_seconds: int = 30 * 60
     policy_type: PolicyType = "auto"
     max_workers: int = DEFAULT_MAX_WORKERS
+    max_continuations: int = 3
     cleanup: bool = True
 
     def __post_init__(self) -> None:
@@ -77,6 +79,12 @@ class AutonomousRunConfig:
             raise AutonomousRunError("policy_type must be auto, day, or night")
         if self.max_workers <= 0:
             raise AutonomousRunError("max_workers must be positive")
+        if (
+            isinstance(self.max_continuations, bool)
+            or not isinstance(self.max_continuations, int)
+            or self.max_continuations <= 0
+        ):
+            raise AutonomousRunError("max_continuations must be positive")
         if self.training_config.model_name_or_path != self.identity.model_name_or_path:
             raise AutonomousRunError("training model does not match run identity")
         if self.training_config.model_revision != self.identity.model_revision:
@@ -138,8 +146,8 @@ class AutonomousRunController:
         current: AutonomousRunState,
         phase: RunPhase,
         *,
-        site: str | None = None,
-        job_id: int | None = None,
+        site: str | None | object = _UNSET,
+        job_id: int | None | object = _UNSET,
         facts: Mapping[str, object] | None = None,
     ) -> AutonomousRunState:
         merged = dict(current.facts or {})
@@ -148,8 +156,8 @@ class AutonomousRunController:
             run_id=current.run_id,
             phase=phase,
             identity=current.identity,
-            site=site if site is not None else current.site,
-            job_id=job_id if job_id is not None else current.job_id,
+            site=current.site if site is _UNSET else cast(str | None, site),
+            job_id=current.job_id if job_id is _UNSET else cast(int | None, job_id),
             facts=merged,
         )
         self.state.save(updated)
@@ -198,6 +206,7 @@ class AutonomousRunController:
         *,
         walltime_seconds: int | None = None,
         now: datetime | None = None,
+        resume_from_checkpoint: bool = False,
     ) -> Grid5000Plan:
         allocation_facts = choose_allocation(
             probe.resources,
@@ -225,6 +234,7 @@ class AutonomousRunController:
         return Grid5000Plan(
             identity=self.config.identity,
             allocation=allocation,
+            resume_from_checkpoint=resume_from_checkpoint,
         )
 
     def _preflight(self, remote: Any, plan: Grid5000Plan) -> None:
@@ -469,6 +479,128 @@ class AutonomousRunController:
         )
         return current, replacement_site, replacement_job, replacement_remote, True
 
+    def _fail_terminal(
+        self,
+        current: AutonomousRunState,
+        *,
+        site: str,
+        job_id: int,
+        remote: Any,
+        message: str,
+    ) -> AutonomousRunState:
+        failed = self._transition(
+            current,
+            RunPhase.FAILED,
+            site=site,
+            job_id=job_id,
+            facts={"error": message},
+        )
+        remote.mark_status(self.config.identity.run_id, "failed")
+        raise AutonomousRunError(
+            str(dict(failed.facts or {}).get("error", "job failed"))
+        )
+
+    def _continuation_probe(self, site: str) -> SiteProbe:
+        probes = tuple(
+            self.probe_sites(
+                sites=(site,),
+                requirements=self.config.requirements,
+                max_workers=1,
+            )
+        )
+        try:
+            return select_site(probes, requirements=self.config.requirements)
+        except RuntimeError as error:
+            raise AutonomousRunError(
+                f"site {site} is no longer compatible for checkpoint continuation"
+            ) from error
+
+    def _continue_after_incomplete(
+        self,
+        current: AutonomousRunState,
+        *,
+        status: JobStatus,
+        site: str,
+        job_id: int,
+        remote: Any,
+        reason: str,
+    ) -> AutonomousRunState:
+        facts = dict(current.facts or {})
+        raw_count = facts.get("continuation_count", 0)
+        if (
+            isinstance(raw_count, bool)
+            or not isinstance(raw_count, int)
+            or raw_count < 0
+        ):
+            raise AutonomousRunError("durable continuation count is invalid")
+        if raw_count >= self.config.max_continuations:
+            return self._fail_terminal(
+                current,
+                site=site,
+                job_id=job_id,
+                remote=remote,
+                message=(
+                    f"job ended without completion after {raw_count} checkpoint "
+                    "continuations"
+                ),
+            )
+        try:
+            checkpoint_ready = remote.has_complete_checkpoint(
+                self.config.identity.run_id,
+                output_subdirectory=self.config.training_config.output_subdirectory,
+                identity=self.config.identity.canonical_payload,
+            )
+        except Exception as error:
+            raise AutonomousRunError(
+                "checkpoint availability could not be verified"
+            ) from error
+        if not checkpoint_ready:
+            return self._fail_terminal(
+                current,
+                site=site,
+                job_id=job_id,
+                remote=remote,
+                message="job ended without a complete checkpoint",
+            )
+        probe = self._continuation_probe(site)
+        token = self._local_token_for_publication()
+        remote.prepare(
+            run_id=self.config.identity.run_id,
+            source_commit=self.config.identity.source_commit,
+        )
+        if token:
+            remote.install_hugging_face_token(token)
+        plan = self._build_plan(probe, resume_from_checkpoint=True)
+        self._preflight(remote, plan)
+        pending = self._transition(
+            current,
+            RunPhase.SUBMITTING,
+            site=site,
+            job_id=None,
+            facts={
+                "continuation_count": raw_count + 1,
+                "continuation_pending": True,
+                "continuation_reason": reason,
+                "last_terminal_job_id": job_id,
+                "replacement_attempted": True,
+            },
+        )
+        successor_job_id = OarClient(remote).submit(plan.scheduler_command)
+        submitted = self._transition(
+            pending,
+            RunPhase.SUBMITTED,
+            site=site,
+            job_id=successor_job_id,
+            facts={
+                "continuation_count": raw_count + 1,
+                "continuation_pending": False,
+                "replacement_attempted": True,
+                "resume_from_checkpoint": True,
+                "scheduler_command": list(plan.scheduler_command),
+            },
+        )
+        return self._monitor(submitted, remote=remote)
+
     def _handle_terminal_status(
         self,
         current: AutonomousRunState,
@@ -478,41 +610,36 @@ class AutonomousRunController:
         job_id: int,
         remote: Any,
     ) -> AutonomousRunState:
+        reason = f"job ended as {status.state.value}; exit_code={status.exit_code}"
         if status.state is not JobState.TERMINATED or status.exit_code not in {None, 0}:
-            current = self._transition(
+            return self._continue_after_incomplete(
                 current,
-                RunPhase.FAILED,
+                status=status,
                 site=site,
                 job_id=job_id,
-                facts={
-                    "error": (
-                        f"job ended as {status.state.value}; "
-                        f"exit_code={status.exit_code}"
-                    )
-                },
-            )
-            remote.mark_status(self.config.identity.run_id, "failed")
-            raise AutonomousRunError(
-                str(dict(current.facts or {}).get("error", "job failed"))
+                remote=remote,
+                reason=reason,
             )
         try:
             manifest = remote.read_completion(self.config.identity.run_id)
             self._verify_completion(remote, manifest)
-        except Exception as error:
-            current = self._transition(
+        except AutonomousRunError as error:
+            return self._fail_terminal(
                 current,
-                RunPhase.FAILED,
                 site=site,
                 job_id=job_id,
-                facts={"error": str(error)},
+                remote=remote,
+                message=str(error),
             )
-            with suppress(Exception):
-                remote.mark_status(self.config.identity.run_id, "failed")
-            if isinstance(error, AutonomousRunError):
-                raise
-            raise AutonomousRunError(
-                "completed Grid'5000 job could not be verified"
-            ) from error
+        except Exception as error:
+            return self._continue_after_incomplete(
+                current,
+                status=status,
+                site=site,
+                job_id=job_id,
+                remote=remote,
+                reason=str(error),
+            )
         remote.mark_status(self.config.identity.run_id, "complete")
         if self.config.cleanup:
             remote.cleanup(self.config.identity.run_id)
@@ -595,6 +722,7 @@ class AutonomousRunController:
             RunPhase.PROBING,
             facts={
                 "cleanup": self.config.cleanup,
+                "max_continuations": self.config.max_continuations,
                 "sites": list(self.config.sites),
                 "requirements": {
                     "gpu_memory_mb": self.config.requirements.gpu_memory_mb,

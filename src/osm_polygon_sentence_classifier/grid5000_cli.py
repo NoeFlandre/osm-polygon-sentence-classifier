@@ -129,6 +129,12 @@ def _add_autonomous_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--gpu-memory-mb", type=int, default=8_000)
     parser.add_argument("--max-workers", type=int, default=4)
+    parser.add_argument(
+        "--max-continuations",
+        type=int,
+        default=3,
+        help="maximum bounded same-site checkpoint successors (default: 3)",
+    )
     parser.add_argument("--publish", action="store_true")
     parser.add_argument("--sync-trackio", action="store_true")
     parser.add_argument(
@@ -237,6 +243,7 @@ def _build_autonomous_config(arguments: argparse.Namespace) -> AutonomousRunConf
         walltime_seconds=arguments.walltime_seconds,
         policy_type=arguments.policy_type,
         max_workers=arguments.max_workers,
+        max_continuations=arguments.max_continuations,
         cleanup=not arguments.keep_remote,
     )
 
@@ -251,6 +258,7 @@ def _autonomous_plan_payload(config: AutonomousRunConfig) -> dict[str, object]:
         "gpu_memory_mb": config.requirements.gpu_memory_mb,
         "publish": config.training_config.publish_to_hub,
         "sync_trackio": config.training_config.sync_trackio,
+        "max_continuations": config.max_continuations,
         "cleanup": config.cleanup,
     }
 
@@ -284,6 +292,9 @@ def _config_from_state(state_payload: Mapping[str, object]) -> AutonomousRunConf
         else 30 * 60
     )
     cleanup = facts.get("cleanup", True) if isinstance(facts, Mapping) else True
+    max_continuations = (
+        facts.get("max_continuations", 3) if isinstance(facts, Mapping) else 3
+    )
     sites = (
         facts.get("sites", DEFAULT_SITES)
         if isinstance(facts, Mapping)
@@ -314,6 +325,9 @@ def _config_from_state(state_payload: Mapping[str, object]) -> AutonomousRunConf
             cast(Literal["auto", "day", "night"], policy)
             if policy in {"auto", "day", "night"}
             else "auto"
+        ),
+        max_continuations=(
+            max_continuations if isinstance(max_continuations, int) else 3
         ),
         cleanup=cleanup if isinstance(cleanup, bool) else True,
     )

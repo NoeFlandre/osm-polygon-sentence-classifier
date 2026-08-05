@@ -199,3 +199,9 @@ def test_site_probe_evidence_uses_the_requested_requirements() -> None:
     assert evidence["has_compatible"] is False
     assert evidence["idle_compatible"] is False
     assert evidence["allocation"] is None
+
+
+def test_default_requirements_reserve_space_for_multiple_checkpoints() -> None:
+    requirements = SiteRequirements()
+
+    assert requirements.persistent_free_bytes >= 8 * 1024**3

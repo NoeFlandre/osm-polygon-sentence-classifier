@@ -52,7 +52,7 @@ class SiteRequirements:
 
     gpu_memory_mb: int = DEFAULT_GPU_MEMORY_MB
     cuda_capability: tuple[int, int] = DEFAULT_CUDA_CAPABILITY
-    persistent_free_bytes: int = 4 * 1024**3
+    persistent_free_bytes: int = 8 * 1024**3
 
     def __post_init__(self) -> None:
         if self.gpu_memory_mb <= 0:

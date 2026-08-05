@@ -10,6 +10,11 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, Literal, TypedDict, cast
 
+from .checkpointing import (
+    CheckpointError,
+    find_latest_complete_checkpoint,
+    write_checkpoint_manifest,
+)
 from .config import ProjectConfig
 from .dataset_contract import LANDUSE_DATASET_CONTRACT, DatasetContract
 from .dataset_loader import (
@@ -56,7 +61,7 @@ class TrainingConfig:
     logging_steps: int = 10
     eval_steps: int = 100
     save_steps: int = 100
-    save_total_limit: int = 1
+    save_total_limit: int = 2
     run_name: str = "landuse-mmbert-small-frozen-head"
     model_revision: str | None = None
     publish_to_hub: bool = False
@@ -148,6 +153,82 @@ class _TrainingDependencies:
     data_collator_with_padding: Any
     training_arguments: Any
     trainer: Any
+
+
+class _CheckpointManifestCallback:
+    """Record identity only after Hugging Face finishes a checkpoint save."""
+
+    def __init__(self, identity: Mapping[str, object]) -> None:
+        self.identity = dict(identity)
+
+    def on_save(self, args: Any, state: Any, control: Any, **kwargs: object) -> Any:
+        del kwargs
+        output_directory = getattr(args, "output_dir", None)
+        global_step = getattr(state, "global_step", None)
+        if not isinstance(output_directory, str) or not isinstance(global_step, int):
+            raise TrainingError("checkpoint save did not expose a valid step")
+        try:
+            write_checkpoint_manifest(
+                Path(output_directory) / f"checkpoint-{global_step}",
+                identity=self.identity,
+                global_step=global_step,
+            )
+        except CheckpointError as error:
+            raise TrainingError("checkpoint manifest could not be written") from error
+        return control
+
+
+def _prepare_checkpoint_resume(
+    output_directory: Path,
+    *,
+    resume_from_checkpoint: Path | None,
+    checkpoint_identity: Mapping[str, object] | None,
+) -> tuple[Path | None, dict[str, object] | None]:
+    if resume_from_checkpoint is not None and checkpoint_identity is None:
+        raise TrainingError("checkpoint identity is required for resume")
+    if checkpoint_identity is None:
+        return resume_from_checkpoint, None
+    identity = dict(checkpoint_identity)
+    if resume_from_checkpoint is None:
+        return None, identity
+    try:
+        selected = find_latest_complete_checkpoint(
+            output_directory,
+            identity=identity,
+        )
+    except CheckpointError as error:
+        raise TrainingError("checkpoint evidence is invalid") from error
+    if selected is None or selected.path != resume_from_checkpoint:
+        raise TrainingError("requested checkpoint is not a complete identity match")
+    return resume_from_checkpoint, identity
+
+
+def _build_trainer(
+    dependencies: _TrainingDependencies,
+    *,
+    model: Any,
+    training_arguments: Any,
+    train_dataset: Any,
+    validation_dataset: Any,
+    data_collator: Any,
+    checkpoint_identity: Mapping[str, object] | None,
+) -> Any:
+    trainer_values: dict[str, object] = {
+        "model": model,
+        "args": training_arguments,
+        "train_dataset": train_dataset,
+        "eval_dataset": validation_dataset,
+        "data_collator": data_collator,
+    }
+    if checkpoint_identity is not None:
+        trainer_values["callbacks"] = [_CheckpointManifestCallback(checkpoint_identity)]
+    return dependencies.trainer(**trainer_values)
+
+
+def _run_trainer(trainer: Any, resume_from_checkpoint: Path | None) -> object:
+    if resume_from_checkpoint is None:
+        return trainer.train()
+    return trainer.train(resume_from_checkpoint=str(resume_from_checkpoint))
 
 
 def _load_training_dependencies() -> _TrainingDependencies:
@@ -315,6 +396,8 @@ def train_landuse_classifier(
     config: TrainingConfig | None = None,
     project_config: ProjectConfig | None = None,
     contract: DatasetContract = LANDUSE_DATASET_CONTRACT,
+    resume_from_checkpoint: Path | None = None,
+    checkpoint_identity: Mapping[str, object] | None = None,
 ) -> TrainingResult:
     """Train and save a landuse classifier using only the clean stream boundary.
 
@@ -330,6 +413,11 @@ def train_landuse_classifier(
     output_directory = paths.child(training_config.output_subdirectory)
     model_cache_directory = paths.child("cache/huggingface/models")
     tracking = settings_for(effective_project_config)
+    resume_from_checkpoint, checkpoint_identity = _prepare_checkpoint_resume(
+        output_directory,
+        resume_from_checkpoint=resume_from_checkpoint,
+        checkpoint_identity=checkpoint_identity,
+    )
 
     effective_rows_factory = rows_factory
     if effective_rows_factory is None:
@@ -392,14 +480,16 @@ def train_landuse_classifier(
             )
         )
         data_collator = dependencies.data_collator_with_padding(tokenizer=tokenizer)
-        trainer = dependencies.trainer(
+        trainer = _build_trainer(
+            dependencies,
             model=model,
-            args=training_arguments,
+            training_arguments=training_arguments,
             train_dataset=train_dataset,
-            eval_dataset=validation_dataset,
+            validation_dataset=validation_dataset,
             data_collator=data_collator,
+            checkpoint_identity=checkpoint_identity,
         )
-        train_output = trainer.train()
+        train_output = _run_trainer(trainer, resume_from_checkpoint)
         trainer.save_model(str(output_directory))
         tokenizer.save_pretrained(str(output_directory))
         model_publication = None

@@ -105,6 +105,74 @@ class _FakeRemote:
         self.cleaned = True
 
 
+class _CheckpointContinuationRemote(_FakeRemote):
+    def __init__(self) -> None:
+        super().__init__()
+        self.submission_count = 0
+
+    def run(self, command: str, *, input_text: str | None = None) -> CommandResult:
+        del input_text
+        if "oarsub" in command:
+            self.submission_count += 1
+            return CommandResult(
+                returncode=0,
+                stdout=f"OAR_JOB_ID={99 + self.submission_count - 1}\n",
+            )
+        if "quota" in command:
+            return CommandResult(returncode=0, stdout="0 100000000 100000001\n")
+        return CommandResult(returncode=0, stdout="ok\n")
+
+    def raw(self, command: str) -> CommandResult:
+        if command.startswith("oarstat -fj"):
+            job_id = int(command.split()[2])
+            if job_id == 99:
+                payload = (
+                    {"99": {"state": "Running"}}
+                    if self.status_calls == 0
+                    else {"99": {"state": "Terminated", "exit_code": -15}}
+                )
+            else:
+                payload = (
+                    {"100": {"state": "Running"}}
+                    if self.status_calls < 3
+                    else {"100": {"state": "Terminated", "exit_code": 0}}
+                )
+            self.status_calls += 1
+            return CommandResult(returncode=0, stdout=json.dumps(payload))
+        raise AssertionError(command)
+
+    def has_complete_checkpoint(
+        self,
+        run_id: str,
+        *,
+        output_subdirectory: str,
+        identity: dict[str, object],
+    ) -> bool:
+        del run_id, output_subdirectory, identity
+        return True
+
+
+class _NeverCompletesContinuationRemote(_CheckpointContinuationRemote):
+    def __init__(self) -> None:
+        super().__init__()
+        self.job_status_calls: dict[int, int] = {}
+
+    def raw(self, command: str) -> CommandResult:
+        if command.startswith("oarstat -fj"):
+            job_id = int(command.split()[2])
+            calls = self.job_status_calls.get(job_id, 0)
+            self.job_status_calls[job_id] = calls + 1
+            state = "Running" if calls == 0 else "Terminated"
+            exit_code = None if calls == 0 else -15
+            return CommandResult(
+                returncode=0,
+                stdout=json.dumps(
+                    {str(job_id): {"state": state, "exit_code": exit_code}}
+                ),
+            )
+        raise AssertionError(command)
+
+
 class _ReplacementRemote:
     def __init__(self, site: str, state: str) -> None:
         self.site = site
@@ -216,6 +284,95 @@ def test_controller_runs_prepare_submit_monitor_publish_verify_and_cleanup(
     assert any(kind == "repo" for kind, _ in hub.calls)
     assert any(kind == "bucket" for kind, _ in hub.calls)
     assert any(kind == "model_info" for kind, _ in hub.calls)
+
+
+def test_controller_continues_from_a_checkpoint_after_walltime_termination(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+    remote = _CheckpointContinuationRemote()
+    probe = SiteProbe(
+        name="grenoble",
+        reachable=True,
+        resources=(
+            GpuResource(
+                gpu_memory_mb=16_000,
+                cuda_capability=(8, 0),
+                jobs_assigned=0,
+                production=True,
+                exotic=False,
+            ),
+        ),
+        persistent_free_bytes=10 * 1024**3,
+        queued_jobs=0,
+    )
+    controller = AutonomousRunController(
+        _config(),
+        state_root=tmp_path / "runs",
+        probe_sites=lambda **_: (probe,),
+        remote_factory=lambda _site: remote,
+        hub_api=_FakeHub(),
+        poll_seconds=0,
+    )
+
+    result = controller.run()
+
+    assert result.phase == "completed"
+    assert remote.submission_count == 2
+    assert remote.marked == ["complete"]
+    assert remote.cleaned
+    state = AutonomousStateStore(tmp_path / "runs").load(
+        controller.config.identity.run_id
+    )
+    assert state is not None
+    facts = dict(state.facts or {})
+    assert facts["continuation_count"] == 1
+    assert facts["resume_from_checkpoint"] is True
+
+
+def test_controller_stops_after_the_continuation_limit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+    remote = _NeverCompletesContinuationRemote()
+    probe = SiteProbe(
+        name="grenoble",
+        reachable=True,
+        resources=(
+            GpuResource(
+                gpu_memory_mb=16_000,
+                cuda_capability=(8, 0),
+                jobs_assigned=0,
+                production=True,
+                exotic=False,
+            ),
+        ),
+        persistent_free_bytes=10 * 1024**3,
+        queued_jobs=0,
+    )
+    controller = AutonomousRunController(
+        replace(_config(), max_continuations=1),
+        state_root=tmp_path / "runs",
+        probe_sites=lambda **_: (probe,),
+        remote_factory=lambda _site: remote,
+        hub_api=_FakeHub(),
+        poll_seconds=0,
+    )
+
+    with pytest.raises(AutonomousRunError, match="after 1 checkpoint continuations"):
+        controller.run()
+
+    assert remote.submission_count == 2
+    assert remote.marked == ["failed"]
+    assert not remote.cleaned
+    state = AutonomousStateStore(tmp_path / "runs").load(
+        controller.config.identity.run_id
+    )
+    assert state is not None
+    assert state.phase == "failed"
+    assert dict(state.facts or {})["continuation_count"] == 1
 
 
 def test_completion_verification_rejects_a_model_repository_mismatch(

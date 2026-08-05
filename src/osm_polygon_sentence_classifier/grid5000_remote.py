@@ -8,6 +8,7 @@ import shlex
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
 from typing import Protocol
 
 from .grid5000 import (
@@ -255,6 +256,75 @@ printf 'HF_AUTH_INSTALLED\n'
                 "remote completion manifest identity is invalid"
             )
         return dict(payload)
+
+    def has_complete_checkpoint(
+        self,
+        run_id: str,
+        *,
+        output_subdirectory: str | Path,
+        identity: Mapping[str, object],
+    ) -> bool:
+        """Check for complete files bound to the exact run identity."""
+
+        _validate_run_id(run_id)
+        try:
+            identity_json = json.dumps(
+                dict(identity),
+                allow_nan=False,
+                sort_keys=True,
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError("checkpoint identity must be JSON-compatible") from error
+        relative = PurePosixPath(str(output_subdirectory))
+        if (
+            relative.is_absolute()
+            or not relative.parts
+            or any(part in {"", ".", ".."} for part in relative.parts)
+        ):
+            raise ValueError("output_subdirectory must be a safe relative path")
+        root = f'"$HOME/{REMOTE_DATA_SUBDIRECTORY}/{REMOTE_RUNS_SUBDIRECTORY}/{run_id}"'
+        output = f'"$root/{"/".join(relative.parts)}"'
+        run_marker = shlex.quote(f'"run_id":"{run_id}"')
+        identity_marker = shlex.quote(f'"identity": {identity_json}')
+        command = f"""
+set -euo pipefail
+root={root}
+output={output}
+marker="$root/.operator-managed.json"
+[ -d "$root" ] && [ ! -L "$root" ]
+[ -f "$marker" ] && [ ! -L "$marker" ]
+grep -Fq {run_marker} "$marker"
+grep -Fq '"status":"active"' "$marker"
+if [ ! -d "$output" ] || [ -L "$output" ]; then
+  printf 'CHECKPOINT_MISSING\n'
+  exit 0
+fi
+ready=false
+for checkpoint in "$output"/checkpoint-*; do
+  [ -d "$checkpoint" ] && [ ! -L "$checkpoint" ] || continue
+  [ -f "$checkpoint/checkpoint-manifest.json" ] && [ ! -L "$checkpoint/checkpoint-manifest.json" ] || continue
+  grep -Fq {identity_marker} "$checkpoint/checkpoint-manifest.json" || continue
+  [ -f "$checkpoint/trainer_state.json" ] && [ ! -L "$checkpoint/trainer_state.json" ] || continue
+  [ -f "$checkpoint/optimizer.pt" ] && [ ! -L "$checkpoint/optimizer.pt" ] || continue
+  [ -f "$checkpoint/scheduler.pt" ] && [ ! -L "$checkpoint/scheduler.pt" ] || continue
+  [ -f "$checkpoint/rng_state.pth" ] && [ ! -L "$checkpoint/rng_state.pth" ] || continue
+  if [ -f "$checkpoint/model.safetensors" ] || [ -f "$checkpoint/pytorch_model.bin" ]; then
+    ready=true
+    break
+  fi
+done
+if "$ready"; then
+  printf 'CHECKPOINT_READY\n'
+else
+  printf 'CHECKPOINT_MISSING\n'
+fi
+""".strip()
+        result = self.run(command)
+        if "CHECKPOINT_READY" in result.stdout:
+            return True
+        if "CHECKPOINT_MISSING" in result.stdout:
+            return False
+        raise Grid5000ExecutionError("remote checkpoint probe marker is missing")
 
     def mark_status(self, run_id: str, status: str) -> None:
         """Atomically mark a managed run terminal without recording secrets."""

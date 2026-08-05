@@ -29,10 +29,12 @@ The foundation keeps the first interfaces narrow and local:
   records and wires a Hugging Face sequence-classification Trainer. Its
   default `jhu-clsp/mmBERT-small` encoder is multilingual and frozen; only the
   binary classification head is trained, following the FineWeb-Edu pattern.
-  Model caches, checkpoints, outputs, and Trackio state are directed beneath
-  the managed root. Explicit flags may publish validated final top-level model
-  files and synchronize completed metrics; checkpoint directories are not
-  published. The module does not submit Grid5000 work.
+  Model caches, two retained checkpoints, outputs, and Trackio state are
+  directed beneath the managed root. Checkpoints carry the immutable run
+  identity so a later Grid5000 worker can resume safely. Explicit flags may
+  publish validated final top-level model files and synchronize completed
+  metrics; checkpoint directories are not published. The module does not
+  submit Grid5000 work.
 - `publication.py` validates a completed model directory and performs one
   add-only commit to the configured Hugging Face model repository. It rejects
   incomplete output before any Hub call.

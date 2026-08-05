@@ -70,11 +70,16 @@ refuses unsafe duplicate or ambiguous submissions. With the two publication
 flags, it creates the dedicated model/Trackio destinations idempotently,
 publishes only after final model validation, verifies the Hub results, and
 cleans only the marked per-run remote root. The worker receives HF auth over
-SSH stdin and never records the credential. Review
+SSH stdin and never records the credential. It retains two complete,
+identity-bound checkpoints; after an incomplete terminal job, the controller
+submits a bounded successor on the same site and the worker resumes from the
+newest valid checkpoint. It never restarts a continuation without checkpoint
+evidence. Review
 [`Grid'5000 operator`](../reference/grid5000-operator.md) before any explicit
 execution. The default is a 30-minute allocation with Europe/Paris
 `auto` policy; `--policy-type day` is capped at one hour. A distant queued
-fallback receives at most one short replacement trial at a time.
+fallback receives at most one short replacement trial at a time, and a run
+allows at most three checkpoint continuations by default.
 
 To run the local hooks against the repository, use:
 

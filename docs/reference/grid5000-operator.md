@@ -34,6 +34,8 @@ The autonomous command defaults to all configured frontends, a 30-minute
 allocation, Europe/Paris automatic policy selection, and removal of the
 successful run's marked remote data after Hub verification. Repeat `--site` to
 restrict discovery, or use `--keep-remote` to retain the successful run root.
+It retains two complete checkpoints and allows at most three successor jobs;
+override that bound deliberately with `--max-continuations`.
 
 ```bash
 uv run grid5000-landuse status --run-id RUN_ID
@@ -89,11 +91,15 @@ The selected frontend receives a bounded SSH sequence that:
 
 The worker requires Linux, its numeric OAR job identity, the exact source
 commit, a clean checkout, and exactly one visible CUDA GPU. It streams the
-pinned dataset through the clean training iterator, saves the final model and
-Trackio data beneath the marked run root, and writes a credential-free
-completion manifest. When requested, it publishes the final model to the
-dedicated Hugging Face model repository and synchronizes Trackio to its static
-Space and Bucket.
+pinned dataset through the clean training iterator, saves two retained
+identity-bound checkpoints, and writes the final model and Trackio data beneath
+the marked run root. A successor job is submitted only after the previous job
+has terminated, the controller has found complete checkpoint evidence, and the
+same site passes the storage/policy preflight again. The successor worker
+requires a valid checkpoint and passes the newest one to the Trainer; missing,
+partial, or identity-mismatched checkpoints stop the run. When requested, the
+worker publishes the final model to the dedicated Hugging Face model repository
+and synchronizes Trackio to its static Space and Bucket.
 
 After a successful terminal job, the controller validates the manifest
 identity, verifies the recorded model commit and Trackio Space through the Hub,

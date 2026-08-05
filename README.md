@@ -13,7 +13,9 @@ populate the approved Hugging Face cache; the explicit artifact writer creates
 only the JSON report and polygon split manifest beneath the approved external
 data root. The training module consumes the clean iterator, uses a Hugging
 Face Trainer with local Trackio reporting, and saves model artifacts beneath
-the same root. An authorized Grid'5000 run may explicitly publish the
+the same root. It retains two complete, identity-bound checkpoints so an
+incomplete allocation can continue safely. An authorized Grid'5000 run may
+explicitly publish the
 completed model to the dedicated model repository and synchronize finished
 metrics to the static
 [Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-trackio)
@@ -90,10 +92,14 @@ The equivalent Just recipes are documented in
 The autonomous command probes all configured Grid'5000 sites concurrently,
 selects a factually compatible GPU, derives the correct OAR queue/resource
 type from `oarnodes`, stages the exact checkout, submits one short job, and
-monitors it. If OAR forecasts the fallback too late, it tries one replacement
-at a time and adopts only a replacement that is visibly running. Queue depth
-is recorded for diagnostics, never used as an ETA, and speculative multi-site
-submissions are not made.
+monitors it. The worker retains two complete, identity-bound checkpoints. If a
+job ends before producing a verified model, the controller continues only from
+the newest complete checkpoint, on the same site, with a bounded successor
+job; it never restarts from scratch. The default limit is three continuation
+jobs and can be changed with `--max-continuations`. If OAR forecasts the
+fallback too late, it tries one replacement at a time and adopts only a
+replacement that is visibly running. Queue depth is recorded for diagnostics,
+never used as an ETA, and speculative multi-site submissions are not made.
 
 Run the complete lifecycle with a pinned source/model pair:
 

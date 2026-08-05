@@ -138,3 +138,21 @@ def test_autonomous_run_without_execute_prints_a_side_effect_free_plan(capsys) -
     assert payload["walltime_seconds"] == 1_800
     assert payload["publish"] is True
     assert payload["sync_trackio"] is True
+
+
+def test_autonomous_plan_persists_a_bounded_continuation_limit(capsys) -> None:
+    exit_code = grid5000_cli.main(
+        [
+            "run",
+            "--source-commit",
+            SOURCE_COMMIT,
+            "--model-revision",
+            MODEL_REVISION,
+            "--max-continuations",
+            "2",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["max_continuations"] == 2

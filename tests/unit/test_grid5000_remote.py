@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from pathlib import Path
 
 from osm_polygon_sentence_classifier.grid5000 import CommandResult
 from osm_polygon_sentence_classifier.grid5000_remote import (
@@ -6,6 +7,14 @@ from osm_polygon_sentence_classifier.grid5000_remote import (
     REMOTE_DATA_SUBDIRECTORY,
     Grid5000Remote,
 )
+
+IDENTITY: dict[str, object] = {
+    "run_id": "a" * 20,
+    "source_commit": "b" * 40,
+    "dataset_revision": "c" * 40,
+    "model_name_or_path": "test-model",
+    "model_revision": "d" * 40,
+}
 
 
 class _RecordingRemoteRunner:
@@ -29,6 +38,8 @@ class _RecordingRemoteRunner:
             return CommandResult(returncode=0, stdout="HF_AUTH_INSTALLED\n")
         if "REMOTE_CLEANED" in remote_command:
             return CommandResult(returncode=0, stdout="REMOTE_CLEANED\n")
+        if "checkpoint-manifest.json" in remote_command:
+            return CommandResult(returncode=0, stdout="CHECKPOINT_READY\n")
         return CommandResult(returncode=0, stdout='{"run_id":"a"}\n')
 
 
@@ -79,3 +90,21 @@ def test_cleanup_targets_only_the_managed_run_marker() -> None:
     assert '"status":"(complete|failed)"' in command
     assert "REMOTE_CLEANED" in command
     assert '[ ! -L "$marker" ]' in command
+
+
+def test_checkpoint_probe_is_read_only_and_marker_bound() -> None:
+    runner = _RecordingRemoteRunner()
+    remote = Grid5000Remote("lille", runner=runner)
+
+    ready = remote.has_complete_checkpoint(
+        "a" * 20,
+        output_subdirectory=Path("models/landuse"),
+        identity=IDENTITY,
+    )
+
+    assert ready is True
+    command = runner.calls[0][0][-1]
+    assert "checkpoint-manifest.json" in command
+    assert '"identity"' in command
+    assert "rm -rf" not in command
+    assert "a" * 20 in command

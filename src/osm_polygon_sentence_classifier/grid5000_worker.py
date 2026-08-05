@@ -12,6 +12,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, cast
 
+from .checkpointing import CheckpointError, find_latest_complete_checkpoint
 from .config import ConfigurationError, ProjectConfig
 from .dataset_contract import LANDUSE_DATASET_CONTRACT
 from .grid5000 import (
@@ -169,6 +170,7 @@ def run_landuse_training_worker(
     git_runner: CommandRunner | None = None,
     cuda_probe: CudaProbe | None = None,
     train: Callable[..., TrainingResult] = train_landuse_classifier,
+    require_checkpoint: bool = False,
 ) -> TrainingResult:
     """Preflight one compute node, then call the existing training boundary."""
 
@@ -209,7 +211,22 @@ def run_landuse_training_worker(
         project_config = ProjectConfig.for_remote_root(data_root)
     except (ConfigurationError, Grid5000ConfigurationError) as error:
         raise WorkerError("remote worker data root is unsafe") from error
-    return train(config=effective_config, project_config=project_config)
+    output_directory = project_config.data_root / effective_config.output_subdirectory
+    try:
+        checkpoint = find_latest_complete_checkpoint(
+            output_directory,
+            identity=identity.canonical_payload,
+        )
+    except CheckpointError as error:
+        raise WorkerError("checkpoint evidence is invalid") from error
+    if require_checkpoint and checkpoint is None:
+        raise WorkerError("no complete checkpoint is available for continuation")
+    return train(
+        config=effective_config,
+        project_config=project_config,
+        resume_from_checkpoint=checkpoint.path if checkpoint is not None else None,
+        checkpoint_identity=identity.canonical_payload,
+    )
 
 
 def write_completion_manifest(
@@ -327,6 +344,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         default=Path.home() / REMOTE_DATA_SUBDIRECTORY,
     )
+    parser.add_argument(
+        "--require-checkpoint",
+        action="store_true",
+        help="fail instead of restarting if no complete checkpoint is found",
+    )
     args = parser.parse_args(argv)
     try:
         identity = _identity_from_arguments(
@@ -340,6 +362,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             identity,
             checkout=args.checkout,
             remote_data_root=args.remote_data_root,
+            require_checkpoint=args.require_checkpoint,
         )
         write_completion_manifest(
             identity,

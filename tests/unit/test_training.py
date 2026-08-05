@@ -1,10 +1,15 @@
 import os
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
+from osm_polygon_sentence_classifier.checkpointing import (
+    find_latest_complete_checkpoint,
+    write_checkpoint_manifest,
+)
 from osm_polygon_sentence_classifier.config import ProjectConfig
 from osm_polygon_sentence_classifier.dataset_contract import (
     LANDUSE_DATASET_CONTRACT,
@@ -61,7 +66,7 @@ def test_training_config_is_frozen_and_uses_a_managed_relative_output() -> None:
     assert not config.output_subdirectory.is_absolute()
     assert config.max_steps > 0
     assert config.max_length > 0
-    assert config.save_total_limit == 1
+    assert config.save_total_limit == 2
 
     with pytest.raises(AttributeError):
         config.max_steps = 1  # type: ignore[misc]  # ty: ignore[invalid-assignment]
@@ -239,13 +244,15 @@ class _FakeDataCollator:
 class _FakeTrainer:
     init_calls: list[dict[str, object]] = []
     save_model_calls: list[str] = []
+    train_calls: list[str | None] = []
     environment_during_train: dict[str, str | None] = {}
     train_output = object()
 
     def __init__(self, **kwargs: object) -> None:
         self.init_calls.append(kwargs)
 
-    def train(self) -> object:
+    def train(self, resume_from_checkpoint: str | None = None) -> object:
+        self.train_calls.append(resume_from_checkpoint)
         _FakeTrainer.environment_during_train = {
             "HF_HOME": os.environ.get("HF_HOME"),
             "TRACKIO_DIR": os.environ.get("TRACKIO_DIR"),
@@ -270,6 +277,7 @@ def test_training_wires_managed_streams_tokenizer_trainer_and_tracking(
     _FakeDataCollator.calls.clear()
     _FakeTrainer.init_calls.clear()
     _FakeTrainer.save_model_calls.clear()
+    _FakeTrainer.train_calls.clear()
     _FakeTrainer.environment_during_train.clear()
 
     dependencies = training._TrainingDependencies(
@@ -327,7 +335,7 @@ def test_training_wires_managed_streams_tokenizer_trainer_and_tracking(
     assert arguments["report_to"] == ["trackio"]
     assert arguments["project"] == "osm-polygon-sentence-classifier"
     assert arguments["run_name"] == "test-run"
-    assert arguments["save_total_limit"] == 1
+    assert arguments["save_total_limit"] == 2
     assert arguments["remove_unused_columns"] is False
     assert arguments["trackio_static_space_id"] is False
     assert _FakeTrainer.init_calls[0]["train_dataset"] is _FakeDataset.created[0]
@@ -342,6 +350,88 @@ def test_training_wires_managed_streams_tokenizer_trainer_and_tracking(
         "HF_HOME": str(ProjectConfig().data_root / "cache/huggingface"),
         "TRACKIO_DIR": str(ProjectConfig().data_root / "tracking"),
     }
+
+
+def test_training_resumes_from_a_checkpoint_and_registers_identity_callback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from osm_polygon_sentence_classifier import training
+
+    dependencies = training._TrainingDependencies(
+        iterable_dataset=_FakeDataset,
+        auto_tokenizer=_FakeTokenizer,
+        auto_model_for_sequence_classification=_FakeModel,
+        data_collator_with_padding=_FakeDataCollator,
+        training_arguments=_FakeTrainingArguments,
+        trainer=_FakeTrainer,
+    )
+    monkeypatch.setattr(training, "_load_training_dependencies", lambda: dependencies)
+    _FakeTrainer.init_calls.clear()
+    _FakeTrainer.train_calls.clear()
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
+    project_config = ProjectConfig.for_remote_root(tmp_path / "data")
+    output = project_config.data_root / "models/landuse"
+    checkpoint = output / "checkpoint-42"
+    checkpoint.mkdir(parents=True)
+    for filename in (
+        "model.safetensors",
+        "optimizer.pt",
+        "scheduler.pt",
+        "rng_state.pth",
+    ):
+        (checkpoint / filename).write_bytes(b"checkpoint")
+    (checkpoint / "trainer_state.json").write_text(
+        '{"global_step": 42}', encoding="utf-8"
+    )
+    identity = {"run_id": "a" * 20, "model_revision": "b" * 40}
+    write_checkpoint_manifest(
+        checkpoint,
+        identity=identity,
+        global_step=42,
+    )
+
+    train_landuse_classifier(
+        rows_factory=lambda: iter([_row()]),
+        config=TrainingConfig(model_name_or_path="test-model"),
+        project_config=project_config,
+        resume_from_checkpoint=checkpoint,
+        checkpoint_identity=identity,
+    )
+
+    assert _FakeTrainer.train_calls == [str(checkpoint)]
+    callbacks = _FakeTrainer.init_calls[0]["callbacks"]
+    assert isinstance(callbacks, list)
+    assert len(callbacks) == 1
+
+
+def test_checkpoint_callback_writes_identity_after_a_save(tmp_path: Path) -> None:
+    from osm_polygon_sentence_classifier import training
+
+    checkpoint = tmp_path / "checkpoint-7"
+    checkpoint.mkdir()
+    for filename in (
+        "model.safetensors",
+        "optimizer.pt",
+        "scheduler.pt",
+        "rng_state.pth",
+    ):
+        (checkpoint / filename).write_bytes(b"checkpoint")
+    (checkpoint / "trainer_state.json").write_text(
+        '{"global_step": 7}', encoding="utf-8"
+    )
+    identity = {"run_id": "a" * 20, "model_revision": "b" * 40}
+
+    training._CheckpointManifestCallback(identity).on_save(
+        args=SimpleNamespace(output_dir=str(tmp_path)),
+        state=SimpleNamespace(global_step=7),
+        control=object(),
+    )
+
+    result = find_latest_complete_checkpoint(tmp_path, identity=identity)
+    assert result is not None
+    assert result.global_step == 7
 
 
 def test_training_reports_missing_optional_dependencies(

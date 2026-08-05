@@ -24,9 +24,9 @@ MAX_WALLTIME_SECONDS = 12 * 60 * 60
 MAX_DAY_WALLTIME_SECONDS = 60 * 60
 DEFAULT_DAY_WALLTIME_SECONDS = 30 * 60
 # The locked environment and uv cache use allocation-local scratch. Keep a
-# four-GiB persistent margin for the model, one retained checkpoint, metadata,
-# and publication artifacts.
-MINIMUM_HOME_HEADROOM_BYTES = 4 * 1024**3
+# Eight GiB leaves room for two resumable checkpoints, the final model,
+# metadata, and publication artifacts beneath the persistent home quota.
+MINIMUM_HOME_HEADROOM_BYTES = 8 * 1024**3
 COMMAND_TIMEOUT_SECONDS = 120.0
 REMOTE_CHECKOUT_SUBDIRECTORY = "osm-polygon-sentence-classifier"
 REMOTE_DATA_SUBDIRECTORY = "osm-polygon-sentence-classifier-data"
@@ -366,6 +366,7 @@ class Grid5000Plan:
 
     identity: Grid5000RunIdentity
     allocation: Grid5000Allocation
+    resume_from_checkpoint: bool = False
 
     @property
     def worker_command(self) -> str:
@@ -399,6 +400,8 @@ class Grid5000Plan:
                 f'{self.identity.run_id}"'
             ),
         )
+        if self.resume_from_checkpoint:
+            worker_args += ("--require-checkpoint",)
         return (
             f'cd "$HOME/{REMOTE_CHECKOUT_SUBDIRECTORY}" && '
             "umask 077 && "
@@ -482,6 +485,7 @@ class Grid5000Plan:
                 "walltime_seconds": self.allocation.walltime_seconds,
             },
             "identity": self.identity.canonical_payload,
+            "resume_from_checkpoint": self.resume_from_checkpoint,
             "remote_checkout_command": shlex.join(self.remote_checkout_command),
             "run_id": self.identity.run_id,
             "scheduler_command": list(self.scheduler_command),

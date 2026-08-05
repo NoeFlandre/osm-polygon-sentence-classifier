@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import pytest
 
+from osm_polygon_sentence_classifier.checkpointing import write_checkpoint_manifest
 from osm_polygon_sentence_classifier.config import ProjectConfig
 from osm_polygon_sentence_classifier.grid5000 import (
     GRID5000_DATASET_REVISION,
@@ -181,6 +182,16 @@ def test_worker_command_uses_allocation_local_locked_uv_environment() -> None:
     assert 'exec "$uv_bin" run --locked --no-dev --extra training python -m ' in command
     assert '"$HOME/osm-polygon-sentence-classifier"' in command
     assert '"$HOME/osm-polygon-sentence-classifier-data/grid5000/runs/' in command
+
+
+def test_resume_plan_requires_a_valid_checkpoint_on_the_worker() -> None:
+    plan = Grid5000Plan(
+        identity=_identity(),
+        allocation=Grid5000Allocation(site="nancy", walltime_seconds=1_800),
+        resume_from_checkpoint=True,
+    )
+
+    assert "--require-checkpoint" in plan.worker_command
 
 
 def test_plan_contains_a_read_only_clean_checkout_guard() -> None:
@@ -457,10 +468,16 @@ def test_worker_runs_training_only_after_preflight(tmp_path: Path) -> None:
     )
 
     def fake_train(
-        *, config: TrainingConfig, project_config: ProjectConfig
+        *,
+        config: TrainingConfig,
+        project_config: ProjectConfig,
+        resume_from_checkpoint: Path | None,
+        checkpoint_identity: Mapping[str, object],
     ) -> TrainingResult:
         received["config"] = config
         received["project_config"] = project_config
+        received["resume_from_checkpoint"] = resume_from_checkpoint
+        received["checkpoint_identity"] = checkpoint_identity
         return expected_result
 
     result = run_landuse_training_worker(
@@ -480,6 +497,106 @@ def test_worker_runs_training_only_after_preflight(tmp_path: Path) -> None:
     assert received["project_config"] == ProjectConfig.for_remote_root(
         Path.home() / "training-data"
     )
+    assert received["resume_from_checkpoint"] is None
+    assert received["checkpoint_identity"] == identity.canonical_payload
+
+
+def test_worker_requires_a_complete_checkpoint_for_continuation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
+    training_config = TrainingConfig(
+        model_name_or_path="test-model",
+        model_revision=MODEL_REVISION,
+    )
+    identity = _identity(
+        training_config={
+            "model_name_or_path": "test-model",
+            "model_revision": MODEL_REVISION,
+        }
+    )
+    train_called = False
+
+    def fake_train(**kwargs: object) -> TrainingResult:
+        del kwargs
+        nonlocal train_called
+        train_called = True
+        return TrainingResult(output_directory=tmp_path, train_output=object())
+
+    with pytest.raises(WorkerError, match="complete checkpoint"):
+        run_landuse_training_worker(
+            identity,
+            checkout=tmp_path / "checkout",
+            training_config=training_config,
+            remote_data_root=tmp_path / "training-data",
+            environ={"OAR_JOB_ID": "12345"},
+            platform_name="linux",
+            git_runner=_git_runner(SOURCE_COMMIT),
+            cuda_probe=lambda: (True, 1, "Test GPU"),
+            train=fake_train,
+            require_checkpoint=True,
+        )
+
+    assert not train_called
+
+
+def test_worker_passes_the_latest_checkpoint_to_training(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
+    training_config = TrainingConfig(
+        model_name_or_path="test-model",
+        model_revision=MODEL_REVISION,
+    )
+    identity = _identity(
+        training_config={
+            "model_name_or_path": "test-model",
+            "model_revision": MODEL_REVISION,
+        }
+    )
+    remote_root = tmp_path / "training-data"
+    checkpoint = remote_root / "models/landuse/checkpoint-12"
+    checkpoint.mkdir(parents=True)
+    for filename in (
+        "model.safetensors",
+        "optimizer.pt",
+        "scheduler.pt",
+        "rng_state.pth",
+    ):
+        (checkpoint / filename).write_bytes(b"checkpoint")
+    (checkpoint / "trainer_state.json").write_text(
+        '{"global_step": 12}', encoding="utf-8"
+    )
+    write_checkpoint_manifest(
+        checkpoint,
+        identity=identity.canonical_payload,
+        global_step=12,
+    )
+    received: dict[str, object] = {}
+
+    def fake_train(**kwargs: object) -> TrainingResult:
+        received.update(kwargs)
+        return TrainingResult(
+            output_directory=tmp_path / "model", train_output=object()
+        )
+
+    run_landuse_training_worker(
+        identity,
+        checkout=tmp_path / "checkout",
+        training_config=training_config,
+        remote_data_root=remote_root,
+        environ={"OAR_JOB_ID": "12345"},
+        platform_name="linux",
+        git_runner=_git_runner(SOURCE_COMMIT),
+        cuda_probe=lambda: (True, 1, "Test GPU"),
+        train=fake_train,
+        require_checkpoint=True,
+    )
+
+    assert received["resume_from_checkpoint"] == checkpoint
+    assert received["checkpoint_identity"] == identity.canonical_payload
 
 
 def test_worker_requires_hugging_face_auth_before_publishing_or_tracking(
