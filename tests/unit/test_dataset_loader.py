@@ -1,3 +1,4 @@
+from collections.abc import Iterable, Mapping
 from dataclasses import FrozenInstanceError, is_dataclass
 from pathlib import Path
 from typing import cast, get_args
@@ -127,6 +128,15 @@ def test_iterator_rejects_a_first_row_schema_mismatch(mutation: str) -> None:
 
     with pytest.raises(DatasetContractError):
         list(iter_training_examples([row]))
+
+
+def test_iterator_rejects_an_extra_column_on_a_subsequent_row() -> None:
+    valid = _row(sentence_id="valid")
+    extra_column = _row(sentence_id="extra")
+    extra_column["unexpected"] = None
+
+    with pytest.raises(DatasetContractError, match="unexpected columns"):
+        list(iter_training_examples([valid, extra_column]))
 
 
 @pytest.mark.parametrize(
@@ -395,9 +405,9 @@ def test_load_streaming_rows_passes_pinned_streaming_arguments_without_materiali
     None
 ):
     calls: list[dict[str, object]] = []
-    streaming_rows = object()
+    streaming_rows: Iterable[Mapping[str, object]] = iter(())
 
-    def fake_load_dataset(**kwargs: object) -> object:
+    def fake_load_dataset(**kwargs: object) -> Iterable[Mapping[str, object]]:
         calls.append(kwargs)
         return streaming_rows
 
@@ -421,7 +431,7 @@ def test_load_streaming_rows_passes_pinned_streaming_arguments_without_materiali
 def test_load_streaming_rows_preserves_errors_from_the_injected_loader() -> None:
     expected = RuntimeError("remote failure")
 
-    def failing_load_dataset(**kwargs: object) -> object:
+    def failing_load_dataset(**kwargs: object) -> Iterable[Mapping[str, object]]:
         raise expected
 
     with pytest.raises(RuntimeError, match="remote failure") as caught:

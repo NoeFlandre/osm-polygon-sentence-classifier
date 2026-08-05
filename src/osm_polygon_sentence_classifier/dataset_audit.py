@@ -9,7 +9,6 @@ from collections import Counter
 from collections.abc import Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
-from itertools import chain
 from pathlib import Path
 from typing import cast
 
@@ -182,6 +181,194 @@ def _wrap_contract_error(
     return DatasetAuditError(f"row {row_number}: {error}")
 
 
+class _AuditAccumulator:
+    """Collect validated row metrics for one audit without storing input rows."""
+
+    def __init__(
+        self,
+        *,
+        validation_fraction: float,
+        seed: int,
+        contract: DatasetContract,
+    ) -> None:
+        self.validation_fraction = validation_fraction
+        self.seed = seed
+        self.contract = contract
+        self.training_label_set = frozenset(contract.training_label_values)
+        self.label_counts: Counter[str] = Counter(
+            dict.fromkeys(contract.supported_label_values, 0)
+        )
+        self.split_row_counts: Counter[str] = Counter(
+            dict.fromkeys(("train", "validation"), 0)
+        )
+        self.split_polygon_counts: Counter[str] = Counter(
+            dict.fromkeys(("train", "validation"), 0)
+        )
+        self.trainable_label_counts: dict[str, Counter[str]] = {
+            split: Counter(dict.fromkeys(contract.training_label_values, 0))
+            for split in ("train", "validation")
+        }
+        self.language_counts: Counter[str] = Counter()
+        self.source_counts: Counter[str] = Counter()
+        self.polygon_splits: dict[str, DatasetSplit] = {}
+        self.trainable_polygons: set[str] = set()
+        self.polygon_labels: dict[str, set[str]] = {}
+        self.hash_counts: Counter[str] = Counter()
+        self.hash_polygons: dict[str, set[str]] = {}
+        self.hash_labels: dict[str, set[str]] = {}
+        self.hash_splits: dict[str, set[DatasetSplit]] = {}
+        self.text_length_count = 0
+        self.text_length_total = 0
+        self.text_length_min: int | None = None
+        self.text_length_max: int | None = None
+        self.total_rows = 0
+        self.trainable_rows = 0
+
+    def consume(self, row_number: int, row: Mapping[str, object]) -> None:
+        try:
+            self.contract.validate_columns(row.keys())
+            self.contract.validate_row(row)
+        except DatasetContractError as error:
+            raise _wrap_contract_error(row_number, error) from error
+
+        try:
+            _require_identifier("sentence_id", row["sentence_id"])
+            polygon_id = _require_identifier("polygon_id", row["polygon_id"])
+        except ValueError as error:
+            raise DatasetAuditError(f"row {row_number}: {error}") from error
+
+        if polygon_id not in self.polygon_splits:
+            try:
+                self.polygon_splits[polygon_id] = split_for_polygon(
+                    polygon_id,
+                    validation_fraction=self.validation_fraction,
+                    seed=self.seed,
+                )
+            except ValueError as error:
+                raise DatasetAuditError(f"row {row_number}: {error}") from error
+
+        row_split = self.polygon_splits[polygon_id]
+        label = _counter_key(row[self.contract.label_column])
+        self.label_counts[label] += 1
+        self.split_row_counts[row_split] += 1
+        self.total_rows += 1
+
+        if label not in self.training_label_set:
+            return
+
+        self.trainable_rows += 1
+        self.trainable_polygons.add(polygon_id)
+        self.trainable_label_counts[row_split][label] += 1
+        self.language_counts[_counter_key(row["language"])] += 1
+        self.source_counts[_counter_key(row["source"])] += 1
+        text = cast(str, row["sentence_text_normalized"])
+        text_length = len(text)
+        self.text_length_count += 1
+        self.text_length_total += text_length
+        self.text_length_min = (
+            text_length
+            if self.text_length_min is None
+            else min(self.text_length_min, text_length)
+        )
+        self.text_length_max = (
+            text_length
+            if self.text_length_max is None
+            else max(self.text_length_max, text_length)
+        )
+        self.polygon_labels.setdefault(polygon_id, set()).add(label)
+
+        sentence_content_hash = row.get("sentence_content_hash")
+        if isinstance(sentence_content_hash, str) and sentence_content_hash:
+            self.hash_counts[sentence_content_hash] += 1
+            self.hash_polygons.setdefault(sentence_content_hash, set()).add(polygon_id)
+            self.hash_labels.setdefault(sentence_content_hash, set()).add(label)
+            self.hash_splits.setdefault(sentence_content_hash, set()).add(row_split)
+
+    def result(self) -> AuditResult:
+        """Build the immutable report and split manifest after the stream ends."""
+
+        for row_split in self.polygon_splits.values():
+            self.split_polygon_counts[row_split] += 1
+
+        duplicate_hash_groups = sum(count > 1 for count in self.hash_counts.values())
+        duplicate_rows_beyond_first = sum(
+            count - 1 for count in self.hash_counts.values() if count > 1
+        )
+        cross_polygon_duplicate_groups = sum(
+            count > 1 and len(self.hash_polygons[content_hash]) > 1
+            for content_hash, count in self.hash_counts.items()
+        )
+        mixed_label_polygons = sum(
+            labels.issuperset(self.training_label_set)
+            for labels in self.polygon_labels.values()
+        )
+        cross_split_duplicate_groups = sum(
+            splits.issuperset({"train", "validation"})
+            for splits in self.hash_splits.values()
+        )
+        conflicting_content_hash_groups = sum(
+            labels.issuperset(self.training_label_set)
+            for labels in self.hash_labels.values()
+        )
+
+        review_reasons: set[str] = set()
+        if conflicting_content_hash_groups:
+            review_reasons.add("content_hash_label_conflicts")
+        if cross_split_duplicate_groups:
+            review_reasons.add("cross_split_duplicate_groups")
+        for row_split in ("train", "validation"):
+            if any(
+                self.trainable_label_counts[row_split][label] == 0
+                for label in self.contract.training_label_values
+            ):
+                review_reasons.add(f"{row_split}_split_missing_label")
+
+        reasons = tuple(sorted(review_reasons))
+        report = AuditReport(
+            dataset_id=self.contract.dataset_id,
+            config=self.contract.config,
+            split=self.contract.split,
+            region=self.contract.region,
+            repository_revision=self.contract.provenance.repository_revision,
+            parquet_sha256=self.contract.provenance.parquet_sha256,
+            validation_fraction=self.validation_fraction,
+            seed=self.seed,
+            total_rows=self.total_rows,
+            trainable_rows=self.trainable_rows,
+            total_polygons=len(self.polygon_splits),
+            trainable_polygons=len(self.trainable_polygons),
+            label_counts=_sorted_counter(self.label_counts),
+            split_row_counts=_sorted_counter(self.split_row_counts),
+            split_polygon_counts=_sorted_counter(self.split_polygon_counts),
+            trainable_label_counts=tuple(
+                (
+                    row_split,
+                    _sorted_counter(self.trainable_label_counts[row_split]),
+                )
+                for row_split in sorted(self.trainable_label_counts)
+            ),
+            language_counts=_sorted_counter(self.language_counts),
+            source_counts=_sorted_counter(self.source_counts),
+            text_length_min=self.text_length_min,
+            text_length_max=self.text_length_max,
+            text_length_mean=(self.text_length_total / self.text_length_count)
+            if self.text_length_count
+            else None,
+            duplicate_hash_groups=duplicate_hash_groups,
+            duplicate_rows_beyond_first=duplicate_rows_beyond_first,
+            cross_polygon_duplicate_groups=cross_polygon_duplicate_groups,
+            mixed_label_polygons=mixed_label_polygons,
+            cross_split_duplicate_groups=cross_split_duplicate_groups,
+            conflicting_content_hash_groups=conflicting_content_hash_groups,
+            review_required_reasons=reasons,
+            ready=not reasons,
+        )
+        return AuditResult(
+            report=report,
+            split_manifest=tuple(sorted(self.polygon_splits.items())),
+        )
+
+
 def audit_rows(
     rows: Iterable[Mapping[str, object]],
     *,
@@ -192,178 +379,14 @@ def audit_rows(
     """Validate and summarize rows in one lazy pass without materializing them."""
 
     normalized_fraction = _validate_validation_fraction(validation_fraction)
-    iterator = iter(rows)
-    try:
-        first_row = next(iterator)
-    except StopIteration:
-        first_row = None
-
-    label_counts = Counter(dict.fromkeys(contract.supported_label_values, 0))
-    training_label_values = contract.training_label_values
-    training_label_set = frozenset(training_label_values)
-    split_row_counts: Counter[str] = Counter(dict.fromkeys(("train", "validation"), 0))
-    split_polygon_counts: Counter[str] = Counter(
-        dict.fromkeys(("train", "validation"), 0)
-    )
-    trainable_label_counts: dict[str, Counter[str]] = {
-        split: Counter(dict.fromkeys(training_label_values, 0))
-        for split in ("train", "validation")
-    }
-    language_counts: Counter[str] = Counter()
-    source_counts: Counter[str] = Counter()
-    polygon_splits: dict[str, DatasetSplit] = {}
-    trainable_polygons: set[str] = set()
-    polygon_labels: dict[str, set[str]] = {}
-    hash_counts: Counter[str] = Counter()
-    hash_polygons: dict[str, set[str]] = {}
-    hash_labels: dict[str, set[str]] = {}
-    hash_splits: dict[str, set[DatasetSplit]] = {}
-    text_length_count = 0
-    text_length_total = 0
-    text_length_min: int | None = None
-    text_length_max: int | None = None
-    total_rows = 0
-    trainable_rows = 0
-
-    stream: Iterable[Mapping[str, object]]
-    stream = () if first_row is None else chain((first_row,), iterator)
-
-    for row_number, row in enumerate(stream, start=1):
-        try:
-            contract.validate_columns(row.keys())
-            contract.validate_row(row)
-        except DatasetContractError as error:
-            raise _wrap_contract_error(row_number, error) from error
-
-        try:
-            _require_identifier("sentence_id", row["sentence_id"])
-            polygon_id = _require_identifier("polygon_id", row["polygon_id"])
-        except ValueError as error:
-            raise DatasetAuditError(f"row {row_number}: {error}") from error
-
-        if polygon_id not in polygon_splits:
-            try:
-                polygon_splits[polygon_id] = split_for_polygon(
-                    polygon_id,
-                    validation_fraction=normalized_fraction,
-                    seed=seed,
-                )
-            except ValueError as error:
-                raise DatasetAuditError(f"row {row_number}: {error}") from error
-
-        row_split = polygon_splits[polygon_id]
-        label = _counter_key(row[contract.label_column])
-        label_counts[label] += 1
-        split_row_counts[row_split] += 1
-        total_rows += 1
-
-        if label not in training_label_set:
-            continue
-
-        trainable_rows += 1
-        trainable_polygons.add(polygon_id)
-        trainable_label_counts[row_split][label] += 1
-        language_counts[_counter_key(row["language"])] += 1
-        source_counts[_counter_key(row["source"])] += 1
-        text = cast(str, row["sentence_text_normalized"])
-        text_length = len(text)
-        text_length_count += 1
-        text_length_total += text_length
-        text_length_min = (
-            text_length
-            if text_length_min is None
-            else min(text_length_min, text_length)
-        )
-        text_length_max = (
-            text_length
-            if text_length_max is None
-            else max(text_length_max, text_length)
-        )
-        polygon_labels.setdefault(polygon_id, set()).add(label)
-
-        sentence_content_hash = row.get("sentence_content_hash")
-        if isinstance(sentence_content_hash, str) and sentence_content_hash:
-            hash_counts[sentence_content_hash] += 1
-            hash_polygons.setdefault(sentence_content_hash, set()).add(polygon_id)
-            hash_labels.setdefault(sentence_content_hash, set()).add(label)
-            hash_splits.setdefault(sentence_content_hash, set()).add(row_split)
-
-    for row_split in polygon_splits.values():
-        split_polygon_counts[row_split] += 1
-
-    duplicate_hash_groups = sum(count > 1 for count in hash_counts.values())
-    duplicate_rows_beyond_first = sum(
-        count - 1 for count in hash_counts.values() if count > 1
-    )
-    cross_polygon_duplicate_groups = sum(
-        count > 1 and len(hash_polygons[content_hash]) > 1
-        for content_hash, count in hash_counts.items()
-    )
-    mixed_label_polygons = sum(
-        labels.issuperset(training_label_set) for labels in polygon_labels.values()
-    )
-    cross_split_duplicate_groups = sum(
-        splits.issuperset({"train", "validation"}) for splits in hash_splits.values()
-    )
-    conflicting_content_hash_groups = sum(
-        labels.issuperset(training_label_set) for labels in hash_labels.values()
-    )
-
-    review_reasons: set[str] = set()
-    if conflicting_content_hash_groups:
-        review_reasons.add("content_hash_label_conflicts")
-    if cross_split_duplicate_groups:
-        review_reasons.add("cross_split_duplicate_groups")
-    for row_split in ("train", "validation"):
-        if any(
-            trainable_label_counts[row_split][label] == 0
-            for label in training_label_values
-        ):
-            review_reasons.add(f"{row_split}_split_missing_label")
-
-    reasons = tuple(sorted(review_reasons))
-    report = AuditReport(
-        dataset_id=contract.dataset_id,
-        config=contract.config,
-        split=contract.split,
-        region=contract.region,
-        repository_revision=contract.provenance.repository_revision,
-        parquet_sha256=contract.provenance.parquet_sha256,
+    accumulator = _AuditAccumulator(
         validation_fraction=normalized_fraction,
         seed=seed,
-        total_rows=total_rows,
-        trainable_rows=trainable_rows,
-        total_polygons=len(polygon_splits),
-        trainable_polygons=len(trainable_polygons),
-        label_counts=_sorted_counter(label_counts),
-        split_row_counts=_sorted_counter(split_row_counts),
-        split_polygon_counts=_sorted_counter(split_polygon_counts),
-        trainable_label_counts=tuple(
-            (
-                row_split,
-                _sorted_counter(trainable_label_counts[row_split]),
-            )
-            for row_split in sorted(trainable_label_counts)
-        ),
-        language_counts=_sorted_counter(language_counts),
-        source_counts=_sorted_counter(source_counts),
-        text_length_min=text_length_min,
-        text_length_max=text_length_max,
-        text_length_mean=(text_length_total / text_length_count)
-        if text_length_count
-        else None,
-        duplicate_hash_groups=duplicate_hash_groups,
-        duplicate_rows_beyond_first=duplicate_rows_beyond_first,
-        cross_polygon_duplicate_groups=cross_polygon_duplicate_groups,
-        mixed_label_polygons=mixed_label_polygons,
-        cross_split_duplicate_groups=cross_split_duplicate_groups,
-        conflicting_content_hash_groups=conflicting_content_hash_groups,
-        review_required_reasons=reasons,
-        ready=not reasons,
+        contract=contract,
     )
-    return AuditResult(
-        report=report, split_manifest=tuple(sorted(polygon_splits.items()))
-    )
+    for row_number, row in enumerate(rows, start=1):
+        accumulator.consume(row_number, row)
+    return accumulator.result()
 
 
 def _directory_fd_supported() -> bool:

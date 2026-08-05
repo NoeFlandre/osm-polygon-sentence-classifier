@@ -27,7 +27,7 @@ Use this five-step workflow for behavior changes:
 ## Tool roles
 
 - **uv** provides the locked environment and reproducible command entry point.
-- **Ruff** formats Python and reports lint issues.
+- **Ruff** formats Python and reports lint and complexity issues.
 - **ty** checks the declared Python types.
 - **pytest** runs unit and contract tests.
 - **Just** gives the quality and documentation checks stable, short names.

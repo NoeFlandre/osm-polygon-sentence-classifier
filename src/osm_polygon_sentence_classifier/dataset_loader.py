@@ -4,7 +4,6 @@ import hashlib
 import math
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from itertools import chain
 from typing import Literal, cast
 
 from .config import ProjectConfig
@@ -134,18 +133,10 @@ def iter_training_examples(
     seed: int = 42,
     contract: DatasetContract = LANDUSE_DATASET_CONTRACT,
 ) -> Iterator[TrainingExample]:
-    """Lazily validate, filter, and transform streaming dataset rows."""
+    """Lazily validate every row, filter, and transform streaming dataset rows."""
 
     _validate_validation_fraction(validation_fraction)
-    iterator = iter(rows)
-    try:
-        first_row = next(iterator)
-    except StopIteration:
-        return
-
-    contract.validate_columns(first_row.keys())
-    for row in chain((first_row,), iterator):
-        contract.validate_row(row)
+    for row in _validated_rows(rows, contract=contract):
         label = row[contract.label_column]
         if label not in contract.training_label_values:
             continue
@@ -273,8 +264,8 @@ def load_streaming_rows(
     *,
     config: ProjectConfig = ProjectConfig(),  # noqa: B008
     contract: DatasetContract = LANDUSE_DATASET_CONTRACT,
-    load_dataset_fn: Callable[..., object] | None = None,
-) -> object:
+    load_dataset_fn: Callable[..., Iterable[Mapping[str, object]]] | None = None,
+) -> Iterable[Mapping[str, object]]:
     """Return the pinned dataset's lazy Hugging Face streaming object."""
 
     if load_dataset_fn is None:
@@ -286,7 +277,9 @@ def load_streaming_rows(
             raise DatasetLoaderError(
                 "the optional 'datasets' dependency is required"
             ) from error
-        load_dataset_fn = load_dataset
+        load_dataset_fn = cast(
+            Callable[..., Iterable[Mapping[str, object]]], load_dataset
+        )
 
     return load_dataset_fn(
         path=contract.dataset_id,

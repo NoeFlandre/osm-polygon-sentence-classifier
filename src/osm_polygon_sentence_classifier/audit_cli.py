@@ -1,7 +1,6 @@
 """Command-line entry point for the explicit landuse dataset audit."""
 
 from collections.abc import Iterable, Mapping
-from typing import cast
 
 from .dataset_audit import audit_rows, write_audit_artifacts
 from .dataset_loader import load_streaming_rows
@@ -12,7 +11,7 @@ __all__ = ["main"]
 def main() -> None:
     """Audit the pinned stream, write derived artifacts, and report readiness."""
 
-    rows = cast(Iterable[Mapping[str, object]], load_streaming_rows())
+    rows: Iterable[Mapping[str, object]] = load_streaming_rows()
     result = audit_rows(rows)
     report_path, manifest_path = write_audit_artifacts(result)
     print(f"audit_report: {report_path}")
