@@ -263,6 +263,14 @@ class _FakeTrainer:
         self.save_model_calls.append(output_directory)
 
 
+class _FakeTrainerCallback:
+    def on_train_begin(
+        self, args: object, state: object, control: object, **kwargs: object
+    ) -> object:
+        del args, state, kwargs
+        return control
+
+
 def test_training_wires_managed_streams_tokenizer_trainer_and_tracking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -432,6 +440,55 @@ def test_checkpoint_callback_writes_identity_after_a_save(tmp_path: Path) -> Non
     result = find_latest_complete_checkpoint(tmp_path, identity=identity)
     assert result is not None
     assert result.global_step == 7
+
+
+def test_checkpoint_callback_supports_trainer_initialization_event() -> None:
+    from osm_polygon_sentence_classifier import training
+
+    control = object()
+
+    result = training._CheckpointManifestCallback({}).on_init_end(
+        args=SimpleNamespace(),
+        state=SimpleNamespace(),
+        control=control,
+    )
+
+    assert result is control
+
+
+def test_checkpoint_callback_uses_the_trainer_callback_base() -> None:
+    from osm_polygon_sentence_classifier import training
+
+    dependencies = training._TrainingDependencies(
+        iterable_dataset=_FakeDataset,
+        auto_tokenizer=_FakeTokenizer,
+        auto_model_for_sequence_classification=_FakeModel,
+        data_collator_with_padding=_FakeDataCollator,
+        training_arguments=_FakeTrainingArguments,
+        trainer=_FakeTrainer,
+        trainer_callback=_FakeTrainerCallback,
+    )
+    _FakeTrainer.init_calls.clear()
+
+    training._build_trainer(
+        dependencies,
+        model=object(),
+        training_arguments=object(),
+        train_dataset=object(),
+        validation_dataset=object(),
+        data_collator=object(),
+        checkpoint_identity={},
+    )
+
+    callbacks = _FakeTrainer.init_calls[0]["callbacks"]
+    assert isinstance(callbacks, list)
+    callback = callbacks[0]
+    assert isinstance(callback, _FakeTrainerCallback)
+    control = object()
+    assert (
+        callback.on_train_begin(SimpleNamespace(), SimpleNamespace(), control)
+        is control
+    )
 
 
 def test_training_reports_missing_optional_dependencies(

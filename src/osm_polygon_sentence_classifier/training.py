@@ -153,6 +153,7 @@ class _TrainingDependencies:
     data_collator_with_padding: Any
     training_arguments: Any
     trainer: Any
+    trainer_callback: Any | None = None
 
 
 class _CheckpointManifestCallback:
@@ -160,6 +161,10 @@ class _CheckpointManifestCallback:
 
     def __init__(self, identity: Mapping[str, object]) -> None:
         self.identity = dict(identity)
+
+    def on_init_end(self, args: Any, state: Any, control: Any, **kwargs: object) -> Any:
+        del args, state, kwargs
+        return control
 
     def on_save(self, args: Any, state: Any, control: Any, **kwargs: object) -> Any:
         del kwargs
@@ -176,6 +181,19 @@ class _CheckpointManifestCallback:
         except CheckpointError as error:
             raise TrainingError("checkpoint manifest could not be written") from error
         return control
+
+
+def _make_checkpoint_manifest_callback(
+    identity: Mapping[str, object], trainer_callback: Any | None
+) -> Any:
+    if trainer_callback is None:
+        return _CheckpointManifestCallback(identity)
+    callback_type = type(
+        "_BoundCheckpointManifestCallback",
+        (_CheckpointManifestCallback, trainer_callback),
+        {},
+    )
+    return callback_type(identity)
 
 
 def _prepare_checkpoint_resume(
@@ -221,7 +239,12 @@ def _build_trainer(
         "data_collator": data_collator,
     }
     if checkpoint_identity is not None:
-        trainer_values["callbacks"] = [_CheckpointManifestCallback(checkpoint_identity)]
+        trainer_values["callbacks"] = [
+            _make_checkpoint_manifest_callback(
+                checkpoint_identity,
+                dependencies.trainer_callback,
+            )
+        ]
     return dependencies.trainer(**trainer_values)
 
 
@@ -250,6 +273,7 @@ def _load_training_dependencies() -> _TrainingDependencies:
         data_collator_with_padding=transformers_module.DataCollatorWithPadding,
         training_arguments=transformers_module.TrainingArguments,
         trainer=transformers_module.Trainer,
+        trainer_callback=transformers_module.TrainerCallback,
     )
 
 
