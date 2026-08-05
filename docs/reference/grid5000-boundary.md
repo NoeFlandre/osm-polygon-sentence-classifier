@@ -14,7 +14,8 @@ A later operator must:
 - leave remote work and checkpoints intact if local monitoring stops; and
 - publish only after the resulting artifacts have been validated.
 
-The current code makes no SSH, OAR, Grid5000, model, remote Trackio, or
-publication calls. The separate review-only audit is the only Hugging Face
-dataset call; it does not authenticate, allocate resources, submit jobs, or
-publish artifacts.
+The current code makes no SSH, OAR, Grid5000, or publication calls. The
+separate review-only audit is the only command that streams the source dataset.
+The explicit training function can load a configured model and train locally,
+but it does not authenticate, upload artifacts, allocate resources, submit
+jobs, or publish results.

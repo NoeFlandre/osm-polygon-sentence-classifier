@@ -5,11 +5,13 @@ starting with the landuse task. The classifier is intended to support a
 landuse-first progression while keeping data, compute, and publication gates
 explicit.
 
-The current milestone is a safe local foundation plus an explicit review-only
-landuse dataset audit. It establishes small package boundaries, managed data
-paths, Trackio settings, tests, quality tooling, and public documentation. The
-audit may stream the pinned dataset and write only its approved cache, report,
-and split manifest; it does not train or submit remote jobs. Audit readiness is
+The current milestone is a safe local foundation, an explicit review-only
+landuse dataset audit, and a typed training boundary. It establishes small
+package boundaries, managed data paths, Trackio settings, tests, quality
+tooling, and public documentation. The audit may stream the pinned dataset and
+write only its approved cache, report, and split manifest. The training entry
+point consumes the clean stream and writes local model outputs beneath the
+approved root, but does not upload or submit remote jobs. Audit readiness is
 sentence-level: mixed-label polygons are diagnostic, while contradictory or
 cross-split duplicate sentence hashes remain blockers.
 

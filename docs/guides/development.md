@@ -4,10 +4,11 @@ Keep modules small and single-purpose. A change should have one clear
 responsibility and should preserve the managed-data and remote-operation
 boundaries.
 
-The pinned dataset contract, lazy loader, and review-only audit are explicit
-surfaces. Model code, training metrics, and Grid5000 operators remain deferred
-until their contracts have been reviewed. Do not introduce those deferred
-surfaces as incidental helpers in audit changes.
+The pinned dataset contract, lazy loader, review-only audit, and typed training
+boundary are explicit surfaces. Grid5000 operators, remote publication, and
+model evaluation policy remain deferred until their contracts have been
+reviewed. Do not introduce those deferred surfaces as incidental helpers in
+training or audit changes.
 
 ## RED -> GREEN -> REFACTOR
 

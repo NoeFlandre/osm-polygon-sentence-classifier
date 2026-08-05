@@ -9,7 +9,7 @@ TRACKING_SUBDIRECTORY = Path("tracking")
 
 @dataclass(frozen=True, slots=True)
 class TrackioSettings:
-    """Non-secret Trackio settings for a future training process."""
+    """Non-secret Trackio settings for a training process."""
 
     project: str
     directory: Path

@@ -152,7 +152,11 @@ def test_pages_workflow_builds_strict_mkdocs_and_deploys_pages_artifact() -> Non
 def test_training_dependency_declares_trackio() -> None:
     content = _text("pyproject.toml")
     assert "training = [" in content
+    assert "accelerate" in content
+    assert "datasets" in content
     assert "trackio" in content
+    assert "torch" in content
+    assert "transformers" in content
 
 
 def test_typed_package_declares_and_contains_the_pep561_marker() -> None:

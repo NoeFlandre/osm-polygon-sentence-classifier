@@ -31,6 +31,19 @@ uv run ty check
 uv run mkdocs build --strict --site-dir site
 ```
 
+## Training boundary
+
+The package exposes `train_landuse_classifier` and `TrainingConfig` in
+`osm_polygon_sentence_classifier.training`. The entry point consumes only the
+clean, two-pass iterator, tokenizes lazily through a Hugging Face
+`IterableDataset`, reports locally through Trackio, and writes its model
+output beneath the approved external data root.
+
+There is intentionally no training CLI or Grid'5000 submission command yet.
+Invoke the entry point only from an explicitly authorized training workflow
+after reviewing the landuse audit. The function does not authenticate to or
+upload to Hugging Face and does not submit remote jobs.
+
 To run the local hooks against the repository, use:
 
 ```bash

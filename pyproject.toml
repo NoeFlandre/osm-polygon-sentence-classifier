@@ -36,8 +36,11 @@ audit-landuse-dataset = "osm_polygon_sentence_classifier.audit_cli:main"
 
 [project.optional-dependencies]
 training = [
+    "accelerate>=1,<2",
     "datasets>=4,<5",
     "trackio>=0.26,<1",
+    "torch>=2.6,<3",
+    "transformers>=5,<6",
 ]
 docs = [
     "mkdocs-material>=9.6,<10",

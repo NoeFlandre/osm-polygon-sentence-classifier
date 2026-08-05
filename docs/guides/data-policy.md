@@ -14,7 +14,7 @@ data-consuming command: it reads the pinned source in streaming mode and
 writes its Hugging Face cache plus derived `audit/landuse/audit_report.json`
 and `audit/landuse/split_manifest.json` beneath this root.
 
-The source for a future read-only training stage is the
+The source for the training stage is the
 [NoeFlandre/osm-polygon-wikidata-sentence-relevance dataset](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance).
 The eventual model destination is the
 [NoeFlandre/osm-polygon-sentence-classifier model repository](https://huggingface.co/NoeFlandre/osm-polygon-sentence-classifier).
@@ -25,9 +25,10 @@ The audit is a review-only transformation. Its loader may populate the
 approved Hugging Face cache while streaming; the reducer validates and
 summarizes rows, and the explicit writer assigns the report and manifest
 described above. It does not train, upload or publish artifacts, or submit
-Grid'5000 work. The remaining foundation defines local configuration,
-containment-checked paths, future Trackio directory settings, tests, and
-quality/documentation gates.
+Grid'5000 work. The training module is a separate explicit call: it consumes
+only the clean iterator and directs model caches, checkpoints, outputs, and
+Trackio state beneath the approved root. It does not authenticate, upload,
+publish, or submit a Grid'5000 job.
 
 Credentials are used only by an explicitly authorized external CLI or runtime
 authentication flow. They must never be committed to the repository or placed
@@ -69,4 +70,4 @@ trainable occurrence of every remaining usable hash. Rows are processed
 incrementally as they arrive from each stream rather than materialized into a
 list, and no cleaned dataset is written. `uncertain` rows are never emitted and
 do not create conflicts. Rows without a usable hash keep the existing per-row
-behavior. Future training code must consume the iterator's output directly.
+behavior. Training code must consume the iterator's output directly.

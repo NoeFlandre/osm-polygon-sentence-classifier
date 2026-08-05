@@ -11,7 +11,7 @@ The foundation keeps the first interfaces narrow and local:
   and source provenance.
 - `dataset_loader.py` exposes the lazy pinned-source loader, deterministic
   polygon split function, and the two-pass `iter_clean_training_examples`
-  boundary. Future training code must consume only that clean iterator: it
+  boundary. Training code must consume only that clean iterator: it
   excludes contradictory sentence-content-hash groups and duplicate
   representatives without writing a cleaned dataset. Internally the clean
   iterator separates a conflict-discovery phase from an emission phase: the
@@ -24,12 +24,17 @@ The foundation keeps the first interfaces narrow and local:
   `audit_cli.py` writes those derived artifacts beneath `audit/landuse`.
 - `tracking.py` builds Trackio project and directory settings beneath the
   managed root without importing, initializing, or starting a Trackio run.
+- `training.py` adapts the clean iterator to lazy split-specific Trainer
+  records and wires a Hugging Face sequence-classification Trainer. Model
+  caches, checkpoints, outputs, and Trackio state are directed beneath the
+  managed root; the module does not upload, publish, or submit Grid5000 work.
 
-The audit command is the only current data-consuming surface. It consumes the
+The audit command is the only current data-consuming command. It consumes the
 pinned dataset, writes only its managed cache, report, and manifest, and never
-trains, uploads, publishes, or submits Grid5000 work. Model architecture,
-metrics, checkpoints, Grid5000 operators, and OAR integration remain deferred
-until their contracts and safety gates have been reviewed.
+trains, uploads, publishes, or submits Grid5000 work. The training entry point
+is an explicit local call; model evaluation policy, Grid5000 operators, and
+OAR integration remain deferred until their contracts and safety gates have
+been reviewed.
 
 Audit readiness is based on sentence-only model inputs. Mixed labels within a
 polygon and duplicate hashes across polygons remain diagnostic metrics, while

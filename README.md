@@ -5,12 +5,15 @@ Train a sentence classifier for OSM polygon descriptions, starting with the
 
 ## Status
 
-The repository contains a safe, testable project foundation and one explicit
-data-consuming command: `audit-landuse-dataset`. The audit consumes the pinned
-dataset in streaming mode. Its loader may populate the approved Hugging Face
-cache; the explicit artifact writer creates only the JSON report and polygon
-split manifest beneath the approved external data root. It does not train a
-model, upload or publish artifacts, or submit Grid'5000 jobs.
+The repository contains a safe, testable project foundation, one explicit
+data-consuming command (`audit-landuse-dataset`), and a typed training module.
+The audit consumes the pinned dataset in streaming mode. Its loader may
+populate the approved Hugging Face cache; the explicit artifact writer creates
+only the JSON report and polygon split manifest beneath the approved external
+data root. The training module consumes the clean iterator, uses a Hugging
+Face Trainer with local Trackio reporting, and saves model artifacts beneath
+the same root. It does not upload or publish artifacts or submit Grid'5000
+jobs.
 
 The clean iterator `iter_clean_training_examples` is the only permitted
 training-input boundary. The public iterator remains lazy until consumed, and
@@ -20,7 +23,12 @@ groups; the second fresh stream is then consumed to emit clean
 representatives, keeping only the first trainable occurrence of each
 remaining usable hash. Rows are processed incrementally as they arrive from
 each stream rather than materialized into an intermediate list, and no
-cleaned dataset is written. Training is not implemented yet.
+cleaned dataset is written.
+
+`train_landuse_classifier` is an execution boundary, not a CLI or a remote job
+operator. It should be invoked only by an explicitly authorized training
+workflow after the dataset audit has been reviewed. The default model and
+training settings are configurable through `TrainingConfig`.
 
 ## Data and model repositories
 
@@ -29,9 +37,9 @@ cleaned dataset is written. Training is not implemented yet.
 - Local project-data root: `/Volumes/Seagate M3/projects/osm-polygon-sentence-classifier`
 
 All local datasets, checkpoints, models, and experiment logs must be kept
-beneath the external data root. Nothing in this repository downloads or
-creates training outputs. The audit's cache and `audit/landuse` report and
-manifest are the only current derived data outputs.
+beneath the external data root. Quality commands do not download data or
+create training outputs. An authorized training call stores model caches,
+checkpoints, models, and Trackio state beneath that root.
 
 Run the audit only when the pinned dataset review is explicitly authorized:
 
