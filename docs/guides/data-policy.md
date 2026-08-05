@@ -33,6 +33,11 @@ Credentials are used only by an explicitly authorized external CLI or runtime
 authentication flow. They must never be committed to the repository or placed
 in its documentation.
 
+These two derived artifacts are the only ones the writer produces:
+`audit_report.json` contains aggregate and readiness information only and no
+raw rows or sentence text, and `split_manifest.json` contains deterministic
+polygon-to-split assignments.
+
 ## Sentence-level readiness policy
 
 The classifier consumes sentence text, so readiness is evaluated at the
@@ -56,10 +61,12 @@ manifest before exiting with status 2 whenever any blocker remains.
 ## Clean training input
 
 `iter_clean_training_examples` in `dataset_loader.py` is the only training
-input boundary. It receives a factory for fresh lazy streams and calls it twice:
-the first pass finds trainable sentence-content-hash groups carrying both
-`no` and `yes`, and the second pass excludes those groups and keeps only the
-first trainable representative of every other usable hash. `uncertain` rows
-are never emitted and do not create conflicts. Rows without a usable hash keep
-the existing per-row behavior. The iterator does not write a cleaned dataset;
-future training code must consume its output directly.
+input boundary. It receives a factory for fresh streams and the public iterator
+stays lazy until consumed. The first fresh stream is fully consumed to discover
+sentence-content-hash groups carrying both `no` and `yes`; the second fresh
+stream is then consumed to emit clean representatives, keeping only the first
+trainable occurrence of every remaining usable hash. Rows are processed
+incrementally as they arrive from each stream rather than materialized into a
+list, and no cleaned dataset is written. `uncertain` rows are never emitted and
+do not create conflicts. Rows without a usable hash keep the existing per-row
+behavior. Future training code must consume the iterator's output directly.

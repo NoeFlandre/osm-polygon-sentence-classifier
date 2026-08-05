@@ -574,6 +574,55 @@ def test_write_audit_artifacts_uses_only_the_approved_audit_directory(
     assert json.loads(writes[manifest_path]) == dict(result.split_manifest)
 
 
+def test_write_audit_artifacts_writes_documented_json_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    rows = _balanced_rows()
+    for index, row in enumerate(rows):
+        row["sentence_text_normalized"] = f"unique-sentence-text-{index}"
+
+    result = audit_rows(rows, validation_fraction=0.5, seed=7)
+    audit_directory = tmp_path / "audit" / "landuse"
+
+    class TemporaryManagedPaths:
+        def __init__(self, config: ProjectConfig) -> None:
+            assert config == ProjectConfig()
+
+        def child(self, relative_path: str) -> Path:
+            assert relative_path == "audit/landuse"
+            return audit_directory
+
+    monkeypatch.setattr(
+        "osm_polygon_sentence_classifier.dataset_audit.ManagedPaths",
+        TemporaryManagedPaths,
+    )
+
+    report_path, manifest_path = write_audit_artifacts(result)
+
+    assert report_path == audit_directory / "audit_report.json"
+    assert manifest_path == audit_directory / "split_manifest.json"
+    assert sorted(path.name for path in audit_directory.iterdir()) == [
+        "audit_report.json",
+        "split_manifest.json",
+    ]
+
+    source_texts: list[str] = []
+    for row in rows:
+        text = row["sentence_text_normalized"]
+        if isinstance(text, str):
+            source_texts.append(text)
+
+    report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+    manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert report_payload == result.report.to_dict()
+    assert manifest_payload == dict(result.split_manifest)
+    assert "sentence_text_normalized" not in report_payload
+    report_text = report_path.read_text(encoding="utf-8")
+    assert all(text not in report_text for text in source_texts)
+
+
 def test_write_json_rejects_a_final_symlink_without_following_it(
     tmp_path: Path,
 ) -> None:

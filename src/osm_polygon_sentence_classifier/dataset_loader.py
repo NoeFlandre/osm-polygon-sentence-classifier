@@ -160,35 +160,20 @@ def iter_training_examples(
         )
 
 
-def iter_clean_training_examples(
-    rows_factory: Callable[[], Iterable[Mapping[str, object]]],
+def _discover_contradictory_hashes(
+    iterator: Iterator[Mapping[str, object]],
     *,
-    validation_fraction: float = 0.2,
-    seed: int = 42,
-    contract: DatasetContract = LANDUSE_DATASET_CONTRACT,
-) -> Iterator[TrainingExample]:
-    """Yield deduplicated training examples from two fresh lazy streams.
+    contract: DatasetContract,
+) -> set[str]:
+    """First pass: validate rows and find hashes with conflicting labels.
 
-    ``rows_factory`` is called exactly twice and must return a fresh,
-    independently iterable stream on each call. The first pass validates every
-    row and records only the trainable labels seen for each usable sentence
-    content hash. Hashes with both training labels are excluded completely.
-    The second pass validates every row again, skips ``uncertain`` rows and
-    contradictory hashes, and emits only the first trainable occurrence of
-    each remaining usable hash. Rows without a usable hash retain the ordinary
-    iterator behavior.
+    Records only the trainable labels seen for each usable sentence content
+    hash and returns the hashes that carried both training labels across the
+    stream. Every row is validated even when it does not contribute a hash.
     """
 
-    _validate_validation_fraction(validation_fraction)
-    first_stream = rows_factory()
-    second_stream = rows_factory()
-    first_iterator = iter(first_stream)
-    second_iterator = iter(second_stream)
-    if first_iterator is second_iterator:
-        raise DatasetLoaderError("rows_factory must return a fresh stream on each call")
-
     labels_by_hash: dict[str, set[TrainingLabel]] = {}
-    for row in _validated_rows(first_iterator, contract=contract):
+    for row in _validated_rows(iterator, contract=contract):
         label = _training_label_for_row(row, contract=contract)
         if label is None:
             continue
@@ -196,13 +181,30 @@ def iter_clean_training_examples(
         if content_hash is not None:
             labels_by_hash.setdefault(content_hash, set()).add(label)
 
-    contradictory_hashes = {
+    return {
         content_hash
         for content_hash, labels in labels_by_hash.items()
         if len(labels) > 1
     }
+
+
+def _emit_clean_examples(
+    iterator: Iterator[Mapping[str, object]],
+    *,
+    contradictory_hashes: set[str],
+    validation_fraction: float,
+    seed: int,
+    contract: DatasetContract,
+) -> Iterator[TrainingExample]:
+    """Second pass: validate, filter, select representatives, and emit.
+
+    Revalidates every row, skips ``uncertain`` rows and contradictory hashes,
+    and emits only the first trainable occurrence of each remaining usable
+    hash. Rows without a usable hash retain the ordinary iterator behavior.
+    """
+
     emitted_hashes: set[str] = set()
-    for row in _validated_rows(second_iterator, contract=contract):
+    for row in _validated_rows(iterator, contract=contract):
         label = _training_label_for_row(row, contract=contract)
         if label is None:
             continue
@@ -224,6 +226,47 @@ def iter_clean_training_examples(
             validation_fraction=validation_fraction,
             seed=seed,
         )
+
+
+def iter_clean_training_examples(
+    rows_factory: Callable[[], Iterable[Mapping[str, object]]],
+    *,
+    validation_fraction: float = 0.2,
+    seed: int = 42,
+    contract: DatasetContract = LANDUSE_DATASET_CONTRACT,
+) -> Iterator[TrainingExample]:
+    """Yield deduplicated training examples from two fresh lazy streams.
+
+    ``rows_factory`` is called exactly twice and must return a fresh,
+    independently iterable stream on each call. The public iterator remains
+    lazy until consumed. Once iteration starts, the first fresh stream is
+    fully consumed to discover contradictory sentence-content-hash groups,
+    then the second fresh stream is consumed to emit clean representatives.
+    Rows are processed incrementally as they arrive from each stream rather
+    than materialized into an intermediate list, and no cleaned dataset is
+    written. Rows without a usable hash retain the ordinary iterator
+    behavior.
+    """
+
+    _validate_validation_fraction(validation_fraction)
+    first_stream = rows_factory()
+    second_stream = rows_factory()
+    first_iterator = iter(first_stream)
+    second_iterator = iter(second_stream)
+    if first_iterator is second_iterator:
+        raise DatasetLoaderError("rows_factory must return a fresh stream on each call")
+
+    contradictory_hashes = _discover_contradictory_hashes(
+        first_iterator,
+        contract=contract,
+    )
+    yield from _emit_clean_examples(
+        second_iterator,
+        contradictory_hashes=contradictory_hashes,
+        validation_fraction=validation_fraction,
+        seed=seed,
+        contract=contract,
+    )
 
 
 def load_streaming_rows(

@@ -13,10 +13,14 @@ split manifest beneath the approved external data root. It does not train a
 model, upload or publish artifacts, or submit Grid'5000 jobs.
 
 The clean iterator `iter_clean_training_examples` is the only permitted
-training-input boundary. It requires two fresh lazy streams, validates both
-passes, excludes every trainable row in a contradictory sentence-content-hash
-group, and emits only the first representative for each remaining usable hash.
-It does not create a cleaned local dataset. Training is not implemented yet.
+training-input boundary. The public iterator remains lazy until consumed, and
+it is driven by two fresh streams supplied through a factory. The first fresh
+stream is fully consumed to discover contradictory sentence-content-hash
+groups; the second fresh stream is then consumed to emit clean
+representatives, keeping only the first trainable occurrence of each
+remaining usable hash. Rows are processed incrementally as they arrive from
+each stream rather than materialized into an intermediate list, and no
+cleaned dataset is written. Training is not implemented yet.
 
 ## Data and model repositories
 

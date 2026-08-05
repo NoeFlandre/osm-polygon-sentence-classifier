@@ -179,6 +179,35 @@ def test_iter_training_examples_is_lazy() -> None:
     assert yielded == 2
 
 
+def test_clean_iterator_is_lazy_until_consumed() -> None:
+    factory_calls = 0
+    rows_seen: list[tuple[int, int]] = []
+
+    def rows_factory():
+        nonlocal factory_calls
+        stream_number = factory_calls
+        factory_calls += 1
+
+        def rows():
+            for row_number in range(2):
+                rows_seen.append((stream_number, row_number))
+                yield _row(
+                    sentence_id=f"sentence-{stream_number}-{row_number}",
+                    content_hash=f"hash-{stream_number}-{row_number}",
+                )
+
+        return rows()
+
+    examples = iter_clean_training_examples(rows_factory)
+
+    assert factory_calls == 0
+    assert rows_seen == []
+
+    assert next(examples).sentence_id == "sentence-1-0"
+    assert factory_calls == 2
+    assert rows_seen == [(0, 0), (0, 1), (1, 0)]
+
+
 def test_clean_iterator_calls_a_fresh_rows_factory_exactly_twice() -> None:
     calls = 0
 
@@ -313,6 +342,22 @@ def test_clean_iterator_preserves_each_trainable_row_without_a_usable_hash() -> 
     ]
 
 
+def test_clean_iterator_rejects_a_malformed_row_in_the_first_pass() -> None:
+    calls = 0
+
+    def rows_factory():
+        nonlocal calls
+        calls += 1
+        malformed = _row(sentence_id="malformed", content_hash="hash-2")
+        malformed["unexpected"] = None
+        return iter([_row(content_hash="hash-1"), malformed])
+
+    with pytest.raises(DatasetContractError):
+        list(iter_clean_training_examples(rows_factory))
+
+    assert calls == 2
+
+
 def test_clean_iterator_rejects_a_malformed_row_in_the_second_pass() -> None:
     calls = 0
 
@@ -326,6 +371,21 @@ def test_clean_iterator_rejects_a_malformed_row_in_the_second_pass() -> None:
         return iter([_row(content_hash="hash-1"), malformed])
 
     with pytest.raises(DatasetContractError):
+        list(iter_clean_training_examples(rows_factory))
+
+    assert calls == 2
+
+
+def test_clean_iterator_rejects_a_reused_stream_from_rows_factory() -> None:
+    calls = 0
+    shared = iter([_row(content_hash="hash-1")])
+
+    def rows_factory():
+        nonlocal calls
+        calls += 1
+        return shared
+
+    with pytest.raises(DatasetLoaderError, match="fresh stream"):
         list(iter_clean_training_examples(rows_factory))
 
     assert calls == 2

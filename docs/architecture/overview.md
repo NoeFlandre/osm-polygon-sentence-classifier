@@ -13,7 +13,12 @@ The foundation keeps the first interfaces narrow and local:
   polygon split function, and the two-pass `iter_clean_training_examples`
   boundary. Future training code must consume only that clean iterator: it
   excludes contradictory sentence-content-hash groups and duplicate
-  representatives without writing a cleaned dataset.
+  representatives without writing a cleaned dataset. Internally the clean
+  iterator separates a conflict-discovery phase from an emission phase: the
+  public iterator stays lazy until consumed; the first fresh stream is then
+  fully consumed to discover contradictory hashes; the second fresh stream is
+  consumed to emit clean representatives; rows are processed incrementally
+  rather than materialized; and no cleaned dataset is written.
 - `dataset_audit.py` reduces the stream to immutable counts, sentence-level
   content-hash readiness reasons, and a sorted polygon split manifest;
   `audit_cli.py` writes those derived artifacts beneath `audit/landuse`.
