@@ -20,7 +20,13 @@ def resolve_managed_path(root: Path, relative_path: str | Path) -> Path:
     for component in child.parts:
         current /= component
         if current.is_symlink():
-            if not current.resolve().is_relative_to(canonical_root):
+            try:
+                resolved_target = current.resolve()
+            except RuntimeError as error:
+                raise ManagedPathError(
+                    "symlinked path components are not allowed"
+                ) from error
+            if not resolved_target.is_relative_to(canonical_root):
                 raise ManagedPathError("path must remain beneath the managed root")
             raise ManagedPathError("symlinked path components are not allowed")
 

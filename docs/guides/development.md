@@ -29,6 +29,7 @@ Use this five-step workflow for behavior changes:
 - **uv** provides the locked environment and reproducible command entry point.
 - **Ruff** formats Python and reports lint and complexity issues.
 - **ty** checks the declared Python types.
+- The package publishes a PEP 561 `py.typed` marker for downstream type checkers.
 - **pytest** runs unit and contract tests.
 - **Just** gives the quality and documentation checks stable, short names.
 

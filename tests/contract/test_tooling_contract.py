@@ -155,6 +155,15 @@ def test_training_dependency_declares_trackio() -> None:
     assert "trackio" in content
 
 
+def test_typed_package_declares_and_contains_the_pep561_marker() -> None:
+    pyproject = _text("pyproject.toml")
+    marker = ROOT / "src/osm_polygon_sentence_classifier/py.typed"
+
+    assert "[tool.setuptools.package-data]" in pyproject
+    assert 'osm_polygon_sentence_classifier = ["py.typed"]' in pyproject
+    assert marker.is_file()
+
+
 def test_mkdocs_uses_material_and_excludes_internal_superpowers_docs() -> None:
     content = _text("mkdocs.yml")
     assert "name: material" in content

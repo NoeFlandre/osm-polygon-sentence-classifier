@@ -55,6 +55,16 @@ def test_symlinked_directory_component_is_rejected_even_when_it_stays_inside(
         resolve_managed_path(root, "audit/landuse")
 
 
+def test_symlink_loop_is_reported_as_a_managed_path_error(tmp_path: Path) -> None:
+    root = tmp_path / "approved"
+    root.mkdir()
+    loop = root / "loop"
+    loop.symlink_to(loop)
+
+    with pytest.raises(ManagedPathError, match="symlink"):
+        resolve_managed_path(root, "loop/file.json")
+
+
 def test_application_paths_use_the_fixed_project_root() -> None:
     paths = ManagedPaths(ProjectConfig())
 
