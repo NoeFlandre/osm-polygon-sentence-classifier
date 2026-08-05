@@ -249,6 +249,7 @@ def test_controller_runs_prepare_submit_monitor_publish_verify_and_cleanup(
     monkeypatch.setenv("HF_TOKEN", "hf_test_token")
     remote = _FakeRemote()
     hub = _FakeHub()
+    messages: list[str] = []
     probe = SiteProbe(
         name="grenoble",
         reachable=True,
@@ -272,6 +273,7 @@ def test_controller_runs_prepare_submit_monitor_publish_verify_and_cleanup(
         remote_factory=lambda _site: remote,
         hub_api=hub,
         poll_seconds=0,
+        emit=messages.append,
     )
 
     result = controller.run()
@@ -284,6 +286,9 @@ def test_controller_runs_prepare_submit_monitor_publish_verify_and_cleanup(
     assert any(kind == "repo" for kind, _ in hub.calls)
     assert any(kind == "bucket" for kind, _ in hub.calls)
     assert any(kind == "model_info" for kind, _ in hub.calls)
+    assert any("phase=running" in message for message in messages)
+    assert any("grenoble job 99: running" in message for message in messages)
+    assert any("verifying completion manifest" in message for message in messages)
 
 
 def test_controller_continues_from_a_checkpoint_after_walltime_termination(

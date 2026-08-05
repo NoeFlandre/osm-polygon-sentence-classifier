@@ -337,6 +337,12 @@ def _print_json(payload: dict[str, object]) -> None:
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 
+def _print_progress(message: str) -> None:
+    """Print human-readable progress without corrupting JSON stdout."""
+
+    print(f"[grid5000] {message}", file=sys.stderr, flush=True)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run a side-effect-free plan unless an explicit execute gate is supplied."""
 
@@ -348,7 +354,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not arguments.execute:
                 _print_json(_autonomous_plan_payload(autonomous))
                 return 0
-            result = AutonomousRunController(autonomous).run()
+            result = AutonomousRunController(
+                autonomous,
+                emit=_print_progress,
+            ).run()
             _print_json(result.to_dict())
             return 0
         if arguments.command == "status":
@@ -365,7 +374,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not arguments.execute:
                 _print_json(state.to_dict())
                 return 0
-            result = AutonomousRunController(autonomous).run()
+            result = AutonomousRunController(
+                autonomous,
+                emit=_print_progress,
+            ).run()
             _print_json(result.to_dict())
             return 0
         plan = _build_plan(arguments)

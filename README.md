@@ -119,6 +119,8 @@ to narrow discovery, `--keep-remote` to retain verified remote evidence, or
 `status --run-id RUN_ID` to inspect durable local state. The command also
 reconciles the old ambiguous submission format only after read-only user-job
 checks across the configured sites; an active job always blocks resubmission.
+During execution, human-readable progress is flushed to stderr while the
+final state JSON remains on stdout.
 
 For a side-effect-free autonomous plan, omit `--execute`:
 

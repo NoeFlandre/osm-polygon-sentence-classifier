@@ -48,6 +48,9 @@ queued, or running state. A `submitting` state remains intentionally
 ambiguous: inspect scheduler state before taking any manual action. Older
 state documents are archived only after read-only current-user OAR checks find
 no active jobs; any active job blocks reconciliation.
+Executing `run` and `resume` flush human-readable lifecycle and scheduler
+progress to stderr; the final state document remains machine-readable JSON on
+stdout.
 
 The compatibility `submit` command remains available for a manually selected
 site. It is plan-only unless `--execute` is present; new workflows should use

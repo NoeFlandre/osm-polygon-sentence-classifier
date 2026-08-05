@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 from osm_polygon_sentence_classifier import grid5000_cli
 from osm_polygon_sentence_classifier.grid5000 import Grid5000Plan, Grid5000Submission
@@ -156,3 +157,33 @@ def test_autonomous_plan_persists_a_bounded_continuation_limit(capsys) -> None:
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["max_continuations"] == 2
+
+
+def test_autonomous_execution_prints_progress_to_stderr_and_json_to_stdout(
+    monkeypatch, capsys
+) -> None:
+    class FakeController:
+        def __init__(self, config, *, emit) -> None:
+            del config
+            emit("submitted")
+
+        def run(self) -> SimpleNamespace:
+            return SimpleNamespace(to_dict=lambda: {"phase": "completed"})
+
+    monkeypatch.setattr(grid5000_cli, "AutonomousRunController", FakeController)
+
+    exit_code = grid5000_cli.main(
+        [
+            "run",
+            "--source-commit",
+            SOURCE_COMMIT,
+            "--model-revision",
+            MODEL_REVISION,
+            "--execute",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert json.loads(captured.out) == {"phase": "completed"}
+    assert captured.err == "[grid5000] submitted\n"

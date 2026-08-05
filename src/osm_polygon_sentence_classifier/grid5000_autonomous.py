@@ -20,7 +20,13 @@ from .grid5000 import (
     Grid5000RunIdentity,
     parse_quota_output,
 )
-from .grid5000_oar import JobState, JobStatus, OarClient, is_live_state
+from .grid5000_oar import (
+    JobState,
+    JobStatus,
+    OarClient,
+    format_job_status,
+    is_live_state,
+)
 from .grid5000_policy import (
     SHORT_TRIAL_WALLTIME_SECONDS,
     ReplacementCandidate,
@@ -162,6 +168,9 @@ class AutonomousRunController:
         )
         self.state.save(updated)
         self.state.append_event(current.run_id, phase.value, facts or {})
+        location = f" site={updated.site}" if updated.site is not None else ""
+        job = f" job={updated.job_id}" if updated.job_id is not None else ""
+        self.emit(f"run {current.run_id}: phase={phase.value}{location}{job}")
         return updated
 
     def _hub(self) -> Any:
@@ -179,11 +188,13 @@ class AutonomousRunController:
 
     def _provision_hub(self) -> None:
         if self.config.training_config.publish_to_hub:
+            self.emit("provisioning the Hugging Face model repository")
             ensure_model_repository(
                 ProjectConfig().target_model_repository_id,
                 hub_api=self._hub(),
             )
         if self.config.training_config.sync_trackio:
+            self.emit("provisioning the Trackio Space and bucket")
             ensure_trackio_resources(
                 settings_for(ProjectConfig()),
                 hub_api=self._hub(),
@@ -238,6 +249,9 @@ class AutonomousRunController:
         )
 
     def _preflight(self, remote: Any, plan: Grid5000Plan) -> None:
+        self.emit(
+            f"{plan.allocation.site}: running checkout, policy, and quota preflight"
+        )
         for command, _label in (
             (plan.remote_checkout_command[-1], "remote checkout"),
             (plan.policy_site_command[-1], "site policy"),
@@ -353,6 +367,7 @@ class AutonomousRunController:
         raw_remotes: dict[str, Any],
     ) -> int:
         remote = self._replacement_raw_remote(candidate.site, raw_remotes)
+        self.emit(f"submitting a short replacement trial at {candidate.site}")
         remote.prepare(
             run_id=self.config.identity.run_id,
             source_commit=self.config.identity.source_commit,
@@ -375,11 +390,13 @@ class AutonomousRunController:
         raw_remotes: dict[str, Any],
         clients: dict[str, Any],
     ) -> JobStatus:
-        return self._replacement_client(
+        status = self._replacement_client(
             site,
             raw_remotes=raw_remotes,
             clients=clients,
         ).status(job_id)
+        self.emit(f"{site} replacement job {job_id}: {format_job_status(status)}")
+        return status
 
     def _cancel_replacement(
         self,
@@ -396,6 +413,7 @@ class AutonomousRunController:
             clients=clients,
         )
         client.cancel(job_id)
+        self.emit(f"cancelled replacement job {job_id} at {site}")
         if not self.config.cleanup:
             return
         with suppress(Exception):
@@ -544,6 +562,10 @@ class AutonomousRunController:
                     "continuations"
                 ),
             )
+        self.emit(
+            f"{site} job {job_id}: checking checkpoint evidence before "
+            f"continuation {raw_count + 1}/{self.config.max_continuations}"
+        )
         try:
             checkpoint_ready = remote.has_complete_checkpoint(
                 self.config.identity.run_id,
@@ -562,6 +584,7 @@ class AutonomousRunController:
                 remote=remote,
                 message="job ended without a complete checkpoint",
             )
+        self.emit(f"{site} job {job_id}: complete checkpoint found")
         probe = self._continuation_probe(site)
         token = self._local_token_for_publication()
         remote.prepare(
@@ -621,6 +644,7 @@ class AutonomousRunController:
                 reason=reason,
             )
         try:
+            self.emit(f"{site} job {job_id}: verifying completion manifest")
             manifest = remote.read_completion(self.config.identity.run_id)
             self._verify_completion(remote, manifest)
         except AutonomousRunError as error:
@@ -667,9 +691,13 @@ class AutonomousRunController:
             dict(state.facts or {}).get("replacement_attempted", False)
         )
         current = state
+        self.emit(
+            f"run {state.run_id}: monitoring {site} job {job_id} "
+            f"(poll every {self.poll_seconds:g}s)"
+        )
         while True:
             status = oar.status(job_id)
-            self.emit(f"{site} job {job_id}: {status.state.value}")
+            self.emit(f"{site} job {job_id}: {format_job_status(status)}")
             if status.state is JobState.QUEUED:
                 (
                     current,
@@ -731,6 +759,10 @@ class AutonomousRunController:
                 },
             },
         )
+        self.emit(
+            f"run {self.config.identity.run_id}: probing "
+            f"{len(self.config.sites)} configured Grid'5000 sites"
+        )
         probes = tuple(
             self.probe_sites(
                 sites=self.config.sites,
@@ -739,6 +771,7 @@ class AutonomousRunController:
             )
         )
         selected = select_site(probes, requirements=self.config.requirements)
+        self.emit(f"run {self.config.identity.run_id}: selected site {selected.name}")
         state = self._transition(
             state,
             RunPhase.PROBING,
