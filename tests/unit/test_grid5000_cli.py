@@ -88,3 +88,31 @@ def test_plan_can_explicitly_enable_final_publication_and_trackio_sync(
     payload = json.loads(capsys.readouterr().out)
     assert payload["identity"]["training_config"]["publish_to_hub"] is True
     assert payload["identity"]["training_config"]["sync_trackio"] is True
+
+
+def test_plan_can_request_a_policy_bounded_day_allocation(capsys) -> None:
+    exit_code = grid5000_cli.main(
+        [
+            "plan",
+            *_arguments(
+                "--policy-type",
+                "day",
+                "--walltime-seconds",
+                "3600",
+            ),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["allocation"]["policy_type"] == "day"
+    assert payload["allocation"]["walltime_seconds"] == 3_600
+
+
+def test_day_policy_defaults_to_a_short_thirty_minute_allocation(capsys) -> None:
+    exit_code = grid5000_cli.main(["plan", *_arguments("--policy-type", "day")])
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["allocation"]["walltime_seconds"] == 1_800
+    assert payload["allocation"]["walltime"] == "00:30:00"

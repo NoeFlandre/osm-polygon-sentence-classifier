@@ -21,7 +21,12 @@ from .dataset_contract import LANDUSE_DATASET_CONTRACT
 
 GRID5000_DATASET_REVISION = LANDUSE_DATASET_CONTRACT.provenance.repository_revision
 MAX_WALLTIME_SECONDS = 12 * 60 * 60
-MINIMUM_HOME_HEADROOM_BYTES = 22 * 1024**3
+MAX_DAY_WALLTIME_SECONDS = 60 * 60
+DEFAULT_DAY_WALLTIME_SECONDS = 30 * 60
+# The locked environment and uv cache use allocation-local scratch. Keep a
+# four-GiB persistent margin for the model, one retained checkpoint, metadata,
+# and publication artifacts.
+MINIMUM_HOME_HEADROOM_BYTES = 4 * 1024**3
 COMMAND_TIMEOUT_SECONDS = 120.0
 REMOTE_CHECKOUT_SUBDIRECTORY = "osm-polygon-sentence-classifier"
 REMOTE_DATA_SUBDIRECTORY = "osm-polygon-sentence-classifier-data"
@@ -269,8 +274,8 @@ class Grid5000Allocation:
             raise Grid5000ConfigurationError("queue must be 'default'")
         if self.resource_type != "exotic":
             raise Grid5000ConfigurationError("resource_type must be 'exotic'")
-        if self.policy_type != "night":
-            raise Grid5000ConfigurationError("policy_type must be 'night'")
+        if self.policy_type not in {"day", "night"}:
+            raise Grid5000ConfigurationError("policy_type must be 'day' or 'night'")
         if (
             isinstance(self.gpu_count, bool)
             or not isinstance(self.gpu_count, int)
@@ -285,6 +290,13 @@ class Grid5000Allocation:
         ):
             raise Grid5000ConfigurationError(
                 "walltime_seconds must be between 1 second and 12 hours"
+            )
+        if (
+            self.policy_type == "day"
+            and self.walltime_seconds > MAX_DAY_WALLTIME_SECONDS
+        ):
+            raise Grid5000ConfigurationError(
+                "day policy walltime_seconds must be at most one hour"
             )
 
     @property
@@ -829,7 +841,9 @@ class Grid5000Operator:
 
 __all__ = [
     "COMMAND_TIMEOUT_SECONDS",
+    "DEFAULT_DAY_WALLTIME_SECONDS",
     "GRID5000_DATASET_REVISION",
+    "MAX_DAY_WALLTIME_SECONDS",
     "MAX_WALLTIME_SECONDS",
     "MINIMUM_HOME_HEADROOM_BYTES",
     "CommandResult",

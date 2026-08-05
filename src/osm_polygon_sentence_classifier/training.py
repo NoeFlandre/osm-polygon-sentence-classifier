@@ -56,6 +56,7 @@ class TrainingConfig:
     logging_steps: int = 10
     eval_steps: int = 100
     save_steps: int = 100
+    save_total_limit: int = 1
     run_name: str = "landuse-mmbert-small-frozen-head"
     model_revision: str | None = None
     publish_to_hub: bool = False
@@ -107,6 +108,7 @@ class TrainingConfig:
             "logging_steps",
             "eval_steps",
             "save_steps",
+            "save_total_limit",
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
@@ -241,6 +243,7 @@ def _training_argument_values(
         "eval_steps": config.eval_steps,
         "save_strategy": "steps",
         "save_steps": config.save_steps,
+        "save_total_limit": config.save_total_limit,
         "report_to": ["trackio"],
         "project": tracking_project,
         "run_name": config.run_name,

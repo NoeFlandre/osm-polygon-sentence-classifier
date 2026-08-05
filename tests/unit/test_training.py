@@ -61,6 +61,7 @@ def test_training_config_is_frozen_and_uses_a_managed_relative_output() -> None:
     assert not config.output_subdirectory.is_absolute()
     assert config.max_steps > 0
     assert config.max_length > 0
+    assert config.save_total_limit == 1
 
     with pytest.raises(AttributeError):
         config.max_steps = 1  # type: ignore[misc]  # ty: ignore[invalid-assignment]
@@ -326,6 +327,7 @@ def test_training_wires_managed_streams_tokenizer_trainer_and_tracking(
     assert arguments["report_to"] == ["trackio"]
     assert arguments["project"] == "osm-polygon-sentence-classifier"
     assert arguments["run_name"] == "test-run"
+    assert arguments["save_total_limit"] == 1
     assert arguments["remove_unused_columns"] is False
     assert arguments["trackio_static_space_id"] is False
     assert _FakeTrainer.init_calls[0]["train_dataset"] is _FakeDataset.created[0]

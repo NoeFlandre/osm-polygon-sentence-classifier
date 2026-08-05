@@ -89,7 +89,7 @@ def test_run_identity_is_canonical_and_changes_with_training_settings() -> None:
     [
         ("site", "Nancy"),
         ("queue", "best-effort"),
-        ("policy_type", "day"),
+        ("policy_type", "holiday"),
         ("resource_type", "default"),
         ("gpu_count", 0),
         ("gpu_count", 2),
@@ -122,6 +122,27 @@ def test_allocation_renders_one_bounded_gpu_request() -> None:
         "gpu=1,walltime=01:01:01",
         "worker command",
     )
+
+
+def test_day_allocation_accepts_only_a_one_hour_window() -> None:
+    allocation = Grid5000Allocation(
+        site="grenoble",
+        policy_type="day",
+        walltime_seconds=3_600,
+    )
+
+    assert allocation.scheduler_command("worker command")[6:9] == (
+        "day",
+        "-l",
+        "gpu=1,walltime=01:00:00",
+    )
+
+    with pytest.raises(Grid5000ConfigurationError, match="one hour"):
+        Grid5000Allocation(
+            site="grenoble",
+            policy_type="day",
+            walltime_seconds=3_601,
+        )
 
 
 def test_worker_command_uses_allocation_local_locked_uv_environment() -> None:
@@ -194,6 +215,18 @@ class _LowQuotaRunner(_RecordingRunner):
         return super().__call__(argv, timeout=timeout)
 
 
+class _EightGiBQuotaRunner(_RecordingRunner):
+    def __call__(self, argv: Sequence[str], *, timeout: float) -> CommandResult:
+        if "quota" in argv[-1]:
+            self.calls.append(tuple(argv))
+            eight_gib_kib = (8 * 1024**3) // 1024
+            return CommandResult(
+                returncode=0,
+                stdout=f"0 {eight_gib_kib} {eight_gib_kib + 1}\n",
+            )
+        return super().__call__(argv, timeout=timeout)
+
+
 def test_plan_only_submit_makes_no_runner_call_or_state_directory(
     tmp_path: Path,
 ) -> None:
@@ -247,6 +280,18 @@ def test_execute_fails_closed_on_insufficient_soft_quota(tmp_path: Path) -> None
 
     assert not any("oarsub" in call[-1] for call in runner.calls)
     assert not (tmp_path / "runs" / _plan().identity.run_id).exists()
+
+
+def test_execute_allows_the_reduced_persistent_training_footprint(
+    tmp_path: Path,
+) -> None:
+    state_store = Grid5000StateStore(tmp_path / "runs")
+    runner = _EightGiBQuotaRunner(state_store=state_store)
+    operator = Grid5000Operator(_plan(), state_store=state_store, runner=runner)
+
+    result = operator.submit(execute=True)
+
+    assert result.job_id == 12345
 
 
 @pytest.mark.parametrize("phase", ["submitted", "submitting"])

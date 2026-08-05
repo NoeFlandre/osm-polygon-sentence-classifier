@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .dataset_contract import LANDUSE_DATASET_CONTRACT
 from .grid5000 import (
+    DEFAULT_DAY_WALLTIME_SECONDS,
     MAX_WALLTIME_SECONDS,
     Grid5000Allocation,
     Grid5000ConfigurationError,
@@ -33,8 +34,14 @@ def _add_plan_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--walltime-seconds",
-        default=MAX_WALLTIME_SECONDS,
+        default=None,
         type=int,
+    )
+    parser.add_argument(
+        "--policy-type",
+        choices=("day", "night"),
+        default="night",
+        help="Grid'5000 policy window; day allocations are limited to one hour",
     )
     parser.add_argument(
         "--publish",
@@ -87,11 +94,19 @@ def _build_plan(arguments: argparse.Namespace) -> Grid5000Plan:
         model_revision=arguments.model_revision,
         training_config=_training_config_payload(config),
     )
+    walltime_seconds = arguments.walltime_seconds
+    if walltime_seconds is None:
+        walltime_seconds = (
+            DEFAULT_DAY_WALLTIME_SECONDS
+            if arguments.policy_type == "day"
+            else MAX_WALLTIME_SECONDS
+        )
     return Grid5000Plan(
         identity=identity,
         allocation=Grid5000Allocation(
             site=arguments.site,
-            walltime_seconds=arguments.walltime_seconds,
+            walltime_seconds=walltime_seconds,
+            policy_type=arguments.policy_type,
         ),
     )
 

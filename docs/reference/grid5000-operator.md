@@ -8,7 +8,7 @@ lowercase 40-character commits selected for the run:
 
 ```bash
 uv run grid5000-landuse plan \
-  --site nancy \
+  --site grenoble \
   --source-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   --model-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 ```
@@ -21,16 +21,23 @@ Trackio synchronization into the run identity:
 
 ```bash
 uv run grid5000-landuse plan \
-  --site nancy \
+  --site grenoble \
   --source-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   --model-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
   --publish \
-  --sync-trackio
+  --sync-trackio \
+  --policy-type day
 ```
 
 The command prints JSON containing the deterministic run ID and the exact OAR
 request. It does not contact Grid'5000, create local state, load the dataset,
 or create model artifacts.
+
+The site is not fixed to Nancy. The read-only site inventory used for an
+immediate attempt should cover every reachable configured frontend; select a
+single site only when its `oarnodes` inventory shows an idle compatible GPU and
+its checkout, authentication, policy, and quota gates are ready. Queue depth is
+not an ETA and must not be used to submit speculative jobs.
 
 `submit` is still plan-only unless the explicit gate is present:
 
@@ -54,10 +61,10 @@ For an explicit execution, the operator performs these actions in order:
    clean working tree;
 3. run `usagepolicycheck -l --sites SITE`;
 4. run `usagepolicycheck -t`;
-5. parse the remote home quota and require 22 GiB of soft headroom;
+5. parse the remote home quota and require 4 GiB of soft headroom;
 6. atomically write a `submitting` intent below the approved external data
    root;
-7. make one bounded OAR request for one night GPU allocation; and
+7. make one bounded OAR request for one day or night GPU allocation; and
 8. record the single returned job ID.
 
 Any failed check stops before OAR. An OAR error leaves the intent ambiguous;
@@ -85,7 +92,9 @@ publication. The scheduler command uses the pre-staged
 `$HOME/.local/bin/uv` executable with `--locked`, while `UV_PROJECT_ENVIRONMENT`
 and `UV_CACHE_DIR` point to job-local `/tmp` paths. This keeps the large Linux
 CUDA environment off the persistent home quota; model caches, outputs,
-checkpoints, and Trackio state remain under the managed home data root.
+checkpoints, and Trackio state remain under the managed home data root. The
+training configuration retains only one rolling checkpoint; the final model is
+the durable artifact to publish.
 
 ## Local state and recovery boundary
 

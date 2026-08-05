@@ -71,7 +71,9 @@ Trackio Space. The worker requires a pre-existing Hugging Face login or
 `HF_TOKEN` on Grid'5000; it never records the credential. It does not clean
 data automatically or retry submissions. Review
 [`Grid'5000 operator`](../reference/grid5000-operator.md) before any explicit
-execution.
+execution. For an immediately available daytime GPU, add
+`--policy-type day`; it defaults to a 30-minute allocation and is capped at
+one hour. Probe reachable sites first and submit exactly one selected site.
 
 To run the local hooks against the repository, use:
 
