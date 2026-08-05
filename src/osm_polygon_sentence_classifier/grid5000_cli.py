@@ -24,6 +24,7 @@ from .grid5000 import (
     Grid5000StateError,
 )
 from .grid5000_autonomous import (
+    DEFAULT_AUTONOMOUS_WALLTIME_SECONDS,
     AutonomousRunConfig,
     AutonomousRunController,
     AutonomousRunError,
@@ -119,8 +120,8 @@ def _add_autonomous_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--walltime-seconds",
         type=int,
-        default=30 * 60,
-        help="short one-GPU allocation duration (default: 30 minutes)",
+        default=DEFAULT_AUTONOMOUS_WALLTIME_SECONDS,
+        help="short one-GPU allocation duration (default: 20 minutes)",
     )
     parser.add_argument(
         "--policy-type",
@@ -287,9 +288,9 @@ def _config_from_state(state_payload: Mapping[str, object]) -> AutonomousRunConf
         else "auto"
     )
     walltime = (
-        allocation.get("walltime_seconds", 30 * 60)
+        allocation.get("walltime_seconds", DEFAULT_AUTONOMOUS_WALLTIME_SECONDS)
         if isinstance(allocation, Mapping)
-        else 30 * 60
+        else DEFAULT_AUTONOMOUS_WALLTIME_SECONDS
     )
     cleanup = facts.get("cleanup", True) if isinstance(facts, Mapping) else True
     max_continuations = (
@@ -320,7 +321,11 @@ def _config_from_state(state_payload: Mapping[str, object]) -> AutonomousRunConf
         requirements=SiteRequirements(
             gpu_memory_mb=gpu_memory if isinstance(gpu_memory, int) else 8_000
         ),
-        walltime_seconds=walltime if isinstance(walltime, int) else 30 * 60,
+        walltime_seconds=(
+            walltime
+            if isinstance(walltime, int)
+            else DEFAULT_AUTONOMOUS_WALLTIME_SECONDS
+        ),
         policy_type=(
             cast(Literal["auto", "day", "night"], policy)
             if policy in {"auto", "day", "night"}

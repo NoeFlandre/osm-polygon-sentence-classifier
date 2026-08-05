@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -56,6 +56,9 @@ from .training import TrainingConfig
 
 PolicyType = Literal["auto", "day", "night"]
 _UNSET = object()
+DEFAULT_AUTONOMOUS_WALLTIME_SECONDS = SHORT_TRIAL_WALLTIME_SECONDS
+MAX_REPLACEMENT_ATTEMPTS = 3
+REPLACEMENT_RETRY_INTERVAL = timedelta(minutes=10)
 
 
 class AutonomousRunError(RuntimeError):
@@ -70,7 +73,7 @@ class AutonomousRunConfig:
     training_config: TrainingConfig
     sites: tuple[str, ...] = DEFAULT_SITES
     requirements: SiteRequirements = SiteRequirements()
-    walltime_seconds: int = 30 * 60
+    walltime_seconds: int = DEFAULT_AUTONOMOUS_WALLTIME_SECONDS
     policy_type: PolicyType = "auto"
     max_workers: int = DEFAULT_MAX_WORKERS
     max_continuations: int = 3
@@ -116,11 +119,49 @@ def _now() -> datetime:
     return datetime.now().astimezone()
 
 
-def _replacement_attempted_for_job(facts: Mapping[str, object], *, job_id: int) -> bool:
-    return (
-        facts.get("replacement_attempted") is True
-        and facts.get("replacement_attempted_job_id") == job_id
-    )
+def _replacement_attempt_count_for_job(
+    facts: Mapping[str, object],
+    *,
+    job_id: int,
+) -> int:
+    if (
+        facts.get("replacement_attempted") is not True
+        or facts.get("replacement_attempted_job_id") != job_id
+    ):
+        return 0
+    raw_count = facts.get("replacement_attempt_count", 0)
+    if isinstance(raw_count, bool) or not isinstance(raw_count, int) or raw_count < 0:
+        raise AutonomousRunError("durable replacement attempt count is invalid")
+    return raw_count
+
+
+def _replacement_retry_due_for_job(
+    facts: Mapping[str, object],
+    *,
+    job_id: int,
+    now: datetime,
+) -> bool:
+    """Return whether another bounded replacement probe may start."""
+
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("now must be timezone-aware")
+    attempt_count = _replacement_attempt_count_for_job(facts, job_id=job_id)
+    if attempt_count == 0:
+        return True
+    raw_timestamp = facts.get("replacement_last_attempt_at")
+    if raw_timestamp is None:
+        # State written before the retry fields existed is safe to upgrade on
+        # the next explicit resume; the new attempt records the durable time.
+        return True
+    if not isinstance(raw_timestamp, str):
+        raise AutonomousRunError("durable replacement timestamp is invalid")
+    try:
+        last_attempt = datetime.fromisoformat(raw_timestamp.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise AutonomousRunError("durable replacement timestamp is invalid") from error
+    if last_attempt.tzinfo is None or last_attempt.utcoffset() is None:
+        raise AutonomousRunError("durable replacement timestamp is invalid")
+    return now >= last_attempt + REPLACEMENT_RETRY_INTERVAL
 
 
 class AutonomousRunController:
@@ -435,12 +476,23 @@ class AutonomousRunController:
         fallback_job_id: int,
         fallback_remote: Any,
     ) -> tuple[str, int, Any]:
+        self.emit(
+            f"run {self.config.identity.run_id}: checking all "
+            f"{len(self.config.sites)} configured sites for replacement"
+        )
         probes = self.probe_sites(
             sites=self.config.sites,
             requirements=self.config.requirements,
             max_workers=self.config.max_workers,
         )
         candidates = self._candidate_list(probes, fallback_site=fallback_site)
+        candidate_names = (
+            ", ".join(candidate.site for candidate in candidates) or "none"
+        )
+        self.emit(
+            f"run {self.config.identity.run_id}: replacement candidates: "
+            f"{candidate_names}"
+        )
         raw_remotes: dict[str, Any] = {fallback_site: fallback_remote}
         clients: dict[str, Any] = {fallback_site: OarClient(fallback_remote)}
 
@@ -479,18 +531,32 @@ class AutonomousRunController:
         site: str,
         job_id: int,
         remote: Any,
-        replacement_attempted: bool,
-    ) -> tuple[AutonomousRunState, str, int, Any, bool]:
+    ) -> tuple[AutonomousRunState, str, int, Any]:
         if current.phase is RunPhase.SUBMITTED:
             current = self._transition(current, RunPhase.QUEUED)
-        if replacement_attempted or not should_seek_replacement(status, now=_now()):
-            return current, site, job_id, remote, replacement_attempted
+        now = _now()
+        facts = dict(current.facts or {})
+        attempt_count = _replacement_attempt_count_for_job(facts, job_id=job_id)
+        if (
+            attempt_count >= MAX_REPLACEMENT_ATTEMPTS
+            or not should_seek_replacement(status, now=now)
+            or not _replacement_retry_due_for_job(facts, job_id=job_id, now=now)
+        ):
+            return current, site, job_id, remote
+        attempt_count += 1
+        attempt_timestamp = now.isoformat()
+        self.emit(
+            f"{site} job {job_id}: replacement round "
+            f"{attempt_count}/{MAX_REPLACEMENT_ATTEMPTS}"
+        )
         current = self._transition(
             current,
             RunPhase.QUEUED,
             facts={
                 "replacement_attempted": True,
                 "replacement_attempted_job_id": job_id,
+                "replacement_attempt_count": attempt_count,
+                "replacement_last_attempt_at": attempt_timestamp,
             },
         )
         replacement_site, replacement_job, replacement_remote = self._try_replacement(
@@ -503,9 +569,23 @@ class AutonomousRunController:
             RunPhase.QUEUED,
             site=replacement_site,
             job_id=replacement_job,
-            facts={"replacement_attempted": True},
+            facts=(
+                {
+                    "replacement_attempted": True,
+                    "replacement_attempted_job_id": job_id,
+                    "replacement_attempt_count": attempt_count,
+                    "replacement_last_attempt_at": attempt_timestamp,
+                }
+                if replacement_site == site and replacement_job == job_id
+                else {
+                    "replacement_attempted": False,
+                    "replacement_attempted_job_id": None,
+                    "replacement_attempt_count": 0,
+                    "replacement_last_attempt_at": None,
+                }
+            ),
         )
-        return current, replacement_site, replacement_job, replacement_remote, True
+        return current, replacement_site, replacement_job, replacement_remote
 
     def _fail_terminal(
         self,
@@ -617,6 +697,8 @@ class AutonomousRunController:
                 "last_terminal_job_id": job_id,
                 "replacement_attempted": False,
                 "replacement_attempted_job_id": None,
+                "replacement_attempt_count": 0,
+                "replacement_last_attempt_at": None,
             },
         )
         successor_job_id = OarClient(remote).submit(plan.scheduler_command)
@@ -630,6 +712,8 @@ class AutonomousRunController:
                 "continuation_pending": False,
                 "replacement_attempted": False,
                 "replacement_attempted_job_id": None,
+                "replacement_attempt_count": 0,
+                "replacement_last_attempt_at": None,
                 "resume_from_checkpoint": True,
                 "scheduler_command": list(plan.scheduler_command),
             },
@@ -699,10 +783,6 @@ class AutonomousRunController:
         job_id = state.job_id
         current_remote = remote
         oar = OarClient(current_remote)
-        replacement_attempted = _replacement_attempted_for_job(
-            dict(state.facts or {}),
-            job_id=job_id,
-        )
         current = state
         self.emit(
             f"run {state.run_id}: monitoring {site} job {job_id} "
@@ -717,14 +797,12 @@ class AutonomousRunController:
                     site,
                     job_id,
                     current_remote,
-                    replacement_attempted,
                 ) = self._handle_queued_status(
                     current,
                     status=status,
                     site=site,
                     job_id=job_id,
                     remote=current_remote,
-                    replacement_attempted=replacement_attempted,
                 )
                 oar = OarClient(current_remote)
             elif status.state is JobState.RUNNING:
@@ -903,5 +981,8 @@ __all__ = [
     "AutonomousRunConfig",
     "AutonomousRunController",
     "AutonomousRunError",
+    "DEFAULT_AUTONOMOUS_WALLTIME_SECONDS",
+    "MAX_REPLACEMENT_ATTEMPTS",
     "PolicyType",
+    "REPLACEMENT_RETRY_INTERVAL",
 ]

@@ -76,9 +76,10 @@ submits a bounded successor on the same site and the worker resumes from the
 newest valid checkpoint. It never restarts a continuation without checkpoint
 evidence. Review
 [`Grid'5000 operator`](../reference/grid5000-operator.md) before any explicit
-execution. The default is a 30-minute allocation with Europe/Paris
+execution. The default is a 20-minute allocation with Europe/Paris
 `auto` policy; `--policy-type day` is capped at one hour. A distant queued
-fallback receives at most one short replacement trial at a time, and a run
+fallback is rechecked across all configured sites in at most three bounded
+replacement rounds, with one trial at a time and a ten-minute cooldown. A run
 allows at most three checkpoint continuations by default.
 
 To run the local hooks against the repository, use:

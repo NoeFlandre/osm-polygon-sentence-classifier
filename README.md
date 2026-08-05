@@ -99,9 +99,11 @@ job ends before producing a verified model, the controller continues only from
 the newest complete checkpoint, on the same site, with a bounded successor
 job; it never restarts from scratch. The default limit is three continuation
 jobs and can be changed with `--max-continuations`. If OAR forecasts the
-fallback too late, it tries one replacement at a time and adopts only a
-replacement that is visibly running. Queue depth is recorded for diagnostics,
-never used as an ETA, and speculative multi-site submissions are not made.
+fallback too late, it probes every configured site, tries one replacement at
+a time, and repeats the bounded probe after a ten-minute cooldown, for at most
+three rounds. It adopts only a replacement that is visibly running. Queue
+depth is recorded for diagnostics, never used as an ETA, and speculative
+multi-site submissions are not made.
 
 Run the complete lifecycle with a pinned source/model pair:
 
@@ -115,7 +117,7 @@ uv run grid5000-landuse run \
 ```
 
 The default is every configured site, Europe/Paris policy selection, a
-30-minute allocation, and cleanup of the managed per-run remote data after
+20-minute allocation, and cleanup of the managed per-run remote data after
 the model commit and Trackio Space are verified. Use repeated `--site` flags
 to narrow discovery, `--keep-remote` to retain verified remote evidence, or
 `status --run-id RUN_ID` to inspect durable local state. The command also

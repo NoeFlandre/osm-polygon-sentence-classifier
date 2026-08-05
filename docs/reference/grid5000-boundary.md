@@ -24,7 +24,8 @@ The execution contract is:
 - install Hugging Face authentication through SSH stdin only;
 - run policy and quota checks immediately before one OAR submission;
 - record durable intent before OAR and refuse ambiguous resubmission;
-- monitor one job, with at most one sequential 20-minute replacement trial;
+- monitor one fallback job, with at most three sequential replacement rounds;
+  each round probes all configured sites and runs one 20-minute trial at a time;
 - retain two identity-bound checkpoints and submit at most three bounded
   successor jobs when a terminal job has no verified completion;
 - verify the completion manifest and remote Hub facts before success cleanup; and

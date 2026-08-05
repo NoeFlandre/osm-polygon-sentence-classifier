@@ -75,6 +75,29 @@ def test_replacement_cancels_a_trial_that_reaches_its_deadline() -> None:
     assert cancelled == [("grenoble", 11)]
 
 
+def test_replacement_keeps_the_fallback_when_it_starts_first() -> None:
+    cancelled: list[tuple[str, int]] = []
+
+    def status(site: str, job_id: int) -> JobStatus:
+        state = JobState.RUNNING if site == "nancy" else JobState.QUEUED
+        return JobStatus(job_id=job_id, state=state)
+
+    outcome = attempt_immediate_replacement(
+        fallback_site="nancy",
+        fallback_job_id=10,
+        candidates=(ReplacementCandidate("grenoble", {"queue": "production"}),),
+        submit=lambda _candidate: 11,
+        status=status,
+        cancel=lambda site, job_id: cancelled.append((site, job_id)),
+        sleep=lambda _seconds: None,
+        trial_seconds=1.0,
+        poll_seconds=0.1,
+    )
+
+    assert outcome == ReplacementOutcome("nancy", 10, False)
+    assert cancelled == [("grenoble", 11)]
+
+
 def test_replacement_does_not_swallow_a_submission_error() -> None:
     def submit(_candidate: ReplacementCandidate) -> int:
         raise RuntimeError("ambiguous scheduler response")

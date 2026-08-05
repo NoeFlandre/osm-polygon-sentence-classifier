@@ -136,7 +136,7 @@ def test_autonomous_run_without_execute_prints_a_side_effect_free_plan(capsys) -
     payload = json.loads(capsys.readouterr().out)
     assert payload["run_id"]
     assert payload["sites"]
-    assert payload["walltime_seconds"] == 1_800
+    assert payload["walltime_seconds"] == 1_200
     assert payload["publish"] is True
     assert payload["sync_trackio"] is True
 

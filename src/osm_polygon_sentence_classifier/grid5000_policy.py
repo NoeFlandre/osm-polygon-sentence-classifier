@@ -11,7 +11,7 @@ from .grid5000_oar import GRID5000_TIMEZONE, JobState, JobStatus
 
 IMMEDIATE_START_LIMIT = timedelta(minutes=10)
 SHORT_TRIAL_WALLTIME_SECONDS = 20 * 60
-TRIAL_TIMEOUT_SECONDS = 20 * 60
+TRIAL_TIMEOUT_SECONDS = 10 * 60
 TRIAL_POLL_SECONDS = 30.0
 
 
@@ -110,7 +110,7 @@ def attempt_immediate_replacement(
     trial_seconds: float = TRIAL_TIMEOUT_SECONDS,
     poll_seconds: float = TRIAL_POLL_SECONDS,
 ) -> ReplacementOutcome:
-    """Try candidates one at a time and adopt only a visibly running trial."""
+    """Try candidates sequentially and keep whichever allocation starts first."""
 
     if fallback_job_id <= 0:
         raise ValueError("fallback_job_id must be positive")
