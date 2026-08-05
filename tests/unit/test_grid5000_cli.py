@@ -116,3 +116,25 @@ def test_day_policy_defaults_to_a_short_thirty_minute_allocation(capsys) -> None
     payload = json.loads(capsys.readouterr().out)
     assert payload["allocation"]["walltime_seconds"] == 1_800
     assert payload["allocation"]["walltime"] == "00:30:00"
+
+
+def test_autonomous_run_without_execute_prints_a_side_effect_free_plan(capsys) -> None:
+    exit_code = grid5000_cli.main(
+        [
+            "run",
+            "--source-commit",
+            SOURCE_COMMIT,
+            "--model-revision",
+            MODEL_REVISION,
+            "--publish",
+            "--sync-trackio",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["run_id"]
+    assert payload["sites"]
+    assert payload["walltime_seconds"] == 1_800
+    assert payload["publish"] is True
+    assert payload["sync_trackio"] is True

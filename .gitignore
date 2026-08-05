@@ -25,6 +25,7 @@ tracking/
 *.jsonl
 
 # Credentials and local configuration never belong in this repository.
+.DS_Store
 .env
 .env.*
 !.env.example

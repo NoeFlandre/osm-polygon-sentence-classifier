@@ -81,6 +81,29 @@ def _default_operation_factory() -> OperationFactory:
         ) from error
 
 
+def ensure_model_repository(
+    repository_id: object,
+    *,
+    hub_api: Any | None = None,
+) -> None:
+    """Create the dedicated model repository without uploading an artifact."""
+
+    repository = _require_non_blank(repository_id, "repository_id")
+    try:
+        api = hub_api or _default_hub_api()
+        api.create_repo(
+            repo_id=repository,
+            repo_type="model",
+            exist_ok=True,
+        )
+    except ModelPublicationError:
+        raise
+    except Exception as error:
+        raise ModelPublicationError(
+            "Hugging Face model repository setup failed"
+        ) from error
+
+
 def _final_model_files(directory: Path) -> tuple[Path, ...]:
     if not directory.exists() or not directory.is_dir() or directory.is_symlink():
         raise ModelPublicationError("model output must be a real directory")
@@ -170,5 +193,6 @@ def publish_model_directory(
 __all__ = [
     "ModelPublicationError",
     "ModelPublicationResult",
+    "ensure_model_repository",
     "publish_model_directory",
 ]

@@ -1,3 +1,4 @@
+import json
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -24,6 +25,7 @@ from osm_polygon_sentence_classifier.grid5000_worker import (
     WorkerError,
     run_landuse_training_worker,
     validate_compute_node,
+    write_completion_manifest,
 )
 from osm_polygon_sentence_classifier.training import TrainingConfig, TrainingResult
 
@@ -124,6 +126,27 @@ def test_allocation_renders_one_bounded_gpu_request() -> None:
     )
 
 
+def test_allocation_renders_a_standard_production_request() -> None:
+    allocation = Grid5000Allocation(
+        site="grenoble",
+        walltime_seconds=1_800,
+        queue="production",
+        resource_type="standard",
+        policy_type="day",
+    )
+
+    assert allocation.scheduler_command("worker command") == (
+        "oarsub",
+        "-q",
+        "production",
+        "-t",
+        "day",
+        "-l",
+        "gpu=1,walltime=00:30:00",
+        "worker command",
+    )
+
+
 def test_day_allocation_accepts_only_a_one_hour_window() -> None:
     allocation = Grid5000Allocation(
         site="grenoble",
@@ -153,8 +176,11 @@ def test_worker_command_uses_allocation_local_locked_uv_environment() -> None:
         in command
     )
     assert 'export UV_CACHE_DIR="/tmp/osm-polygon-sentence-classifier-' in command
-    assert '"$HOME/.local/bin/uv" run --locked python -m ' in command
+    assert 'uv_bin="$(command -v uv || true)"' in command
+    assert '[ -n "$uv_bin" ] || uv_bin="$HOME/.local/bin/uv"' in command
+    assert 'exec "$uv_bin" run --locked --no-dev --extra training python -m ' in command
     assert '"$HOME/osm-polygon-sentence-classifier"' in command
+    assert '"$HOME/osm-polygon-sentence-classifier-data/grid5000/runs/' in command
 
 
 def test_plan_contains_a_read_only_clean_checkout_guard() -> None:
@@ -502,3 +528,56 @@ def test_worker_requires_hugging_face_auth_before_publishing_or_tracking(
         )
 
     assert not train_called
+
+
+def test_worker_completion_manifest_is_credential_free_and_identity_bound(
+    tmp_path: Path,
+) -> None:
+    output_directory = tmp_path / "model"
+    output_directory.mkdir()
+    identity = _identity(
+        training_config={
+            "model_name_or_path": "test-model",
+            "model_revision": MODEL_REVISION,
+        }
+    )
+    result = TrainingResult(output_directory=output_directory, train_output=object())
+
+    manifest = write_completion_manifest(
+        identity,
+        result,
+        remote_data_root=tmp_path,
+    )
+
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert payload["run_id"] == identity.run_id
+    assert payload["output_directory"] == "model"
+    assert "token" not in manifest.read_text(encoding="utf-8").casefold()
+    assert manifest.stat().st_mode & 0o777 == 0o600
+
+
+def test_worker_completion_manifest_rejects_output_outside_remote_root(
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    result = TrainingResult(
+        output_directory=tmp_path.parent / "outside-model",
+        train_output=object(),
+    )
+
+    with pytest.raises(WorkerError, match="outside"):
+        write_completion_manifest(identity, result, remote_data_root=tmp_path)
+
+
+def test_worker_completion_manifest_rejects_a_symlinked_remote_root(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    link = tmp_path / "managed"
+    link.symlink_to(target, target_is_directory=True)
+    identity = _identity()
+    result = TrainingResult(output_directory=target / "model", train_output=object())
+
+    with pytest.raises(WorkerError, match="symlink"):
+        write_completion_manifest(identity, result, remote_data_root=link)

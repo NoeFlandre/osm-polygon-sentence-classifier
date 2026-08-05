@@ -212,6 +212,75 @@ def run_landuse_training_worker(
     return train(config=effective_config, project_config=project_config)
 
 
+def write_completion_manifest(
+    identity: Grid5000RunIdentity,
+    result: TrainingResult,
+    *,
+    remote_data_root: Path,
+) -> Path:
+    """Write one atomic, credential-free manifest after successful training."""
+
+    raw_data_root = Path(remote_data_root).expanduser()
+    raw_output_directory = Path(result.output_directory).expanduser()
+    if not raw_data_root.is_absolute() or not raw_output_directory.is_absolute():
+        raise WorkerError("completion paths must be absolute")
+    if _contains_symlink(raw_data_root) or _contains_symlink(raw_output_directory):
+        raise WorkerError("completion paths must not be symlinks")
+    data_root = raw_data_root.resolve()
+    output_directory = raw_output_directory.resolve()
+    if not output_directory.is_relative_to(data_root):
+        raise WorkerError("training output is outside the managed remote data root")
+    data_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(data_root, 0o700)
+    manifest_path = data_root / "completion.json"
+    if manifest_path.is_symlink():
+        raise WorkerError("completion manifest cannot be a symlink")
+    publication = result.model_publication
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "run_id": identity.run_id,
+        "source_commit": identity.source_commit,
+        "dataset_revision": identity.dataset_revision,
+        "model_name_or_path": identity.model_name_or_path,
+        "model_revision": identity.model_revision,
+        "output_directory": str(output_directory.relative_to(data_root)),
+        "model_publication": (
+            {
+                "repository_id": publication.repository_id,
+                "commit_id": publication.commit_id,
+                "commit_url": publication.commit_url,
+                "files": list(publication.files),
+            }
+            if publication is not None
+            else None
+        ),
+        "tracking_space_id": result.tracking_space_id,
+    }
+    temporary = manifest_path.with_name(".completion.json.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, manifest_path)
+    except (OSError, TypeError, ValueError) as error:
+        temporary.unlink(missing_ok=True)
+        raise WorkerError("completion manifest cannot be written") from error
+    return manifest_path
+
+
+def _contains_symlink(path: Path) -> bool:
+    """Return whether an absolute path or one of its parents is a symlink."""
+
+    current = Path(path.anchor)
+    for component in path.parts[1:]:
+        current /= component
+        if current.is_symlink():
+            return True
+    return False
+
+
 def _identity_from_arguments(
     *,
     run_id: str,
@@ -253,6 +322,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--model-revision", required=True)
     parser.add_argument("--training-config-json", required=True)
     parser.add_argument("--checkout", type=Path, default=Path.cwd())
+    parser.add_argument(
+        "--remote-data-root",
+        type=Path,
+        default=Path.home() / REMOTE_DATA_SUBDIRECTORY,
+    )
     args = parser.parse_args(argv)
     try:
         identity = _identity_from_arguments(
@@ -262,7 +336,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             model_revision=args.model_revision,
             training_config_json=args.training_config_json,
         )
-        run_landuse_training_worker(identity, checkout=args.checkout)
+        result = run_landuse_training_worker(
+            identity,
+            checkout=args.checkout,
+            remote_data_root=args.remote_data_root,
+        )
+        write_completion_manifest(
+            identity,
+            result,
+            remote_data_root=args.remote_data_root,
+        )
     except WorkerError as error:
         parser.error(str(error))
     return 0
@@ -279,4 +362,5 @@ __all__ = [
     "main",
     "run_landuse_training_worker",
     "validate_compute_node",
+    "write_completion_manifest",
 ]

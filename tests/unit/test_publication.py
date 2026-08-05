@@ -5,6 +5,7 @@ import pytest
 
 from osm_polygon_sentence_classifier.publication import (
     ModelPublicationError,
+    ensure_model_repository,
     publish_model_directory,
 )
 
@@ -16,6 +17,27 @@ def _model_directory(tmp_path: Path) -> Path:
     (directory / "model.safetensors").write_bytes(b"weights")
     (directory / "tokenizer.json").write_text("{}")
     return directory
+
+
+def test_model_repository_setup_is_idempotent() -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeHub:
+        def create_repo(self, **kwargs: object) -> None:
+            calls.append(kwargs)
+
+    ensure_model_repository(
+        "NoeFlandre/osm-polygon-sentence-classifier",
+        hub_api=FakeHub(),
+    )
+
+    assert calls == [
+        {
+            "repo_id": "NoeFlandre/osm-polygon-sentence-classifier",
+            "repo_type": "model",
+            "exist_ok": True,
+        }
+    ]
 
 
 def test_model_publication_commits_only_final_root_files(tmp_path: Path) -> None:

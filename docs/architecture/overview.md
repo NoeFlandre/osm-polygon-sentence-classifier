@@ -36,11 +36,14 @@ The foundation keeps the first interfaces narrow and local:
 - `publication.py` validates a completed model directory and performs one
   add-only commit to the configured Hugging Face model repository. It rejects
   incomplete output before any Hub call.
-- `grid5000.py` owns the plan-first Grid'5000 boundary: immutable run identity,
-  bounded one-GPU allocation, policy and soft-quota preflight, fixed SSH/OAR
-  argument construction, a read-only pre-staged-checkout guard, and restrictive
-  durable submission state. Plan mode is side-effect free; only an explicit
-  `--execute` path can submit, and it refuses existing or ambiguous state.
+- `grid5000.py` keeps the immutable identity, policy-bounded allocation, fixed
+  SSH/OAR argument construction, and compatibility submission boundary.
+  `grid5000_sites.py` probes all configured frontends from `oarnodes -J`,
+  `grid5000_remote.py` stages exact clean checkouts and marker-owned data,
+  `grid5000_oar.py` normalizes scheduler lifecycle facts,
+  `grid5000_state.py` persists secure phases/events and recoverable legacy
+  reconciliation, and `grid5000_autonomous.py` coordinates the one-command
+  prepare/submit/monitor/verify/cleanup lifecycle.
 - `grid5000_worker.py` validates the Linux compute node, OAR job identity,
   exact clean checkout, and one visible CUDA GPU before invoking the existing
   training boundary. It uses a home-scoped remote project root, requires
@@ -49,11 +52,11 @@ The foundation keeps the first interfaces narrow and local:
   allocation-local scratch. Durable model/data/Trackio paths remain
   home-scoped, and it has no retry, scheduler, or CPU-fallback responsibility.
 
-The audit command is the only current data-consuming CLI command. It consumes
-the pinned dataset and writes only its managed cache, report, and manifest. The
-training entry point is an explicit call. The Grid'5000 planner consumes no
-dataset and makes no remote call; its explicit execution path is documented in
-the Grid'5000 operator reference.
+The audit command is the only local data-consuming command. The autonomous
+Grid'5000 worker consumes the pinned dataset only after the explicit
+`run --execute` gate. OAR submission, Hub provisioning, model publication,
+Trackio synchronization, and cleanup are each behind the same controller;
+plan mode remains side-effect free.
 
 Audit readiness is based on sentence-only model inputs. Mixed labels within a
 polygon and duplicate hashes across polygons remain diagnostic metrics, while

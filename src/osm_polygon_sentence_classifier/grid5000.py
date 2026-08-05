@@ -1,4 +1,4 @@
-"""Guarded, plan-first Grid'5000 submission boundary for landuse training."""
+"""Guarded Grid'5000 planning and submission boundaries for landuse training."""
 
 from __future__ import annotations
 
@@ -30,10 +30,14 @@ MINIMUM_HOME_HEADROOM_BYTES = 4 * 1024**3
 COMMAND_TIMEOUT_SECONDS = 120.0
 REMOTE_CHECKOUT_SUBDIRECTORY = "osm-polygon-sentence-classifier"
 REMOTE_DATA_SUBDIRECTORY = "osm-polygon-sentence-classifier-data"
+REMOTE_RUNS_SUBDIRECTORY = "grid5000/runs"
 WORKER_MODULE = "osm_polygon_sentence_classifier.grid5000_worker"
 
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
 _SITE_PATTERN = re.compile(r"[a-z][a-z0-9-]*")
+_RESOURCE_PROPERTY_PATTERN = re.compile(
+    r"gpu_mem>=[1-9][0-9]* AND production='(?:YES|NO)'"
+)
 _RUN_ID_PATTERN = re.compile(r"[0-9a-f]{20}")
 _JOB_ID_PATTERN = re.compile(r"(?:OAR_JOB_ID=|^)([1-9][0-9]*)$", re.MULTILINE)
 _QUOTA_ROW_PATTERN = re.compile(
@@ -264,16 +268,19 @@ class Grid5000Allocation:
     resource_type: str = "exotic"
     policy_type: str = "night"
     gpu_count: int = 1
+    resource_property: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.site, str) or _SITE_PATTERN.fullmatch(self.site) is None:
             raise Grid5000ConfigurationError(
                 "site must be a lowercase Grid'5000 site name"
             )
-        if self.queue != "default":
-            raise Grid5000ConfigurationError("queue must be 'default'")
-        if self.resource_type != "exotic":
-            raise Grid5000ConfigurationError("resource_type must be 'exotic'")
+        if self.queue not in {"default", "production"}:
+            raise Grid5000ConfigurationError("queue must be 'default' or 'production'")
+        if self.resource_type not in {"standard", "exotic"}:
+            raise Grid5000ConfigurationError(
+                "resource_type must be 'standard' or 'exotic'"
+            )
         if self.policy_type not in {"day", "night"}:
             raise Grid5000ConfigurationError("policy_type must be 'day' or 'night'")
         if (
@@ -298,6 +305,12 @@ class Grid5000Allocation:
             raise Grid5000ConfigurationError(
                 "day policy walltime_seconds must be at most one hour"
             )
+        if self.resource_property is not None and (
+            _RESOURCE_PROPERTY_PATTERN.fullmatch(self.resource_property) is None
+        ):
+            raise Grid5000ConfigurationError(
+                "resource_property must be a generated GPU production filter"
+            )
 
     @property
     def walltime(self) -> str:
@@ -312,18 +325,21 @@ class Grid5000Allocation:
 
         if not worker_command or "\n" in worker_command or "\r" in worker_command:
             raise Grid5000ConfigurationError("worker_command must be a single line")
-        return (
-            "oarsub",
-            "-q",
-            self.queue,
-            "-t",
-            self.resource_type,
-            "-t",
-            self.policy_type,
-            "-l",
-            f"gpu={self.gpu_count},walltime={self.walltime}",
-            worker_command,
+        command: list[str] = ["oarsub", "-q", self.queue]
+        if self.resource_property is not None:
+            command.extend(("-p", self.resource_property))
+        if self.resource_type == "exotic":
+            command.extend(("-t", self.resource_type))
+        command.extend(
+            (
+                "-t",
+                self.policy_type,
+                "-l",
+                f"gpu={self.gpu_count},walltime={self.walltime}",
+                worker_command,
+            )
         )
+        return tuple(command)
 
 
 def _ssh_argv(site: str, remote_command: str) -> tuple[str, ...]:
@@ -377,13 +393,29 @@ class Grid5000Plan:
             self.identity.model_revision,
             "--training-config-json",
             self.identity.training_config_json,
+            "--remote-data-root",
+            (
+                f'"$HOME/{REMOTE_DATA_SUBDIRECTORY}/{REMOTE_RUNS_SUBDIRECTORY}/'
+                f'{self.identity.run_id}"'
+            ),
         )
         return (
             f'cd "$HOME/{REMOTE_CHECKOUT_SUBDIRECTORY}" && '
             "umask 077 && "
             'export UV_PROJECT_ENVIRONMENT="/tmp/osm-polygon-sentence-classifier-${OAR_JOB_ID}.venv" && '
             'export UV_CACHE_DIR="/tmp/osm-polygon-sentence-classifier-${OAR_JOB_ID}-uv-cache" && '
-            'exec "$HOME/.local/bin/uv" ' + shlex.join(worker_args)
+            'uv_bin="$(command -v uv || true)"; '
+            '[ -n "$uv_bin" ] || uv_bin="$HOME/.local/bin/uv"; '
+            'test -x "$uv_bin" && exec "$uv_bin" '
+            + shlex.join(
+                (
+                    *worker_args[:2],
+                    "--no-dev",
+                    "--extra",
+                    "training",
+                    *worker_args[2:],
+                )
+            )
         )
 
     @property
@@ -444,6 +476,7 @@ class Grid5000Plan:
                 "policy_type": self.allocation.policy_type,
                 "queue": self.allocation.queue,
                 "resource_type": self.allocation.resource_type,
+                "resource_property": self.allocation.resource_property,
                 "site": self.allocation.site,
                 "walltime": self.allocation.walltime,
                 "walltime_seconds": self.allocation.walltime_seconds,
@@ -862,6 +895,7 @@ __all__ = [
     "QuotaUsage",
     "REMOTE_CHECKOUT_SUBDIRECTORY",
     "REMOTE_DATA_SUBDIRECTORY",
+    "REMOTE_RUNS_SUBDIRECTORY",
     "SubprocessCommandRunner",
     "parse_job_id",
     "parse_quota_output",

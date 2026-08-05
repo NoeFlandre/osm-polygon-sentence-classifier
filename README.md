@@ -6,8 +6,8 @@ Train a sentence classifier for OSM polygon descriptions, starting with the
 ## Status
 
 The repository contains a safe, testable project foundation, one explicit
-review command (`audit-landuse-dataset`), a typed training module, and a
-plan-first Grid'5000 operator.
+review command (`audit-landuse-dataset`), a typed training module, and an
+autonomous Grid'5000 operator.
 The audit consumes the pinned dataset in streaming mode. Its loader may
 populate the approved Hugging Face cache; the explicit artifact writer creates
 only the JSON report and polygon split manifest beneath the approved external
@@ -87,8 +87,34 @@ The equivalent Just recipes are documented in
 
 ## Grid'5000
 
-Grid'5000 execution is plan-first and explicitly guarded. For a side-effect-
-free plan, provide the source and model commits:
+The autonomous command probes all configured Grid'5000 sites concurrently,
+selects a factually compatible GPU, derives the correct OAR queue/resource
+type from `oarnodes`, stages the exact checkout, submits one short job, and
+monitors it. If OAR forecasts the fallback too late, it tries one replacement
+at a time and adopts only a replacement that is visibly running. Queue depth
+is recorded for diagnostics, never used as an ETA, and speculative multi-site
+submissions are not made.
+
+Run the complete lifecycle with a pinned source/model pair:
+
+```bash
+uv run grid5000-landuse run \
+  --source-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  --model-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+  --publish \
+  --sync-trackio \
+  --execute
+```
+
+The default is every configured site, Europe/Paris policy selection, a
+30-minute allocation, and cleanup of the managed per-run remote data after
+the model commit and Trackio Space are verified. Use repeated `--site` flags
+to narrow discovery, `--keep-remote` to retain verified remote evidence, or
+`status --run-id RUN_ID` to inspect durable local state. The command also
+reconciles the old ambiguous submission format only after read-only user-job
+checks across the configured sites; an active job always blocks resubmission.
+
+For a side-effect-free autonomous plan, omit `--execute`:
 
 ```bash
 uv run grid5000-landuse plan \
@@ -97,12 +123,13 @@ uv run grid5000-landuse plan \
   --model-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 ```
 
-Only `submit --execute` can run policy checks, read the remote soft quota, or
-submit one bounded one-GPU night allocation. Add `--publish --sync-trackio` to
-that explicit command when the completed model and metrics should be sent to
-the dedicated Hugging Face destinations. The worker requires Hugging Face
-authentication already available on Grid'5000; credentials are never placed
-in commands or durable state. It records local intent before OAR and fails
-closed on duplicate or ambiguous state.
+The `run --execute` gate is the only path that performs SSH, policy, quota,
+OAR, Hub provisioning, publication, or cleanup. It creates the dedicated
+model repository and Trackio static Space/bucket idempotently. HF credentials
+are sent to the selected frontend only through SSH stdin and never enter a
+command or durable state. The worker writes a credential-free completion
+manifest before the controller verifies Hub facts and cleans its exact marked
+run root. The legacy `submit` command remains available as a lower-level,
+single-site compatibility boundary.
 See [`docs/reference/grid5000-operator.md`](docs/reference/grid5000-operator.md)
 for the complete contract.

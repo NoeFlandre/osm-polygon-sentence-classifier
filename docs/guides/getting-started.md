@@ -7,9 +7,10 @@
 - Git
 - just
 
-The Seagate volume is required only when running the explicit audit command.
-The quality commands below do not create project datasets, checkpoints, models,
-Trackio run state, or other project data.
+The Seagate volume is required when running the explicit audit command or the
+autonomous operator because durable local run state belongs there. The quality
+commands below do not create project datasets, checkpoints, models, Trackio run
+state, or other project data.
 
 ## Local quality gates
 
@@ -50,30 +51,30 @@ and the finished Trackio project is synchronized to the public static
 [Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-trackio)
 through its dedicated Bucket.
 
-The `grid5000-landuse` command is plan-first. It requires pinned source and
-model revisions, prints the deterministic run identity, and makes no remote
-call unless `submit --execute` is explicitly supplied:
+The autonomous `grid5000-landuse run` command requires a pinned model revision
+and uses the current clean source commit by default. Without `--execute` it
+prints a deterministic, side-effect-free plan:
 
 ```bash
-uv run grid5000-landuse plan \
-  --site nancy \
+uv run grid5000-landuse run \
   --source-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   --model-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
   --publish \
   --sync-trackio
 ```
 
-The execution path performs both Grid'5000 usage-policy checks, reads the home
-soft quota, records submission intent before OAR, and refuses duplicates or
-ambiguous state. With the two explicit flags, it publishes only after local
-model output validation and synchronizes completed metrics to the static
-Trackio Space. The worker requires a pre-existing Hugging Face login or
-`HF_TOKEN` on Grid'5000; it never records the credential. It does not clean
-data automatically or retry submissions. Review
+Add `--execute` to perform the complete lifecycle. It probes all configured
+sites, derives the live resource class, performs both Grid'5000 usage-policy
+checks, reads the home soft quota, records durable intent before OAR, and
+refuses unsafe duplicate or ambiguous submissions. With the two publication
+flags, it creates the dedicated model/Trackio destinations idempotently,
+publishes only after final model validation, verifies the Hub results, and
+cleans only the marked per-run remote root. The worker receives HF auth over
+SSH stdin and never records the credential. Review
 [`Grid'5000 operator`](../reference/grid5000-operator.md) before any explicit
-execution. For an immediately available daytime GPU, add
-`--policy-type day`; it defaults to a 30-minute allocation and is capped at
-one hour. Probe reachable sites first and submit exactly one selected site.
+execution. The default is a 30-minute allocation with Europe/Paris
+`auto` policy; `--policy-type day` is capped at one hour. A distant queued
+fallback receives at most one short replacement trial at a time.
 
 To run the local hooks against the repository, use:
 

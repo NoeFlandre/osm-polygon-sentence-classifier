@@ -1,111 +1,117 @@
 # Grid'5000 operator
 
-## Plan first
-
-The CLI requires pinned source and model revisions. The dataset revision is
-fixed by the landuse contract. Replace the example revisions with the exact
-lowercase 40-character commits selected for the run:
+The autonomous entry point is `grid5000-landuse`. It owns one pinned landuse
+training run from remote preparation through verified publication:
 
 ```bash
-uv run grid5000-landuse plan \
-  --site grenoble \
-  --source-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-  --model-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-```
-
-Unless `--model-name` is supplied, the run uses
-[`jhu-clsp/mmBERT-small`](https://huggingface.co/jhu-clsp/mmBERT-small), a
-140M-parameter multilingual encoder whose encoder is frozen during training.
-Add `--publish --sync-trackio` to pin final model publication and completed
-Trackio synchronization into the run identity:
-
-```bash
-uv run grid5000-landuse plan \
-  --site grenoble \
+uv run grid5000-landuse run \
   --source-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   --model-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
   --publish \
   --sync-trackio \
-  --policy-type day
+  --execute
 ```
 
-The command prints JSON containing the deterministic run ID and the exact OAR
-request. It does not contact Grid'5000, create local state, load the dataset,
-or create model artifacts.
+`--source-commit` may be omitted when the local checkout is clean; the command
+then uses its current Git `HEAD`. The model revision remains explicit so a run
+cannot silently move to a different base model. The dataset revision is fixed
+by the landuse dataset contract. The default model is
+[`jhu-clsp/mmBERT-small`](https://huggingface.co/jhu-clsp/mmBERT-small), with
+the encoder frozen and only the classifier head trained.
 
-The site is not fixed to Nancy. The read-only site inventory used for an
-immediate attempt should cover every reachable configured frontend; select a
-single site only when its `oarnodes` inventory shows an idle compatible GPU and
-its checkout, authentication, policy, and quota gates are ready. Queue depth is
-not an ETA and must not be used to submit speculative jobs.
+## Plan and recovery commands
 
-`submit` is still plan-only unless the explicit gate is present:
+Without `--execute`, `run` prints a deterministic JSON plan and performs no
+SSH, scheduler, Hub, dataset, or local-state mutation:
 
 ```bash
-uv run grid5000-landuse submit \
-  --site nancy \
+uv run grid5000-landuse run \
   --source-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   --model-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 ```
 
-Only a separately reviewed command ending in `--execute` can run SSH, policy,
-quota, and OAR operations. The publication flags remain opt-in and are part of
-the immutable run identity.
+The autonomous command defaults to all configured frontends, a 30-minute
+allocation, Europe/Paris automatic policy selection, and removal of the
+successful run's marked remote data after Hub verification. Repeat `--site` to
+restrict discovery, or use `--keep-remote` to retain the successful run root.
 
-## Execution gates
-
-For an explicit execution, the operator performs these actions in order:
-
-1. refuse an existing or ambiguous local run state;
-2. verify the pre-staged remote checkout has the exact source commit and a
-   clean working tree;
-3. run `usagepolicycheck -l --sites SITE`;
-4. run `usagepolicycheck -t`;
-5. parse the remote home quota and require 4 GiB of soft headroom;
-6. atomically write a `submitting` intent below the approved external data
-   root;
-7. make one bounded OAR request for one day or night GPU allocation; and
-8. record the single returned job ID.
-
-Any failed check stops before OAR. An OAR error leaves the intent ambiguous;
-the operator does not retry automatically. No cleanup, site racing, queue-time
-prediction, or checkpoint editing is performed. When the explicit publication
-flags are present, the worker validates and uploads only the completed model's
-top-level files after training, then synchronizes finished Trackio metrics to
-the configured static Space and Bucket. It requires an existing Grid'5000
-Hugging Face login or `HF_TOKEN`; credentials are not placed in commands or
-state.
-
-## Compute-node contract
-
-The scheduled worker runs from the staged clean checkout and validates:
-
-- Linux and a numeric `OAR_JOB_ID`;
-- the exact source commit recorded in the identity;
-- a clean Git checkout; and
-- CUDA availability with exactly one visible GPU.
-
-It then invokes `train_landuse_classifier` with the pinned model revision and a
-remote `ProjectConfig` rooted beneath the Grid'5000 user's home. There is no
-CPU or MPS fallback. The worker does not publish checkpoints or retry a failed
-publication. The scheduler command uses the pre-staged
-`$HOME/.local/bin/uv` executable with `--locked`, while `UV_PROJECT_ENVIRONMENT`
-and `UV_CACHE_DIR` point to job-local `/tmp` paths. This keeps the large Linux
-CUDA environment off the persistent home quota; model caches, outputs,
-checkpoints, and Trackio state remain under the managed home data root. The
-training configuration retains only one rolling checkpoint; the final model is
-the durable artifact to publish.
-
-## Local state and recovery boundary
-
-Local state is kept only under:
-
-```text
-/Volumes/Seagate M3/projects/osm-polygon-sentence-classifier/grid5000/runs/<run-id>/state.json
+```bash
+uv run grid5000-landuse status --run-id RUN_ID
+uv run grid5000-landuse resume --run-id RUN_ID --execute
 ```
 
-The run directory is mode `0700` and the state document is mode `0600`. The
-state contains the immutable identity, exact SSH/OAR submission command, phase,
-and job ID; it contains no credentials. A later status/resume implementation
-must inspect this evidence and live OAR state before reattaching. It must never
-infer that an absent job ID is safe to resubmit.
+`status` is local and read-only. `resume` uses the persisted identity and
+active site/job, and never creates a second submission from a submitted,
+queued, or running state. A `submitting` state remains intentionally
+ambiguous: inspect scheduler state before taking any manual action. Older
+state documents are archived only after read-only current-user OAR checks find
+no active jobs; any active job blocks reconciliation.
+
+The compatibility `submit` command remains available for a manually selected
+site. It is plan-only unless `--execute` is present; new workflows should use
+`run`.
+
+## Site discovery and policy
+
+An executing `run` probes every configured site concurrently using bounded SSH
+calls. It records parsed facts from `oarnodes -J`, home quota/free space, and a
+queue-depth diagnostic. Queue depth is never interpreted as an ETA. A site is
+eligible only when it is reachable, has a compatible GPU and enough persistent
+headroom, and its observed GPU facts support the request.
+
+The OAR queue, `standard`/`exotic` resource type, and
+`gpu_mem>=... AND production='YES|NO'` property are derived from the selected
+site's live inventory. This supports both Grenoble-style production/standard
+resources and Nancy-style default/exotic resources without hard-coding either
+site. Only one fallback job is submitted. If its forecast is more than ten
+minutes away, the controller tries replacement sites sequentially with a
+20-minute trial allocation. It cancels a trial that misses its immediate-start
+window or reaches its deadline, adopts a trial only after it is visibly
+`Running`, and cancels the old fallback only after adoption.
+
+The complete walltime must fit the selected policy window. During weekdays,
+automatic policy uses `day` only for a complete allocation inside 09:00–19:00
+Europe/Paris; otherwise it uses `night`. The default walltime is 30 minutes and
+day allocations remain capped at one hour. No speculative multi-site jobs or
+unbounded retries are used.
+
+## Remote lifecycle
+
+The selected frontend receives a bounded SSH sequence that:
+
+1. clones or reuses the managed repository checkout;
+2. fetches the requested commit and verifies a clean detached tree;
+3. creates the exact per-run data root with a mode-600 ownership marker;
+4. installs the local Hugging Face token through SSH stdin, never a command;
+5. rechecks policy, quota, and the exact checkout before OAR submission; and
+6. submits the locked worker with the `training` extra and allocation-local
+   `/tmp` environment/cache paths.
+
+The worker requires Linux, its numeric OAR job identity, the exact source
+commit, a clean checkout, and exactly one visible CUDA GPU. It streams the
+pinned dataset through the clean training iterator, saves the final model and
+Trackio data beneath the marked run root, and writes a credential-free
+completion manifest. When requested, it publishes the final model to the
+dedicated Hugging Face model repository and synchronizes Trackio to its static
+Space and Bucket.
+
+After a successful terminal job, the controller validates the manifest
+identity, verifies the recorded model commit and Trackio Space through the Hub,
+marks the remote run complete, and removes only that exact marked run root
+unless `--keep-remote` was supplied. Failed or ambiguous runs are retained for
+diagnosis; an interrupted local monitor leaves scheduler work untouched for
+`resume`.
+
+## Local state and credentials
+
+Durable local state is stored only beneath:
+
+```text
+/Volumes/Seagate M3/projects/osm-polygon-sentence-classifier/grid5000/runs/<run-id>/
+```
+
+The run directory is mode `0700`, the state and event documents are mode
+`0600`, and state facts reject credential-like keys. Tokens are read from the
+local Hugging Face token file or `HF_TOKEN`, sent to the selected frontend via
+stdin, and never written to commands, events, completion manifests, or the
+local state JSON.

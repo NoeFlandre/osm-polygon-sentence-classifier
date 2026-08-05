@@ -7,6 +7,7 @@ from osm_polygon_sentence_classifier.tracking import (
     TRACKIO_SPACE_ID,
     TrackingError,
     TrackioSettings,
+    ensure_trackio_resources,
     settings_for,
     sync_project_to_static_space,
 )
@@ -64,3 +65,32 @@ def test_tracking_sync_wraps_trackio_failures(monkeypatch) -> None:
 
     with pytest.raises(TrackingError, match="static Space"):
         sync_project_to_static_space(settings_for(ProjectConfig()))
+
+
+def test_trackio_resource_setup_creates_the_static_space_and_bucket() -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class FakeHub:
+        def create_repo(self, **kwargs: object) -> None:
+            calls.append(("repo", kwargs))
+
+        def create_bucket(self, **kwargs: object) -> None:
+            calls.append(("bucket", kwargs))
+
+    ensure_trackio_resources(settings_for(ProjectConfig()), hub_api=FakeHub())
+
+    assert calls == [
+        (
+            "repo",
+            {
+                "repo_id": TRACKIO_SPACE_ID,
+                "repo_type": "space",
+                "space_sdk": "static",
+                "exist_ok": True,
+            },
+        ),
+        (
+            "bucket",
+            {"bucket_id": TRACKIO_BUCKET_ID, "exist_ok": True},
+        ),
+    ]

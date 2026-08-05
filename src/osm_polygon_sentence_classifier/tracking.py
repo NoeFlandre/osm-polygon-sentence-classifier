@@ -37,6 +37,29 @@ def settings_for(config: ProjectConfig) -> TrackioSettings:
     return TrackioSettings(project=config.project_name, directory=directory)
 
 
+def ensure_trackio_resources(
+    settings: TrackioSettings,
+    *,
+    hub_api: Any | None = None,
+) -> None:
+    """Create the dedicated static Space and bucket idempotently."""
+
+    try:
+        api = hub_api
+        if api is None:
+            hub = import_module("huggingface_hub")
+            api = hub.HfApi()
+        api.create_repo(
+            repo_id=settings.space_id,
+            repo_type="space",
+            space_sdk="static",
+            exist_ok=True,
+        )
+        api.create_bucket(bucket_id=settings.bucket_id, exist_ok=True)
+    except Exception as error:
+        raise TrackingError("Trackio Space and bucket provisioning failed") from error
+
+
 def sync_project_to_static_space(settings: TrackioSettings) -> str:
     """Synchronize a completed local project to the static Trackio Space."""
 
@@ -62,6 +85,7 @@ __all__ = [
     "TRACKING_SUBDIRECTORY",
     "TrackingError",
     "TrackioSettings",
+    "ensure_trackio_resources",
     "settings_for",
     "sync_project_to_static_space",
 ]
