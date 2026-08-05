@@ -70,11 +70,13 @@ The OAR queue, `standard`/`exotic` resource type, and a property combining
 inventory. This prevents OAR from assigning an observed incompatible GPU such
 as a P100. It supports both Grenoble-style production/standard resources and
 Nancy-style default/exotic resources without hard-coding either site. Only one
-fallback job is submitted. If its forecast is more than ten
-minutes away, the controller tries replacement sites sequentially with a
-20-minute trial allocation. It cancels a trial that misses its immediate-start
-window or reaches its deadline, adopts a trial only after it is visibly
-`Running`, and cancels the old fallback only after adoption.
+fallback job is live at a time. If its forecast is more than ten minutes away,
+the controller tries replacement sites sequentially with a 20-minute trial
+allocation. It cancels a trial that misses its immediate-start window or
+reaches its deadline, adopts a trial only after it is visibly `Running`, and
+cancels the old fallback only after adoption. Each new checkpoint successor
+gets its own replacement decision; an earlier job's trial does not suppress
+optimization for a later queued successor.
 
 The complete walltime must fit the selected policy window. During weekdays,
 automatic policy uses `day` only for a complete allocation inside 09:00–19:00

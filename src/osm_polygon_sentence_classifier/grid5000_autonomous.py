@@ -116,6 +116,13 @@ def _now() -> datetime:
     return datetime.now().astimezone()
 
 
+def _replacement_attempted_for_job(facts: Mapping[str, object], *, job_id: int) -> bool:
+    return (
+        facts.get("replacement_attempted") is True
+        and facts.get("replacement_attempted_job_id") == job_id
+    )
+
+
 class AutonomousRunController:
     """Prepare, submit, monitor, publish, verify, and clean one run."""
 
@@ -481,7 +488,10 @@ class AutonomousRunController:
         current = self._transition(
             current,
             RunPhase.QUEUED,
-            facts={"replacement_attempted": True},
+            facts={
+                "replacement_attempted": True,
+                "replacement_attempted_job_id": job_id,
+            },
         )
         replacement_site, replacement_job, replacement_remote = self._try_replacement(
             fallback_site=site,
@@ -605,7 +615,8 @@ class AutonomousRunController:
                 "continuation_pending": True,
                 "continuation_reason": reason,
                 "last_terminal_job_id": job_id,
-                "replacement_attempted": True,
+                "replacement_attempted": False,
+                "replacement_attempted_job_id": None,
             },
         )
         successor_job_id = OarClient(remote).submit(plan.scheduler_command)
@@ -617,7 +628,8 @@ class AutonomousRunController:
             facts={
                 "continuation_count": raw_count + 1,
                 "continuation_pending": False,
-                "replacement_attempted": True,
+                "replacement_attempted": False,
+                "replacement_attempted_job_id": None,
                 "resume_from_checkpoint": True,
                 "scheduler_command": list(plan.scheduler_command),
             },
@@ -687,8 +699,9 @@ class AutonomousRunController:
         job_id = state.job_id
         current_remote = remote
         oar = OarClient(current_remote)
-        replacement_attempted = bool(
-            dict(state.facts or {}).get("replacement_attempted", False)
+        replacement_attempted = _replacement_attempted_for_job(
+            dict(state.facts or {}),
+            job_id=job_id,
         )
         current = state
         self.emit(

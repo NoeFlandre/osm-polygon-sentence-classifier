@@ -12,6 +12,7 @@ from osm_polygon_sentence_classifier.grid5000_autonomous import (
     AutonomousRunConfig,
     AutonomousRunController,
     AutonomousRunError,
+    _replacement_attempted_for_job,
 )
 from osm_polygon_sentence_classifier.grid5000_remote import RemotePreparationResult
 from osm_polygon_sentence_classifier.grid5000_sites import (
@@ -242,6 +243,17 @@ def _config() -> AutonomousRunConfig:
     )
 
 
+def test_legacy_replacement_flag_does_not_block_the_current_job() -> None:
+    assert not _replacement_attempted_for_job(
+        {"replacement_attempted": True},
+        job_id=99,
+    )
+    assert _replacement_attempted_for_job(
+        {"replacement_attempted": True, "replacement_attempted_job_id": 99},
+        job_id=99,
+    )
+
+
 def test_controller_runs_prepare_submit_monitor_publish_verify_and_cleanup(
     tmp_path: Path,
     monkeypatch,
@@ -334,6 +346,7 @@ def test_controller_continues_from_a_checkpoint_after_walltime_termination(
     facts = dict(state.facts or {})
     assert facts["continuation_count"] == 1
     assert facts["resume_from_checkpoint"] is True
+    assert facts["replacement_attempted"] is False
 
 
 def test_controller_stops_after_the_continuation_limit(
