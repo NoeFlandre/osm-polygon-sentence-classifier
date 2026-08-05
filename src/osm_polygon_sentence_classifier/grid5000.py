@@ -341,11 +341,17 @@ class Grid5000Plan:
 
     @property
     def worker_command(self) -> str:
-        """Return the fixed remote checkout command for the compute worker."""
+        """Return the fixed compute-node command for the training worker.
+
+        The locked Python environment and uv cache live in allocation-local
+        scratch rather than consuming the user's persistent home quota. Model
+        caches, outputs, checkpoints, and Trackio state remain under the
+        worker's managed persistent data root.
+        """
 
         worker_args = (
-            "uv",
             "run",
+            "--locked",
             "python",
             "-m",
             WORKER_MODULE,
@@ -360,8 +366,12 @@ class Grid5000Plan:
             "--training-config-json",
             self.identity.training_config_json,
         )
-        return f'cd "$HOME/{REMOTE_CHECKOUT_SUBDIRECTORY}" && exec ' + shlex.join(
-            worker_args
+        return (
+            f'cd "$HOME/{REMOTE_CHECKOUT_SUBDIRECTORY}" && '
+            "umask 077 && "
+            'export UV_PROJECT_ENVIRONMENT="/tmp/osm-polygon-sentence-classifier-${OAR_JOB_ID}.venv" && '
+            'export UV_CACHE_DIR="/tmp/osm-polygon-sentence-classifier-${OAR_JOB_ID}-uv-cache" && '
+            'exec "$HOME/.local/bin/uv" ' + shlex.join(worker_args)
         )
 
     @property

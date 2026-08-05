@@ -124,6 +124,18 @@ def test_allocation_renders_one_bounded_gpu_request() -> None:
     )
 
 
+def test_worker_command_uses_allocation_local_locked_uv_environment() -> None:
+    command = _plan().worker_command
+
+    assert (
+        'export UV_PROJECT_ENVIRONMENT="/tmp/osm-polygon-sentence-classifier-'
+        in command
+    )
+    assert 'export UV_CACHE_DIR="/tmp/osm-polygon-sentence-classifier-' in command
+    assert '"$HOME/.local/bin/uv" run --locked python -m ' in command
+    assert '"$HOME/osm-polygon-sentence-classifier"' in command
+
+
 def test_plan_contains_a_read_only_clean_checkout_guard() -> None:
     plan = _plan()
 

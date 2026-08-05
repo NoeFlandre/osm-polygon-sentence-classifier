@@ -81,7 +81,11 @@ The scheduled worker runs from the staged clean checkout and validates:
 It then invokes `train_landuse_classifier` with the pinned model revision and a
 remote `ProjectConfig` rooted beneath the Grid'5000 user's home. There is no
 CPU or MPS fallback. The worker does not publish checkpoints or retry a failed
-publication.
+publication. The scheduler command uses the pre-staged
+`$HOME/.local/bin/uv` executable with `--locked`, while `UV_PROJECT_ENVIRONMENT`
+and `UV_CACHE_DIR` point to job-local `/tmp` paths. This keeps the large Linux
+CUDA environment off the persistent home quota; model caches, outputs,
+checkpoints, and Trackio state remain under the managed home data root.
 
 ## Local state and recovery boundary
 

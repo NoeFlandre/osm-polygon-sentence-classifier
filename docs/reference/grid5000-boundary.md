@@ -33,6 +33,8 @@ before an allocation is requested.
 
 The operator has no automatic retry, checkpoint editing, publication, or Hub
 upload path. Remote durable outputs belong under the Grid'5000 user's home;
-allocation scratch is not a model or checkpoint store. Stopping local
-monitoring is therefore not a reason to resubmit. Reconciliation and validated
-resume remain a later milestone.
+the locked uv environment and its package cache are created in allocation-local
+`/tmp` scratch so they do not consume persistent home quota. Scratch is not a
+model, checkpoint, or Trackio store. Stopping local monitoring is therefore not
+a reason to resubmit. Reconciliation and validated resume remain a later
+milestone.

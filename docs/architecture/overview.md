@@ -45,7 +45,9 @@ The foundation keeps the first interfaces narrow and local:
   exact clean checkout, and one visible CUDA GPU before invoking the existing
   training boundary. It uses a home-scoped remote project root, requires
   existing Hugging Face authentication when publication or Trackio sync is
-  enabled, and has no retry, scheduler, or CPU-fallback responsibility.
+  enabled, and bootstraps the locked uv environment and package cache in
+  allocation-local scratch. Durable model/data/Trackio paths remain
+  home-scoped, and it has no retry, scheduler, or CPU-fallback responsibility.
 
 The audit command is the only current data-consuming CLI command. It consumes
 the pinned dataset and writes only its managed cache, report, and manifest. The
