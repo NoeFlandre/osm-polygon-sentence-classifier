@@ -16,7 +16,7 @@ The autonomous identity pins:
 The execution contract is:
 
 - probe all configured frontends with bounded, fixed-argument SSH;
-- select a reachable site with a compatible GPU and at least 8 GiB of
+- select a reachable site with a compatible x86_64 GPU and at least 8 GiB of
   persistent soft-quota headroom;
 - derive OAR queue, resource type, production property, and Europe/Paris policy
   from live facts and the requested short walltime;
@@ -39,17 +39,20 @@ does not cancel the active scheduler job; `resume --run-id RUN_ID --execute`
 reattaches to the durable state.
 
 The compute worker validates Linux, OAR identity, exact checkout revision and
-cleanliness, exactly one visible CUDA GPU, and CUDA capability `>= 7.5` before
-entering the existing training module. The site probe applies the same floor,
-while the worker rechecks the actual assigned device. It runs the locked
-`training` dependency extra with the uv
+cleanliness, an x86_64 compute-node architecture, exactly one visible CUDA GPU,
+and CUDA capability `>= 7.5` before entering the existing training module. The
+site probe applies the same architecture and capability floor, while the worker
+rechecks the actual assigned device and the executability of `uv`. The locked
+`training` dependency extra runs with the uv
 environment and package cache in allocation-local `/tmp`. Durable model,
 checkpoint, dataset-cache, and Trackio paths remain below the managed remote
 run root. Each complete checkpoint carries the immutable run identity. A
 successor worker must find the newest complete identity-matching checkpoint and
 passes it to `Trainer.train(resume_from_checkpoint=...)`; it never silently
 starts a continuation from scratch. The completion manifest contains no token
-or raw scheduler output.
+or raw scheduler output. ARM/aarch64 nodes are deliberately ineligible until
+an architecture-specific locked runtime is provided; this prevents an x86_64
+uv binary from reaching an incompatible compute node.
 
 The local state root is the approved external data volume:
 

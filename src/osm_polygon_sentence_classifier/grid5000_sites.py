@@ -36,6 +36,7 @@ DEFAULT_SITES: Final[tuple[str, ...]] = (
 DEFAULT_MAX_WORKERS: Final[int] = 4
 DEFAULT_GPU_MEMORY_MB: Final[int] = 8_000
 DEFAULT_CUDA_CAPABILITY: Final[tuple[int, int]] = MINIMUM_CUDA_CAPABILITY
+SUPPORTED_CPU_ARCHITECTURE: Final[str] = "x86_64"
 _PROBE_TIMEOUT_SECONDS: Final[float] = 30.0
 _OAR_NODES_COMMAND: Final[str] = "oarnodes -J"
 _FREE_HOME_COMMAND: Final[str] = (
@@ -75,6 +76,7 @@ class GpuResource:
     jobs_assigned: int
     production: bool
     exotic: bool
+    cpu_architecture: str = SUPPORTED_CPU_ARCHITECTURE
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +100,7 @@ class SiteProbe:
             for resource in self.resources
             if resource.gpu_memory_mb >= requirements.gpu_memory_mb
             and resource.cuda_capability >= requirements.cuda_capability
+            and resource.cpu_architecture == SUPPORTED_CPU_ARCHITECTURE
         )
 
     def has_compatible(self, requirements: SiteRequirements) -> bool:
@@ -144,6 +147,7 @@ class SiteProbe:
             "resources": [
                 {
                     "cuda_capability": list(resource.cuda_capability),
+                    "cpu_architecture": resource.cpu_architecture,
                     "exotic": resource.exotic,
                     "gpu_memory_mb": resource.gpu_memory_mb,
                     "jobs_assigned": resource.jobs_assigned,
@@ -168,6 +172,14 @@ def _coerce_flag(value: object) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).upper() == "YES"
+
+
+def _coerce_cpu_architecture(value: object) -> str:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized:
+            return "x86_64" if normalized == "amd64" else normalized
+    return "unknown"
 
 
 def _coerce_jobs(value: object) -> int | None:
@@ -249,6 +261,7 @@ def parse_oarnodes_stdout(stdout: str) -> tuple[GpuResource, ...]:
                 jobs_assigned=jobs,
                 production=_coerce_flag(record.get("production", "NO")),
                 exotic=_coerce_flag(record.get("exotic", "NO")),
+                cpu_architecture=_coerce_cpu_architecture(record.get("cpuarch")),
             )
         )
     return tuple(resources)
@@ -267,6 +280,7 @@ def choose_allocation(
         for resource in resources
         if resource.gpu_memory_mb >= effective.gpu_memory_mb
         and resource.cuda_capability >= effective.cuda_capability
+        and resource.cpu_architecture == SUPPORTED_CPU_ARCHITECTURE
     ]
     if not compatible:
         return None
@@ -286,6 +300,7 @@ def choose_allocation(
         "resource_property": (
             f"gpu_mem>={effective.gpu_memory_mb} "
             f"AND production='{production_value}' "
+            f"AND cpuarch='{SUPPORTED_CPU_ARCHITECTURE}' "
             f"AND gpu_compute_capability IN ({capabilities})"
         ),
     }
@@ -416,6 +431,7 @@ __all__ = [
     "GpuResource",
     "SiteProbe",
     "SiteRequirements",
+    "SUPPORTED_CPU_ARCHITECTURE",
     "choose_allocation",
     "parse_oarnodes_stdout",
     "probe_all_sites",

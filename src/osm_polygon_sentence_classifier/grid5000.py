@@ -39,6 +39,7 @@ _SITE_PATTERN = re.compile(r"[a-z][a-z0-9-]*")
 _CUDA_CAPABILITY_LITERAL = r"[0-9]+\.[0-9]+"
 _RESOURCE_PROPERTY_PATTERN = re.compile(
     rf"gpu_mem>=[1-9][0-9]* AND production='(?:YES|NO)' AND "
+    rf"cpuarch='x86_64' AND "
     rf"gpu_compute_capability IN \('{_CUDA_CAPABILITY_LITERAL}'"
     rf"(?:, '{_CUDA_CAPABILITY_LITERAL}')*\)"
 )
@@ -417,12 +418,18 @@ class Grid5000Plan:
             worker_command += " --require-checkpoint"
         return (
             f'cd "$HOME/{REMOTE_CHECKOUT_SUBDIRECTORY}" && '
-            "umask 077 && "
+            "umask 077 && set -eu && "
             'export UV_PROJECT_ENVIRONMENT="/tmp/osm-polygon-sentence-classifier-${OAR_JOB_ID}.venv" && '
             'export UV_CACHE_DIR="/tmp/osm-polygon-sentence-classifier-${OAR_JOB_ID}-uv-cache" && '
+            'cpu_architecture="$(uname -m)"; '
+            '[ "$cpu_architecture" = "x86_64" ] || '
+            '{ echo "unsupported compute-node architecture: $cpu_architecture" >&2; exit 78; }; '
             'uv_bin="$(command -v uv || true)"; '
             '[ -n "$uv_bin" ] || uv_bin="$HOME/.local/bin/uv"; '
-            'test -x "$uv_bin" && exec "$uv_bin" ' + worker_command
+            'test -x "$uv_bin"; '
+            '"$uv_bin" --version >/dev/null 2>&1 || '
+            '{ echo "uv is not executable on compute-node architecture $cpu_architecture" >&2; exit 78; }; '
+            'exec "$uv_bin" ' + worker_command
         )
 
     @property

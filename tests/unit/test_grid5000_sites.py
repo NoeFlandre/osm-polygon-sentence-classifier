@@ -24,6 +24,7 @@ def _record(
     jobs: int = 0,
     gpu_mem: object = 16_000,
     capability: int = 8,
+    cpuarch: str = "x86_64",
     production: str = "NO",
     exotic: str = "NO",
     state: str = "Alive",
@@ -34,6 +35,7 @@ def _record(
         "jobs": jobs,
         "gpu_mem": gpu_mem,
         "gpu_compute_capability_major": capability,
+        "cpuarch": cpuarch,
         "production": production,
         "exotic": exotic,
     }
@@ -53,8 +55,22 @@ def test_oarnodes_parser_keeps_only_complete_alive_gpu_records() -> None:
     assert resources[0].gpu_memory_mb == 16_000
     assert resources[0].cuda_capability == (8, 0)
     assert resources[0].jobs_assigned == 0
+    assert resources[0].cpu_architecture == "x86_64"
     assert not resources[0].production
     assert not resources[0].exotic
+
+
+def test_site_selection_rejects_aarch64_until_the_remote_runtime_supports_it() -> None:
+    probe = SiteProbe(
+        name="lyon",
+        reachable=True,
+        resources=tuple(parse_oarnodes_stdout(_inventory(_record(cpuarch="aarch64")))),
+        persistent_free_bytes=10 * 1024**3,
+        queued_jobs=0,
+    )
+
+    with pytest.raises(RuntimeError, match="compatible"):
+        select_site((probe,), requirements=SiteRequirements())
 
 
 def test_oarnodes_parser_accepts_the_live_keyed_payload_shape() -> None:
@@ -101,7 +117,8 @@ def test_choose_allocation_matches_reference_production_resource_rules() -> None
         "queue": "production",
         "resource_type": "standard",
         "resource_property": (
-            "gpu_mem>=8000 AND production='YES' AND gpu_compute_capability IN ('8.0')"
+            "gpu_mem>=8000 AND production='YES' AND cpuarch='x86_64' "
+            "AND gpu_compute_capability IN ('8.0')"
         ),
     }
 
@@ -116,7 +133,8 @@ def test_choose_allocation_falls_back_to_default_exotic_resources() -> None:
         "queue": "default",
         "resource_type": "exotic",
         "resource_property": (
-            "gpu_mem>=8000 AND production='NO' AND gpu_compute_capability IN ('8.0')"
+            "gpu_mem>=8000 AND production='NO' AND cpuarch='x86_64' "
+            "AND gpu_compute_capability IN ('8.0')"
         ),
     }
 

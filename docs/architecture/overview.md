@@ -39,9 +39,12 @@ The foundation keeps the first interfaces narrow and local:
   add-only commit to the configured Hugging Face model repository. It rejects
   incomplete output before any Hub call.
 - `grid5000.py` keeps the immutable identity, policy-bounded allocation, fixed
-  SSH/OAR argument construction, and compatibility submission boundary.
-  `grid5000_sites.py` probes all configured frontends from `oarnodes -J`,
-  `grid5000_remote.py` stages exact clean checkouts and marker-owned data,
+  SSH/OAR argument construction, and compatibility submission boundary. Its
+  worker command rejects non-x86_64 compute nodes before invoking the locked
+  runtime. `grid5000_sites.py` probes all configured frontends from
+  `oarnodes -J`, records CPU architecture, and includes `cpuarch='x86_64'` in
+  generated GPU requests. `grid5000_remote.py` stages exact clean checkouts and
+  marker-owned data,
   `grid5000_oar.py` normalizes scheduler lifecycle facts,
   `grid5000_state.py` persists secure phases/events and recoverable legacy
   reconciliation, and `grid5000_autonomous.py` coordinates the one-command

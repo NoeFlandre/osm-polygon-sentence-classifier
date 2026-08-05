@@ -59,17 +59,20 @@ site. It is plan-only unless `--execute` is present; new workflows should use
 ## Site discovery and policy
 
 An executing `run` probes every configured site concurrently using bounded SSH
-calls. It records parsed facts from `oarnodes -J`, home quota/free space, and a
-queue-depth diagnostic. Queue depth is never interpreted as an ETA. A site is
-eligible only when it is reachable, has a compatible GPU and enough persistent
-headroom, and its observed GPU facts support the request.
+calls. It records parsed facts from `oarnodes -J`, including CPU architecture,
+home quota/free space, and a queue-depth diagnostic. Queue depth is never
+interpreted as an ETA. A site is eligible only when it is reachable, has a
+compatible x86_64 GPU and enough persistent headroom, and its observed GPU facts
+support the request. ARM/aarch64 resources are excluded because the locked
+remote `uv` runtime is currently x86_64.
 
 The OAR queue, `standard`/`exotic` resource type, and a property combining
-`gpu_mem`, `production`, and the observed compatible
+`gpu_mem`, `production`, `cpuarch='x86_64'`, and the observed compatible
 `gpu_compute_capability` values are derived from the selected site's live
 inventory. This prevents OAR from assigning an observed incompatible GPU such
-as a P100. It supports both Grenoble-style production/standard resources and
-Nancy-style default/exotic resources without hard-coding either site. Only one
+as a P100 or an incompatible CPU architecture. It supports both Grenoble-style
+production/standard resources and Nancy-style default/exotic resources without
+hard-coding either site. Only one
 fallback job is live at a time. If its forecast is more than ten minutes away,
 the controller probes every configured site and tries replacement sites
 sequentially with a 20-minute trial allocation. It repeats that bounded probe
@@ -99,11 +102,12 @@ The selected frontend receives a bounded SSH sequence that:
    `/tmp` environment/cache paths.
 
 The worker requires Linux, its numeric OAR job identity, the exact source
-commit, a clean checkout, exactly one visible CUDA GPU, and CUDA compute
-capability at least `7.5`, matching the locked training wheel. The controller
-uses the same capability floor during site selection, and the worker checks the
-actual assigned device again before training so an incompatible allocation
-fails before consuming the training budget. It streams the pinned dataset
+commit, a clean checkout, an x86_64 compute node, exactly one visible CUDA GPU,
+and CUDA compute capability at least `7.5`, matching the locked training wheel.
+The controller uses the same architecture and capability floor during site
+selection, and the worker checks the actual assigned device and locked `uv`
+executable again before training so an incompatible allocation fails before
+consuming the training budget. It streams the pinned dataset
 through the clean training iterator, saves two retained
 identity-bound checkpoints, and writes the final model and Trackio data beneath
 the marked run root. A successor job is submitted only after the previous job

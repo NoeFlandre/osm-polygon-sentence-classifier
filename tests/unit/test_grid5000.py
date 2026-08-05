@@ -154,7 +154,8 @@ def test_allocation_accepts_a_generated_cuda_capability_filter() -> None:
         walltime_seconds=1_800,
         resource_type="standard",
         resource_property=(
-            "gpu_mem>=8000 AND production='NO' AND gpu_compute_capability IN ('8.0')"
+            "gpu_mem>=8000 AND production='NO' AND cpuarch='x86_64' "
+            "AND gpu_compute_capability IN ('8.0')"
         ),
     )
 
@@ -162,7 +163,8 @@ def test_allocation_accepts_a_generated_cuda_capability_filter() -> None:
         "-q",
         "default",
         "-p",
-        "gpu_mem>=8000 AND production='NO' AND gpu_compute_capability IN ('8.0')",
+        "gpu_mem>=8000 AND production='NO' AND cpuarch='x86_64' "
+        "AND gpu_compute_capability IN ('8.0')",
     )
 
 
@@ -195,8 +197,11 @@ def test_worker_command_uses_allocation_local_locked_uv_environment() -> None:
         in command
     )
     assert 'export UV_CACHE_DIR="/tmp/osm-polygon-sentence-classifier-' in command
+    assert 'cpu_architecture="$(uname -m)"' in command
+    assert '[ "$cpu_architecture" = "x86_64" ]' in command
     assert 'uv_bin="$(command -v uv || true)"' in command
     assert '[ -n "$uv_bin" ] || uv_bin="$HOME/.local/bin/uv"' in command
+    assert '"$uv_bin" --version >/dev/null 2>&1' in command
     assert 'exec "$uv_bin" run --locked --no-dev --extra training python -m ' in command
     assert '"$HOME/osm-polygon-sentence-classifier"' in command
     assert '"$HOME/osm-polygon-sentence-classifier-data/grid5000/runs/' in command
