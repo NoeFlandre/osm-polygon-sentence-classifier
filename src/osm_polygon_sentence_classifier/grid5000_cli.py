@@ -20,7 +20,7 @@ from .grid5000 import (
     Grid5000RunIdentity,
     Grid5000StateError,
 )
-from .training import TrainingConfig, TrainingError
+from .training import DEFAULT_MODEL_NAME, TrainingConfig, TrainingError
 
 
 def _add_plan_arguments(parser: argparse.ArgumentParser) -> None:
@@ -29,12 +29,22 @@ def _add_plan_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model-revision", required=True)
     parser.add_argument(
         "--model-name",
-        default="distilbert-base-multilingual-cased",
+        default=DEFAULT_MODEL_NAME,
     )
     parser.add_argument(
         "--walltime-seconds",
         default=MAX_WALLTIME_SECONDS,
         type=int,
+    )
+    parser.add_argument(
+        "--publish",
+        action="store_true",
+        help="publish the completed model to the project Hugging Face repository",
+    )
+    parser.add_argument(
+        "--sync-trackio",
+        action="store_true",
+        help="synchronize completed metrics to the static Trackio Space",
     )
 
 
@@ -67,6 +77,8 @@ def _build_plan(arguments: argparse.Namespace) -> Grid5000Plan:
     config = TrainingConfig(
         model_name_or_path=arguments.model_name,
         model_revision=arguments.model_revision,
+        publish_to_hub=arguments.publish,
+        sync_trackio=arguments.sync_trackio,
     )
     identity = Grid5000RunIdentity(
         source_commit=arguments.source_commit,

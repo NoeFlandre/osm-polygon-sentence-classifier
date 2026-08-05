@@ -13,8 +13,11 @@ populate the approved Hugging Face cache; the explicit artifact writer creates
 only the JSON report and polygon split manifest beneath the approved external
 data root. The training module consumes the clean iterator, uses a Hugging
 Face Trainer with local Trackio reporting, and saves model artifacts beneath
-the same root. It does not upload or publish artifacts or submit Grid'5000
-jobs.
+the same root. An authorized Grid'5000 run may explicitly publish the
+completed model to the dedicated model repository and synchronize finished
+metrics to the static
+[Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-trackio)
+and [metric Bucket](https://huggingface.co/buckets/NoeFlandre/osm-polygon-sentence-classifier-trackio-data).
 
 The clean iterator `iter_clean_training_examples` is the only permitted
 training-input boundary. The public iterator remains lazy until consumed, and
@@ -28,20 +31,30 @@ cleaned dataset is written.
 
 `train_landuse_classifier` is an execution boundary, not a dataset publishing
 command. It should be invoked only by an explicitly authorized training
-workflow after reviewing the landuse audit. The default model and training
-settings are configurable through `TrainingConfig`; Grid'5000 runs must
-additionally pin a model revision.
+workflow after reviewing the landuse audit. The default model is
+[`jhu-clsp/mmBERT-small`](https://huggingface.co/jhu-clsp/mmBERT-small), a
+140M-parameter multilingual encoder covering 1,800+ languages. Following the
+[FineWeb-Edu classifier recipe](https://github.com/huggingface/cosmopedia/tree/main/classification),
+the encoder is frozen and only its binary `no`/`yes` classification head is
+trained. Training settings remain configurable through `TrainingConfig`;
+Grid'5000 runs must additionally pin a model revision.
+
+The choice is guided by the model authors' [reported gains](https://huggingface.co/blog/mmbert)
+over older multilingual encoders on classification and multilingual retrieval
+benchmarks; the held-out landuse evaluation remains the decision criterion for
+this project.
 
 ## Data and model repositories
 
 - Training source: [NoeFlandre/osm-polygon-wikidata-sentence-relevance](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance)
-- Eventual model repository: [NoeFlandre/osm-polygon-sentence-classifier](https://huggingface.co/NoeFlandre/osm-polygon-sentence-classifier)
+- Dedicated model repository: [NoeFlandre/osm-polygon-sentence-classifier](https://huggingface.co/NoeFlandre/osm-polygon-sentence-classifier)
 - Local project-data root: `/Volumes/Seagate M3/projects/osm-polygon-sentence-classifier`
 
 All local datasets, checkpoints, models, and experiment logs must be kept
 beneath the external data root. Quality commands do not download data or
 create training outputs. An authorized training call stores model caches,
-checkpoints, models, and Trackio state beneath that root.
+checkpoints, models, and Trackio state beneath that root. Remote publication is
+final-only: checkpoint directories are never uploaded.
 
 Run the audit only when the pinned dataset review is explicitly authorized:
 
@@ -85,8 +98,11 @@ uv run grid5000-landuse plan \
 ```
 
 Only `submit --execute` can run policy checks, read the remote soft quota, or
-submit one bounded one-GPU night allocation. It records local intent before
-OAR and fails closed on duplicate or ambiguous state. No live Grid'5000 job,
-Hugging Face upload, or publication is performed by the implementation pass.
+submit one bounded one-GPU night allocation. Add `--publish --sync-trackio` to
+that explicit command when the completed model and metrics should be sent to
+the dedicated Hugging Face destinations. The worker requires Hugging Face
+authentication already available on Grid'5000; credentials are never placed
+in commands or durable state. It records local intent before OAR and fails
+closed on duplicate or ambiguous state.
 See [`docs/reference/grid5000-operator.md`](docs/reference/grid5000-operator.md)
 for the complete contract.

@@ -1,10 +1,18 @@
 from dataclasses import dataclass
+from importlib import import_module
 from pathlib import Path
+from typing import Any
 
 from .config import ProjectConfig
 from .paths import resolve_managed_path
 
 TRACKING_SUBDIRECTORY = Path("tracking")
+TRACKIO_SPACE_ID = "NoeFlandre/osm-polygon-sentence-classifier-trackio"
+TRACKIO_BUCKET_ID = "NoeFlandre/osm-polygon-sentence-classifier-trackio-data"
+
+
+class TrackingError(RuntimeError):
+    """Raised when the final Trackio synchronization cannot complete."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,6 +21,8 @@ class TrackioSettings:
 
     project: str
     directory: Path
+    space_id: str = TRACKIO_SPACE_ID
+    bucket_id: str = TRACKIO_BUCKET_ID
 
     def environment(self) -> dict[str, str]:
         """Return environment values needed to keep local Trackio data managed."""
@@ -25,3 +35,33 @@ def settings_for(config: ProjectConfig) -> TrackioSettings:
 
     directory = resolve_managed_path(config.data_root, TRACKING_SUBDIRECTORY)
     return TrackioSettings(project=config.project_name, directory=directory)
+
+
+def sync_project_to_static_space(settings: TrackioSettings) -> str:
+    """Synchronize a completed local project to the static Trackio Space."""
+
+    try:
+        trackio: Any = import_module("trackio")
+        space_id = trackio.sync(
+            project=settings.project,
+            space_id=settings.space_id,
+            bucket_id=settings.bucket_id,
+            sdk="static",
+            force=True,
+        )
+    except Exception as error:
+        raise TrackingError("Trackio static Space synchronization failed") from error
+    if not isinstance(space_id, str) or not space_id.strip():
+        raise TrackingError("Trackio synchronization returned an invalid Space ID")
+    return space_id
+
+
+__all__ = [
+    "TRACKIO_BUCKET_ID",
+    "TRACKIO_SPACE_ID",
+    "TRACKING_SUBDIRECTORY",
+    "TrackingError",
+    "TrackioSettings",
+    "settings_for",
+    "sync_project_to_static_space",
+]

@@ -397,3 +397,51 @@ def test_worker_runs_training_only_after_preflight(tmp_path: Path) -> None:
     assert received["project_config"] == ProjectConfig.for_remote_root(
         Path.home() / "training-data"
     )
+
+
+def test_worker_requires_hugging_face_auth_before_publishing_or_tracking(
+    tmp_path: Path,
+) -> None:
+    training_config = TrainingConfig(
+        model_name_or_path="test-model",
+        model_revision=MODEL_REVISION,
+        publish_to_hub=True,
+        sync_trackio=True,
+    )
+    identity = Grid5000RunIdentity(
+        source_commit=SOURCE_COMMIT,
+        dataset_revision=GRID5000_DATASET_REVISION,
+        model_name_or_path=training_config.model_name_or_path,
+        model_revision=MODEL_REVISION,
+        training_config={
+            "model_name_or_path": training_config.model_name_or_path,
+            "model_revision": MODEL_REVISION,
+            "publish_to_hub": True,
+            "sync_trackio": True,
+        },
+    )
+    train_called = False
+
+    def fake_train(**kwargs: object) -> TrainingResult:
+        del kwargs
+        nonlocal train_called
+        train_called = True
+        return TrainingResult(output_directory=tmp_path, train_output=object())
+
+    with pytest.raises(WorkerError, match="authentication"):
+        run_landuse_training_worker(
+            identity,
+            checkout=tmp_path / "checkout",
+            training_config=training_config,
+            remote_data_root=Path.home() / "training-data",
+            environ={
+                "OAR_JOB_ID": "12345",
+                "HF_HOME": str(tmp_path / "empty-hf"),
+            },
+            platform_name="linux",
+            git_runner=_git_runner(SOURCE_COMMIT),
+            cuda_probe=lambda: (True, 1, "Test GPU"),
+            train=fake_train,
+        )
+
+    assert not train_called

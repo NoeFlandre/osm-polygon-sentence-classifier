@@ -19,12 +19,14 @@ from .dataset_loader import (
     load_streaming_rows,
 )
 from .paths import ManagedPaths
-from .tracking import settings_for
+from .publication import ModelPublicationResult, publish_model_directory
+from .tracking import settings_for, sync_project_to_static_space
 
 LabelId = Literal[0, 1]
 
 LABEL_TO_ID: dict[TrainingLabel, LabelId] = {"no": 0, "yes": 1}
 ID_TO_LABEL: dict[int, str] = {0: "no", 1: "yes"}
+DEFAULT_MODEL_NAME = "jhu-clsp/mmBERT-small"
 
 
 class TrainingError(RuntimeError):
@@ -42,7 +44,7 @@ class TrainingRecord(TypedDict):
 class TrainingConfig:
     """Small, explicit configuration for one landuse training run."""
 
-    model_name_or_path: str = "distilbert-base-multilingual-cased"
+    model_name_or_path: str = DEFAULT_MODEL_NAME
     output_subdirectory: Path = Path("models/landuse")
     validation_fraction: float = 0.2
     seed: int = 42
@@ -50,12 +52,14 @@ class TrainingConfig:
     max_steps: int = 1_000
     per_device_train_batch_size: int = 8
     per_device_eval_batch_size: int = 8
-    learning_rate: float = 5e-5
+    learning_rate: float = 3e-4
     logging_steps: int = 10
     eval_steps: int = 100
     save_steps: int = 100
-    run_name: str = "landuse-baseline"
+    run_name: str = "landuse-mmbert-small-frozen-head"
     model_revision: str | None = None
+    publish_to_hub: bool = False
+    sync_trackio: bool = False
 
     def __post_init__(self) -> None:
         if (
@@ -72,6 +76,7 @@ class TrainingConfig:
             raise TrainingError(
                 "model_revision must be exactly 40 lowercase hexadecimal characters"
             )
+        _validate_boolean_settings(self)
 
         output_subdirectory = Path(self.output_subdirectory)
         if (
@@ -115,12 +120,20 @@ class TrainingConfig:
             raise TrainingError("learning_rate must be a positive finite number")
 
 
+def _validate_boolean_settings(config: TrainingConfig) -> None:
+    for name in ("publish_to_hub", "sync_trackio"):
+        if not isinstance(getattr(config, name), bool):
+            raise TrainingError(f"{name} must be a boolean")
+
+
 @dataclass(frozen=True, slots=True)
 class TrainingResult:
     """Local result of a completed Trainer run."""
 
     output_directory: Path
     train_output: object
+    model_publication: ModelPublicationResult | None = None
+    tracking_space_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,17 +244,56 @@ def _training_argument_values(
         "report_to": ["trackio"],
         "project": tracking_project,
         "run_name": config.run_name,
+        "trackio_static_space_id": False,
         "remove_unused_columns": False,
     }
+
+
+def _freeze_encoder_for_head_training(model: Any) -> None:
+    """Freeze the encoder while leaving its classification head trainable."""
+
+    parameters = getattr(model, "parameters", None)
+    head = getattr(model, "head", None)
+    classifier = getattr(model, "classifier", None)
+    head_parameters = getattr(head, "parameters", None)
+    classifier_parameters = getattr(classifier, "parameters", None)
+    if (
+        not callable(parameters)
+        or classifier is None
+        or not callable(classifier_parameters)
+    ):
+        raise TrainingError(
+            "model must expose a parameters() method and classifier head"
+        )
+
+    for parameter in parameters():
+        parameter.requires_grad = False
+    if callable(head_parameters):
+        for parameter in head_parameters():
+            parameter.requires_grad = True
+    for parameter in classifier_parameters():
+        parameter.requires_grad = True
 
 
 @contextmanager
 def _managed_training_environment(config: ProjectConfig) -> Iterator[None]:
     paths = ManagedPaths(config)
+    token = os.environ.get("HF_TOKEN", "").strip()
+    if not token:
+        token_path = (
+            Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface")))
+            / "token"
+        )
+        try:
+            token = token_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            token = ""
     values = {
         "HF_HOME": str(paths.child("cache/huggingface")),
         **settings_for(config).environment(),
     }
+    if token:
+        values["HF_TOKEN"] = token
     previous = {name: os.environ.get(name) for name in values}
     os.environ.update(values)
     try:
@@ -265,8 +317,8 @@ def train_landuse_classifier(
 
     The optional dependency group is imported only when this function is called.
     Datasets, model caches, checkpoints, and Trackio state are directed beneath
-    the approved external data root. This function does not authenticate,
-    upload, publish, or submit a remote job.
+    the approved external data root. Publication and Trackio synchronization are
+    disabled by default and require explicit configuration flags.
     """
 
     training_config = config or TrainingConfig()
@@ -317,6 +369,7 @@ def train_landuse_classifier(
         )
         model_kwargs: dict[str, object] = {
             "cache_dir": str(model_cache_directory),
+            "classifier_dropout": 0.0,
             "num_labels": len(LABEL_TO_ID),
             "id2label": ID_TO_LABEL,
             "label2id": LABEL_TO_ID,
@@ -327,6 +380,7 @@ def train_landuse_classifier(
             training_config.model_name_or_path,
             **model_kwargs,
         )
+        _freeze_encoder_for_head_training(model)
         training_arguments = dependencies.training_arguments(
             **_training_argument_values(
                 training_config,
@@ -345,14 +399,26 @@ def train_landuse_classifier(
         train_output = trainer.train()
         trainer.save_model(str(output_directory))
         tokenizer.save_pretrained(str(output_directory))
+        model_publication = None
+        if training_config.publish_to_hub:
+            model_publication = publish_model_directory(
+                output_directory,
+                effective_project_config.target_model_repository_id,
+            )
+        tracking_space_id = None
+        if training_config.sync_trackio:
+            tracking_space_id = sync_project_to_static_space(tracking)
 
     return TrainingResult(
         output_directory=output_directory,
         train_output=train_output,
+        model_publication=model_publication,
+        tracking_space_id=tracking_space_id,
     )
 
 
 __all__ = [
+    "DEFAULT_MODEL_NAME",
     "ID_TO_LABEL",
     "LABEL_TO_ID",
     "TrainingConfig",

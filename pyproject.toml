@@ -39,6 +39,7 @@ grid5000-landuse = "osm_polygon_sentence_classifier.grid5000_cli:main"
 training = [
     "accelerate>=1,<2",
     "datasets>=4,<5",
+    "huggingface-hub>=1.10,<2",
     "trackio>=0.26,<1",
     "torch>=2.6,<3",
     "transformers>=5,<6",

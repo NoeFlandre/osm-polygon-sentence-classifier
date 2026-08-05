@@ -16,8 +16,11 @@ and `audit/landuse/split_manifest.json` beneath this root.
 
 The source for the training stage is the
 [NoeFlandre/osm-polygon-wikidata-sentence-relevance dataset](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance).
-The eventual model destination is the
+The dedicated model destination is the
 [NoeFlandre/osm-polygon-sentence-classifier model repository](https://huggingface.co/NoeFlandre/osm-polygon-sentence-classifier).
+Completed metrics use the public static
+[Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-trackio)
+and its dedicated Hugging Face Bucket.
 
 ## Audit and foundation boundary
 
@@ -27,12 +30,14 @@ summarizes rows, and the explicit writer assigns the report and manifest
 described above. It does not train, upload or publish artifacts, or submit
 Grid'5000 work. The training module is a separate explicit call: it consumes
 only the clean iterator and directs model caches, checkpoints, outputs, and
-Trackio state beneath the approved root. It does not authenticate, upload,
-publish, or submit a Grid'5000 job.
+Trackio state beneath the approved root. Publication and static Trackio sync
+are separate opt-in flags, occur only after training output is saved, and use
+the preconfigured remote destinations.
 
 Credentials are used only by an explicitly authorized external CLI or runtime
 authentication flow. They must never be committed to the repository or placed
-in its documentation.
+in its documentation, commands, or durable Grid'5000 run state. A publishing
+worker must find an existing Grid'5000 login or `HF_TOKEN` before training.
 
 These two derived artifacts are the only ones the writer produces:
 `audit_report.json` contains aggregate and readiness information only and no

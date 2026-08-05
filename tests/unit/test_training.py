@@ -52,6 +52,11 @@ def _polygon_for_split(split: str) -> str:
 def test_training_config_is_frozen_and_uses_a_managed_relative_output() -> None:
     config = TrainingConfig()
 
+    assert config.model_name_or_path == "jhu-clsp/mmBERT-small"
+    assert config.learning_rate == 3e-4
+    assert config.run_name == "landuse-mmbert-small-frozen-head"
+    assert config.publish_to_hub is False
+    assert config.sync_trackio is False
     assert config.output_subdirectory == Path("models/landuse")
     assert not config.output_subdirectory.is_absolute()
     assert config.max_steps > 0
@@ -182,11 +187,38 @@ class _FakeTokenizer:
 
 class _FakeModel:
     from_pretrained_calls: list[dict[str, object]] = []
+    instances: list["_FakeModel"] = []
+
+    def __init__(self) -> None:
+        self.encoder_parameters = [_FakeParameter(), _FakeParameter()]
+        self.head = _FakeClassifier()
+        self.classifier = _FakeClassifier()
+        self.instances.append(self)
 
     @classmethod
     def from_pretrained(cls, *args: object, **kwargs: object) -> "_FakeModel":
         cls.from_pretrained_calls.append({"args": args, **kwargs})
         return cls()
+
+    def parameters(self) -> Iterable["_FakeParameter"]:
+        return [
+            *self.encoder_parameters,
+            *self.head.parameters(),
+            *self.classifier.parameters(),
+        ]
+
+
+class _FakeParameter:
+    def __init__(self) -> None:
+        self.requires_grad = True
+
+
+class _FakeClassifier:
+    def __init__(self) -> None:
+        self.parameters_list = [_FakeParameter()]
+
+    def parameters(self) -> Iterable[_FakeParameter]:
+        return self.parameters_list
 
 
 class _FakeTrainingArguments:
@@ -232,6 +264,7 @@ def test_training_wires_managed_streams_tokenizer_trainer_and_tracking(
     _FakeTokenizer.from_pretrained_calls.clear()
     _FakeTokenizer.save_pretrained_calls.clear()
     _FakeModel.from_pretrained_calls.clear()
+    _FakeModel.instances.clear()
     _FakeTrainingArguments.calls.clear()
     _FakeDataCollator.calls.clear()
     _FakeTrainer.init_calls.clear()
@@ -274,6 +307,18 @@ def test_training_wires_managed_streams_tokenizer_trainer_and_tracking(
     assert _FakeModel.from_pretrained_calls[0]["num_labels"] == 2
     assert _FakeModel.from_pretrained_calls[0]["id2label"] == {0: "no", 1: "yes"}
     assert _FakeModel.from_pretrained_calls[0]["label2id"] == {"no": 0, "yes": 1}
+    assert all(
+        not parameter.requires_grad
+        for parameter in _FakeModel.instances[0].encoder_parameters
+    )
+    assert all(
+        parameter.requires_grad
+        for parameter in _FakeModel.instances[0].head.parameters()
+    )
+    assert all(
+        parameter.requires_grad
+        for parameter in _FakeModel.instances[0].classifier.parameters()
+    )
     arguments = _FakeTrainingArguments.calls[0]
     assert arguments["output_dir"] == str(ProjectConfig().data_root / "models/landuse")
     assert arguments["max_steps"] == 12
@@ -282,6 +327,7 @@ def test_training_wires_managed_streams_tokenizer_trainer_and_tracking(
     assert arguments["project"] == "osm-polygon-sentence-classifier"
     assert arguments["run_name"] == "test-run"
     assert arguments["remove_unused_columns"] is False
+    assert arguments["trackio_static_space_id"] is False
     assert _FakeTrainer.init_calls[0]["train_dataset"] is _FakeDataset.created[0]
     assert _FakeTrainer.init_calls[0]["eval_dataset"] is _FakeDataset.created[1]
     assert _FakeTrainer.save_model_calls == [
@@ -319,6 +365,7 @@ def test_training_passes_a_pinned_model_revision_to_both_loaders(
     _FakeTokenizer.from_pretrained_calls.clear()
     _FakeTokenizer.save_pretrained_calls.clear()
     _FakeModel.from_pretrained_calls.clear()
+    _FakeModel.instances.clear()
     _FakeTrainingArguments.calls.clear()
     _FakeDataCollator.calls.clear()
     _FakeTrainer.init_calls.clear()
@@ -345,3 +392,62 @@ def test_training_passes_a_pinned_model_revision_to_both_loaders(
 
     assert _FakeTokenizer.from_pretrained_calls[0]["revision"] == revision
     assert _FakeModel.from_pretrained_calls[0]["revision"] == revision
+
+
+def test_training_can_publish_the_final_model_and_sync_trackio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from osm_polygon_sentence_classifier import training
+
+    _FakeDataset.created.clear()
+    _FakeTokenizer.from_pretrained_calls.clear()
+    _FakeTokenizer.save_pretrained_calls.clear()
+    _FakeModel.from_pretrained_calls.clear()
+    _FakeModel.instances.clear()
+    _FakeTrainingArguments.calls.clear()
+    _FakeDataCollator.calls.clear()
+    _FakeTrainer.init_calls.clear()
+    _FakeTrainer.save_model_calls.clear()
+
+    dependencies = training._TrainingDependencies(
+        iterable_dataset=_FakeDataset,
+        auto_tokenizer=_FakeTokenizer,
+        auto_model_for_sequence_classification=_FakeModel,
+        data_collator_with_padding=_FakeDataCollator,
+        training_arguments=_FakeTrainingArguments,
+        trainer=_FakeTrainer,
+    )
+    monkeypatch.setattr(training, "_load_training_dependencies", lambda: dependencies)
+    publication_calls: list[Path] = []
+    sync_calls: list[object] = []
+    monkeypatch.setattr(
+        training,
+        "publish_model_directory",
+        lambda directory, repository_id: publication_calls.append(directory)
+        or training.ModelPublicationResult(
+            repository_id=repository_id,
+            commit_id="d" * 40,
+            commit_url="https://huggingface.co/test/commit/" + "d" * 40,
+            files=("config.json", "model.safetensors"),
+        ),
+    )
+    monkeypatch.setattr(
+        training,
+        "sync_project_to_static_space",
+        lambda settings: sync_calls.append(settings) or "NoeFlandre/trackio",
+    )
+
+    result = training.train_landuse_classifier(
+        rows_factory=lambda: iter([_row()]),
+        config=TrainingConfig(
+            model_name_or_path="test-model",
+            publish_to_hub=True,
+            sync_trackio=True,
+        ),
+    )
+
+    assert publication_calls == [ProjectConfig().data_root / "models/landuse"]
+    assert len(sync_calls) == 1
+    assert result.model_publication is not None
+    assert result.model_publication.commit_id == "d" * 40
+    assert result.tracking_space_id == "NoeFlandre/trackio"

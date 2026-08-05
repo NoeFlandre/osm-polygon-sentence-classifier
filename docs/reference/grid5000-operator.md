@@ -13,6 +13,21 @@ uv run grid5000-landuse plan \
   --model-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 ```
 
+Unless `--model-name` is supplied, the run uses
+[`jhu-clsp/mmBERT-small`](https://huggingface.co/jhu-clsp/mmBERT-small), a
+140M-parameter multilingual encoder whose encoder is frozen during training.
+Add `--publish --sync-trackio` to pin final model publication and completed
+Trackio synchronization into the run identity:
+
+```bash
+uv run grid5000-landuse plan \
+  --site nancy \
+  --source-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  --model-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+  --publish \
+  --sync-trackio
+```
+
 The command prints JSON containing the deterministic run ID and the exact OAR
 request. It does not contact Grid'5000, create local state, load the dataset,
 or create model artifacts.
@@ -27,8 +42,8 @@ uv run grid5000-landuse submit \
 ```
 
 Only a separately reviewed command ending in `--execute` can run SSH, policy,
-quota, and OAR operations. This repository implementation has not invoked
-that path.
+quota, and OAR operations. The publication flags remain opt-in and are part of
+the immutable run identity.
 
 ## Execution gates
 
@@ -47,7 +62,12 @@ For an explicit execution, the operator performs these actions in order:
 
 Any failed check stops before OAR. An OAR error leaves the intent ambiguous;
 the operator does not retry automatically. No cleanup, site racing, queue-time
-prediction, checkpoint editing, or Hub publication is performed.
+prediction, or checkpoint editing is performed. When the explicit publication
+flags are present, the worker validates and uploads only the completed model's
+top-level files after training, then synchronizes finished Trackio metrics to
+the configured static Space and Bucket. It requires an existing Grid'5000
+Hugging Face login or `HF_TOKEN`; credentials are not placed in commands or
+state.
 
 ## Compute-node contract
 
@@ -60,8 +80,8 @@ The scheduled worker runs from the staged clean checkout and validates:
 
 It then invokes `train_landuse_classifier` with the pinned model revision and a
 remote `ProjectConfig` rooted beneath the Grid'5000 user's home. There is no
-CPU or MPS fallback. Hugging Face authentication, uploads, and model
-publication are outside this operator.
+CPU or MPS fallback. The worker does not publish checkpoints or retry a failed
+publication.
 
 ## Local state and recovery boundary
 

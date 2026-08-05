@@ -34,6 +34,7 @@ def test_plan_command_prints_a_reproducible_plan_without_an_operator(
     assert payload["run_id"]
     assert "usagepolicycheck" not in payload["submission_command"]
     assert "oarsub" in payload["submission_command"]
+    assert payload["identity"]["model_name_or_path"] == "jhu-clsp/mmBERT-small"
 
 
 def test_submit_without_execute_calls_only_the_plan_path(monkeypatch, capsys) -> None:
@@ -76,3 +77,14 @@ def test_submit_execute_is_the_only_explicit_execution_gate(
     assert exit_code == 0
     assert calls == [True]
     assert json.loads(capsys.readouterr().out)["job_id"] == 7
+
+
+def test_plan_can_explicitly_enable_final_publication_and_trackio_sync(
+    capsys,
+) -> None:
+    exit_code = grid5000_cli.main(["plan", *_arguments("--publish", "--sync-trackio")])
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["identity"]["training_config"]["publish_to_hub"] is True
+    assert payload["identity"]["training_config"]["sync_trackio"] is True

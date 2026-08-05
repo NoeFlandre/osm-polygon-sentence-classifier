@@ -112,6 +112,17 @@ def _validate_cuda(probe: CudaProbe) -> str:
     return device_name
 
 
+def _has_hugging_face_auth(environ: Mapping[str, str]) -> bool:
+    token = environ.get("HF_TOKEN", "").strip()
+    if token:
+        return True
+    hf_home = Path(environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface")))
+    try:
+        return bool((hf_home / "token").read_text(encoding="utf-8").strip())
+    except OSError:
+        return False
+
+
 def validate_compute_node(
     *,
     expected_source_commit: str,
@@ -168,17 +179,27 @@ def run_landuse_training_worker(
         raise WorkerError("worker dataset revision does not match the pinned contract")
     config_values: dict[str, Any] = dict(identity.training_config)
     try:
-        effective_config = training_config or TrainingConfig(**config_values)
+        identity_config = TrainingConfig(**config_values)
     except (TypeError, TrainingError) as error:
         raise WorkerError("worker training configuration is invalid") from error
+    if training_config is not None and training_config != identity_config:
+        raise WorkerError("worker training configuration does not match identity")
+    effective_config = training_config or identity_config
     if effective_config.model_name_or_path != identity.model_name_or_path:
         raise WorkerError("worker model identity does not match training configuration")
     if effective_config.model_revision != identity.model_revision:
         raise WorkerError("worker model revision does not match training configuration")
+    effective_environment = os.environ if environ is None else environ
+    if (
+        effective_config.publish_to_hub or effective_config.sync_trackio
+    ) and not _has_hugging_face_auth(effective_environment):
+        raise WorkerError(
+            "worker Hugging Face authentication is unavailable for publication"
+        )
     validate_compute_node(
         expected_source_commit=identity.source_commit,
         checkout=checkout,
-        environ=environ,
+        environ=effective_environment,
         platform_name=platform_name,
         git_runner=git_runner,
         cuda_probe=cuda_probe,
