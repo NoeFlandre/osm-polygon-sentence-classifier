@@ -148,6 +148,24 @@ def test_allocation_renders_a_standard_production_request() -> None:
     )
 
 
+def test_allocation_accepts_a_generated_cuda_capability_filter() -> None:
+    allocation = Grid5000Allocation(
+        site="lille",
+        walltime_seconds=1_800,
+        resource_type="standard",
+        resource_property=(
+            "gpu_mem>=8000 AND production='NO' AND gpu_compute_capability IN ('8.0')"
+        ),
+    )
+
+    assert allocation.scheduler_command("worker command")[1:5] == (
+        "-q",
+        "default",
+        "-p",
+        "gpu_mem>=8000 AND production='NO' AND gpu_compute_capability IN ('8.0')",
+    )
+
+
 def test_day_allocation_accepts_only_a_one_hour_window() -> None:
     allocation = Grid5000Allocation(
         site="grenoble",

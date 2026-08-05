@@ -36,8 +36,11 @@ WORKER_MODULE = "osm_polygon_sentence_classifier.grid5000_worker"
 
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
 _SITE_PATTERN = re.compile(r"[a-z][a-z0-9-]*")
+_CUDA_CAPABILITY_LITERAL = r"[0-9]+\.[0-9]+"
 _RESOURCE_PROPERTY_PATTERN = re.compile(
-    r"gpu_mem>=[1-9][0-9]* AND production='(?:YES|NO)'"
+    rf"gpu_mem>=[1-9][0-9]* AND production='(?:YES|NO)' AND "
+    rf"gpu_compute_capability IN \('{_CUDA_CAPABILITY_LITERAL}'"
+    rf"(?:, '{_CUDA_CAPABILITY_LITERAL}')*\)"
 )
 _RUN_ID_PATTERN = re.compile(r"[0-9a-f]{20}")
 _JOB_ID_PATTERN = re.compile(r"(?:OAR_JOB_ID=|^)([1-9][0-9]*)$", re.MULTILINE)
@@ -310,7 +313,7 @@ class Grid5000Allocation:
             _RESOURCE_PROPERTY_PATTERN.fullmatch(self.resource_property) is None
         ):
             raise Grid5000ConfigurationError(
-                "resource_property must be a generated GPU production filter"
+                "resource_property must be a generated GPU capability filter"
             )
 
     @property

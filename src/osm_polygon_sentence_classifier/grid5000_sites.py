@@ -276,10 +276,18 @@ def choose_allocation(
     ]
     exotic = all(resource.exotic for resource in matching)
     production_value = "YES" if production else "NO"
+    capabilities = ", ".join(
+        f"'{major}.{minor}'"
+        for major, minor in sorted({resource.cuda_capability for resource in matching})
+    )
     return {
         "queue": "production" if production else "default",
         "resource_type": "exotic" if exotic else "standard",
-        "resource_property": f"gpu_mem>={effective.gpu_memory_mb} AND production='{production_value}'",
+        "resource_property": (
+            f"gpu_mem>={effective.gpu_memory_mb} "
+            f"AND production='{production_value}' "
+            f"AND gpu_compute_capability IN ({capabilities})"
+        ),
     }
 
 

@@ -64,11 +64,13 @@ queue-depth diagnostic. Queue depth is never interpreted as an ETA. A site is
 eligible only when it is reachable, has a compatible GPU and enough persistent
 headroom, and its observed GPU facts support the request.
 
-The OAR queue, `standard`/`exotic` resource type, and
-`gpu_mem>=... AND production='YES|NO'` property are derived from the selected
-site's live inventory. This supports both Grenoble-style production/standard
-resources and Nancy-style default/exotic resources without hard-coding either
-site. Only one fallback job is submitted. If its forecast is more than ten
+The OAR queue, `standard`/`exotic` resource type, and a property combining
+`gpu_mem`, `production`, and the observed compatible
+`gpu_compute_capability` values are derived from the selected site's live
+inventory. This prevents OAR from assigning an observed incompatible GPU such
+as a P100. It supports both Grenoble-style production/standard resources and
+Nancy-style default/exotic resources without hard-coding either site. Only one
+fallback job is submitted. If its forecast is more than ten
 minutes away, the controller tries replacement sites sequentially with a
 20-minute trial allocation. It cancels a trial that misses its immediate-start
 window or reaches its deadline, adopts a trial only after it is visibly

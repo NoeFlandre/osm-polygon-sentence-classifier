@@ -100,7 +100,9 @@ def test_choose_allocation_matches_reference_production_resource_rules() -> None
     assert allocation == {
         "queue": "production",
         "resource_type": "standard",
-        "resource_property": "gpu_mem>=8000 AND production='YES'",
+        "resource_property": (
+            "gpu_mem>=8000 AND production='YES' AND gpu_compute_capability IN ('8.0')"
+        ),
     }
 
 
@@ -113,8 +115,24 @@ def test_choose_allocation_falls_back_to_default_exotic_resources() -> None:
     assert allocation == {
         "queue": "default",
         "resource_type": "exotic",
-        "resource_property": "gpu_mem>=8000 AND production='NO'",
+        "resource_property": (
+            "gpu_mem>=8000 AND production='NO' AND gpu_compute_capability IN ('8.0')"
+        ),
     }
+
+
+def test_choose_allocation_excludes_observed_incompatible_gpu_capabilities() -> None:
+    resources = parse_oarnodes_stdout(
+        _inventory(
+            _record(capability=6),
+            _record(capability=8),
+        )
+    )
+
+    allocation = choose_allocation(resources)
+
+    assert allocation is not None
+    assert allocation["resource_property"].endswith("gpu_compute_capability IN ('8.0')")
 
 
 def test_site_selection_prefers_idle_then_name_without_using_queue_depth() -> None:
