@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
@@ -59,6 +60,7 @@ _UNSET = object()
 DEFAULT_AUTONOMOUS_WALLTIME_SECONDS = SHORT_TRIAL_WALLTIME_SECONDS
 MAX_REPLACEMENT_ATTEMPTS = 3
 REPLACEMENT_RETRY_INTERVAL = timedelta(minutes=10)
+_SOURCE_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
 
 
 class AutonomousRunError(RuntimeError):
@@ -77,6 +79,7 @@ class AutonomousRunConfig:
     policy_type: PolicyType = "auto"
     max_workers: int = DEFAULT_MAX_WORKERS
     max_continuations: int = 3
+    worker_source_commit: str | None = None
     cleanup: bool = True
 
     def __post_init__(self) -> None:
@@ -94,6 +97,11 @@ class AutonomousRunConfig:
             or self.max_continuations <= 0
         ):
             raise AutonomousRunError("max_continuations must be positive")
+        if (
+            self.worker_source_commit is not None
+            and _SOURCE_COMMIT_PATTERN.fullmatch(self.worker_source_commit) is None
+        ):
+            raise AutonomousRunError("worker_source_commit must be a pinned revision")
         if self.training_config.model_name_or_path != self.identity.model_name_or_path:
             raise AutonomousRunError("training model does not match run identity")
         if self.training_config.model_revision != self.identity.model_revision:
@@ -259,6 +267,9 @@ class AutonomousRunController:
             )
         return token
 
+    def _worker_source_commit(self) -> str:
+        return self.config.worker_source_commit or self.config.identity.source_commit
+
     def _build_plan(
         self,
         probe: SiteProbe,
@@ -294,6 +305,7 @@ class AutonomousRunController:
             identity=self.config.identity,
             allocation=allocation,
             resume_from_checkpoint=resume_from_checkpoint,
+            checkout_commit=self.config.worker_source_commit,
         )
 
     def _preflight(self, remote: Any, plan: Grid5000Plan) -> None:
@@ -418,7 +430,7 @@ class AutonomousRunController:
         self.emit(f"submitting a short replacement trial at {candidate.site}")
         remote.prepare(
             run_id=self.config.identity.run_id,
-            source_commit=self.config.identity.source_commit,
+            source_commit=self._worker_source_commit(),
         )
         token = self._local_token_for_publication()
         if token:
@@ -700,7 +712,7 @@ class AutonomousRunController:
         token = self._local_token_for_publication()
         remote.prepare(
             run_id=self.config.identity.run_id,
-            source_commit=self.config.identity.source_commit,
+            source_commit=self._worker_source_commit(),
         )
         if token:
             remote.install_hugging_face_token(token)
@@ -714,6 +726,7 @@ class AutonomousRunController:
             facts={
                 "continuation_count": raw_count + 1,
                 "max_continuations": self.config.max_continuations,
+                "worker_source_commit": self.config.worker_source_commit,
                 "continuation_pending": True,
                 "continuation_reason": reason,
                 "last_terminal_job_id": job_id,
@@ -732,6 +745,7 @@ class AutonomousRunController:
             facts={
                 "continuation_count": raw_count + 1,
                 "max_continuations": self.config.max_continuations,
+                "worker_source_commit": self.config.worker_source_commit,
                 "continuation_pending": False,
                 "replacement_attempted": False,
                 "replacement_attempted_job_id": None,
@@ -918,6 +932,7 @@ class AutonomousRunController:
             facts={
                 "cleanup": self.config.cleanup,
                 "max_continuations": self.config.max_continuations,
+                "worker_source_commit": self.config.worker_source_commit,
                 "sites": list(self.config.sites),
                 "requirements": {
                     "gpu_memory_mb": self.config.requirements.gpu_memory_mb,
@@ -954,7 +969,7 @@ class AutonomousRunController:
         self._active_remote = remote
         remote.prepare(
             run_id=self.config.identity.run_id,
-            source_commit=self.config.identity.source_commit,
+            source_commit=self._worker_source_commit(),
         )
         if token:
             remote.install_hugging_face_token(token)

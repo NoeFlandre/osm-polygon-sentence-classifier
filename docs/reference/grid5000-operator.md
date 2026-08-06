@@ -34,7 +34,7 @@ The autonomous command defaults to all configured frontends, a 20-minute
 allocation, Europe/Paris automatic policy selection, and removal of the
 successful run's marked remote data after Hub verification. Repeat `--site` to
 restrict discovery, or use `--keep-remote` to retain the successful run root.
-It retains two complete checkpoints and allows at most three successor jobs;
+It retains five complete checkpoints and allows at most three successor jobs;
 override that bound deliberately with `--max-continuations`.
 
 ```bash
@@ -57,6 +57,9 @@ only that specific checkpoint-limit failure, verifies the previous recorded
 job is no longer active, and then reuses the normal checkpoint, policy, quota,
 submission, and monitoring safeguards. Other failed states remain stopped for
 diagnosis.
+With `--execute`, this explicit extension requires a clean local checkout and
+uses its current pinned commit for the resumed worker code while preserving the
+original run identity and checkpoint contract.
 
 `status` is local and read-only. `resume` uses the persisted identity and
 active site/job, and never creates a second submission from a submitted,
@@ -129,7 +132,7 @@ The controller uses the same architecture and capability floor during site
 selection, and the worker checks the actual assigned device and locked `uv`
 executable again before training so an incompatible allocation fails before
 consuming the training budget. It streams the pinned dataset
-through the clean training iterator, saves two retained
+through the clean training iterator, saves five retained
 identity-bound checkpoints, and writes the final model and Trackio data beneath
 the marked run root. A successor job is submitted only after the previous job
 has terminated, the controller has found complete checkpoint evidence, and the
@@ -137,14 +140,14 @@ same site passes the storage/policy preflight again. The successor worker
 requires a valid checkpoint and passes the newest one to the Trainer; missing,
 partial, or identity-mismatched checkpoints stop the run. When requested, the
 worker queues each complete checkpoint to the dedicated Hugging Face model
-repository's single `checkpoints/last-checkpoint` snapshot. The Trainer
-records metrics locally through Trackio and syncs a static snapshot to the free
+repository under a permanent `checkpoints/step-N/` directory. The Trainer
+records accuracy, precision, recall, and F1 locally through Trackio and syncs a static snapshot to the free
 Trackio Space and Bucket after each complete checkpoint and final publication,
 including continuations. Each checkpoint and the final model also receive a
 generated credential-free README containing pinned
 identity, safe configuration, progress, and scalar metrics. The ordered Hub
 queue is drained before the final top-level model publication; older remote
-checkpoint snapshots are not retained.
+checkpoint snapshots remain available.
 
 After a successful terminal job, the controller validates the manifest
 identity, verifies the recorded model commit and Trackio Space through the Hub,

@@ -13,18 +13,19 @@ populate the approved Hugging Face cache; the explicit artifact writer creates
 only the JSON report and polygon split manifest beneath the approved external
 data root. The training module consumes the clean iterator, uses a Hugging
 Face Trainer with local Trackio reporting, and saves model artifacts beneath
-the same root. It retains two complete, identity-bound checkpoints so an
+the same root. It retains five complete, identity-bound checkpoints so an
 incomplete allocation can continue safely. An authorized Grid'5000 run may
 explicitly publish the completed model to the dedicated model repository,
-update its single `checkpoints/last-checkpoint` snapshot after each complete
-checkpoint, and publish Trackio metric snapshots to the free static
+publish each complete checkpoint under its step-specific
+`checkpoints/step-N/` directory, and publish Trackio metric snapshots to the free static
 [Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-trackio)
 and [metric Bucket](https://huggingface.co/buckets/NoeFlandre/osm-polygon-sentence-classifier-trackio-data).
 The static Space is read-only between snapshots and requires no paid HF
 compute.
 The model repository README is generated from the pinned dataset/model
 identity, safe training configuration, checkpoint progress, and scalar
-metrics at each published checkpoint and at final publication.
+metrics at each published checkpoint and at final publication. Evaluation
+metrics include accuracy, precision, recall, and F1.
 
 The clean iterator `iter_clean_training_examples` is the only permitted
 training-input boundary. The public iterator remains lazy until consumed, and
@@ -61,10 +62,10 @@ All local datasets, checkpoints, models, and experiment logs must be kept
 beneath the external data root. Quality commands do not download data or
 create training outputs. An authorized training call stores model caches,
 checkpoints, models, and Trackio state beneath that root. Remote publication is
-opt-in: the final model is published at the repository root, and the latest
-complete checkpoint replaces the single `checkpoints/last-checkpoint` snapshot.
+opt-in: the final model is published at the repository root, and every complete
+checkpoint is published beneath its permanent `checkpoints/step-N/` directory.
 The checkpoint upload is queued in order and drained before final publication;
-older checkpoint snapshots are not retained remotely.
+older checkpoint snapshots remain available for inspection.
 
 Run the audit only when the pinned dataset review is explicitly authorized:
 
@@ -101,7 +102,7 @@ The autonomous command probes all configured Grid'5000 sites concurrently,
 selects a factually compatible x86_64 GPU (including CUDA capability `>= 7.5`),
 derives the correct OAR queue/resource type from `oarnodes`, stages the exact
 checkout, submits one short job, and monitors it. The worker rechecks the
-assigned GPU before training and retains two complete, identity-bound
+assigned GPU before training and retains five complete, identity-bound
 checkpoints. If a
 job ends before producing a verified model, the controller continues only from
 the newest complete checkpoint, on the same site, with a bounded successor
@@ -127,7 +128,9 @@ uv run grid5000-landuse resume \
 ```
 
 The extension refuses arbitrary failed states and refuses to submit while the
-previous recorded Grid'5000 job is still active.
+previous recorded Grid'5000 job is still active. With `--execute`, it requires
+a clean checkout and uses that checkout's pinned commit for resumed worker code
+while preserving the original run identity and checkpoint contract.
 
 Run the complete lifecycle with a pinned source/model pair:
 

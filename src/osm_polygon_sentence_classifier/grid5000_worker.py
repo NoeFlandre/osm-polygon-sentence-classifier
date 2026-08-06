@@ -173,6 +173,7 @@ def run_landuse_training_worker(
     identity: Grid5000RunIdentity,
     *,
     checkout: Path,
+    checkout_source_commit: str | None = None,
     training_config: TrainingConfig | None = None,
     remote_data_root: Path | None = None,
     environ: Mapping[str, str] | None = None,
@@ -209,7 +210,7 @@ def run_landuse_training_worker(
             "worker Hugging Face authentication is unavailable for publication"
         )
     validate_compute_node(
-        expected_source_commit=identity.source_commit,
+        expected_source_commit=checkout_source_commit or identity.source_commit,
         checkout=checkout,
         environ=effective_environment,
         platform_name=platform_name,
@@ -345,6 +346,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--source-commit", required=True)
+    parser.add_argument(
+        "--checkout-commit",
+        default=None,
+        help="optional code checkout revision for an identity-preserving resume",
+    )
     parser.add_argument("--dataset-revision", required=True)
     parser.add_argument("--model-revision", required=True)
     parser.add_argument("--training-config-json", required=True)
@@ -371,6 +377,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_landuse_training_worker(
             identity,
             checkout=args.checkout,
+            checkout_source_commit=args.checkout_commit,
             remote_data_root=args.remote_data_root,
             require_checkpoint=args.require_checkpoint,
         )

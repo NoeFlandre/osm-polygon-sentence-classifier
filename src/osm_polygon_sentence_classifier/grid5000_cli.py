@@ -270,42 +270,34 @@ def _autonomous_plan_payload(config: AutonomousRunConfig) -> dict[str, object]:
     }
 
 
-def _config_from_state(
-    state_payload: Mapping[str, object],
-    *,
-    max_continuations_override: int | None = None,
-) -> AutonomousRunConfig:
-    identity_payload = state_payload.get("identity")
-    if not isinstance(identity_payload, Mapping):
-        raise Grid5000StateError("autonomous state identity is invalid")
-    identity = Grid5000RunIdentity.from_payload(
-        cast(Mapping[str, object], identity_payload)
-    )
-    training_payload = identity_payload.get("training_config")
-    if not isinstance(training_payload, Mapping):
-        raise Grid5000StateError("autonomous training configuration is invalid")
-    try:
-        training_config = TrainingConfig(**dict(training_payload))
-    except (TypeError, TrainingError) as error:
-        raise Grid5000StateError(
-            "autonomous training configuration is invalid"
-        ) from error
+def _state_facts(state_payload: Mapping[str, object]) -> Mapping[str, object]:
     facts = state_payload.get("facts", {})
-    allocation = facts.get("allocation", {}) if isinstance(facts, Mapping) else {}
-    policy = (
-        allocation.get("policy_type", "auto")
-        if isinstance(allocation, Mapping)
-        else "auto"
+    if not isinstance(facts, Mapping):
+        return {}
+    return cast(Mapping[str, object], facts)
+
+
+def _state_allocation_settings(
+    facts: Mapping[str, object],
+) -> tuple[object, object, object]:
+    allocation = facts.get("allocation", {})
+    if not isinstance(allocation, Mapping):
+        return "auto", DEFAULT_AUTONOMOUS_WALLTIME_SECONDS, True
+    return (
+        allocation.get("policy_type", "auto"),
+        allocation.get("walltime_seconds", DEFAULT_AUTONOMOUS_WALLTIME_SECONDS),
+        facts.get("cleanup", True),
     )
-    walltime = (
-        allocation.get("walltime_seconds", DEFAULT_AUTONOMOUS_WALLTIME_SECONDS)
-        if isinstance(allocation, Mapping)
-        else DEFAULT_AUTONOMOUS_WALLTIME_SECONDS
-    )
-    cleanup = facts.get("cleanup", True) if isinstance(facts, Mapping) else True
-    max_continuations = (
-        facts.get("max_continuations", 3) if isinstance(facts, Mapping) else 3
-    )
+
+
+def _state_continuation_settings(
+    state_payload: Mapping[str, object],
+    facts: Mapping[str, object],
+    *,
+    max_continuations_override: int | None,
+    worker_source_commit_override: str | None,
+) -> tuple[int, str | None]:
+    max_continuations = facts.get("max_continuations", 3)
     if (
         isinstance(max_continuations, bool)
         or not isinstance(max_continuations, int)
@@ -324,31 +316,64 @@ def _config_from_state(
         if state_payload.get("phase") != "failed":
             raise Grid5000StateError("--max-continuations can only extend a failed run")
         max_continuations = max_continuations_override
-    sites = (
-        facts.get("sites", DEFAULT_SITES)
-        if isinstance(facts, Mapping)
-        else DEFAULT_SITES
-    )
-    requirements_payload = (
-        facts.get("requirements", {}) if isinstance(facts, Mapping) else {}
-    )
-    gpu_memory = (
-        requirements_payload.get("gpu_memory_mb", 8_000)
-        if isinstance(requirements_payload, Mapping)
-        else 8_000
-    )
+    worker_source_commit = facts.get("worker_source_commit")
+    if worker_source_commit is not None and not isinstance(worker_source_commit, str):
+        raise Grid5000StateError("autonomous worker source commit is invalid")
+    return max_continuations, worker_source_commit_override or worker_source_commit
+
+
+def _state_sites(facts: Mapping[str, object]) -> tuple[str, ...]:
+    sites = facts.get("sites", DEFAULT_SITES)
     if not isinstance(sites, Sequence) or isinstance(sites, (str, bytes)):
-        sites = DEFAULT_SITES
-    normalized_sites = tuple(site for site in sites if isinstance(site, str))
-    if not normalized_sites:
-        normalized_sites = DEFAULT_SITES
+        return DEFAULT_SITES
+    normalized = tuple(site for site in sites if isinstance(site, str))
+    return normalized or DEFAULT_SITES
+
+
+def _state_gpu_memory(facts: Mapping[str, object]) -> int:
+    requirements = facts.get("requirements", {})
+    if not isinstance(requirements, Mapping):
+        return 8_000
+    value = requirements.get("gpu_memory_mb", 8_000)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 8_000
+    return value
+
+
+def _config_from_state(
+    state_payload: Mapping[str, object],
+    *,
+    max_continuations_override: int | None = None,
+    worker_source_commit_override: str | None = None,
+) -> AutonomousRunConfig:
+    identity_payload = state_payload.get("identity")
+    if not isinstance(identity_payload, Mapping):
+        raise Grid5000StateError("autonomous state identity is invalid")
+    identity = Grid5000RunIdentity.from_payload(
+        cast(Mapping[str, object], identity_payload)
+    )
+    training_payload = identity_payload.get("training_config")
+    if not isinstance(training_payload, Mapping):
+        raise Grid5000StateError("autonomous training configuration is invalid")
+    try:
+        training_config = TrainingConfig(**dict(training_payload))
+    except (TypeError, TrainingError) as error:
+        raise Grid5000StateError(
+            "autonomous training configuration is invalid"
+        ) from error
+    facts = _state_facts(state_payload)
+    policy, walltime, cleanup = _state_allocation_settings(facts)
+    max_continuations, worker_source_commit = _state_continuation_settings(
+        state_payload,
+        facts,
+        max_continuations_override=max_continuations_override,
+        worker_source_commit_override=worker_source_commit_override,
+    )
     return AutonomousRunConfig(
         identity=identity,
         training_config=training_config,
-        sites=normalized_sites,
-        requirements=SiteRequirements(
-            gpu_memory_mb=gpu_memory if isinstance(gpu_memory, int) else 8_000
-        ),
+        sites=_state_sites(facts),
+        requirements=SiteRequirements(gpu_memory_mb=_state_gpu_memory(facts)),
         walltime_seconds=(
             walltime
             if isinstance(walltime, int)
@@ -360,6 +385,7 @@ def _config_from_state(
             else "auto"
         ),
         max_continuations=max_continuations,
+        worker_source_commit=worker_source_commit,
         cleanup=cleanup if isinstance(cleanup, bool) else True,
     )
 
@@ -404,6 +430,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             autonomous = _config_from_state(
                 state.to_dict(),
                 max_continuations_override=arguments.max_continuations,
+                worker_source_commit_override=(
+                    _current_source_commit()
+                    if arguments.execute and arguments.max_continuations is not None
+                    else None
+                ),
             )
             if not arguments.execute:
                 _print_json(state.to_dict())

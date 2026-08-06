@@ -228,6 +228,22 @@ def test_resume_plan_requires_a_valid_checkpoint_on_the_worker() -> None:
     assert "--require-checkpoint" in plan.worker_command
 
 
+def test_plan_can_use_a_new_worker_checkout_without_changing_run_identity() -> None:
+    checkout_commit = "c" * 40
+    plan = Grid5000Plan(
+        identity=_identity(),
+        allocation=Grid5000Allocation(site="nancy", walltime_seconds=1_800),
+        resume_from_checkpoint=True,
+        checkout_commit=checkout_commit,
+    )
+
+    assert plan.identity.source_commit == SOURCE_COMMIT
+    assert f"--source-commit {SOURCE_COMMIT}" in plan.worker_command
+    assert f"--checkout-commit {checkout_commit}" in plan.worker_command
+    assert checkout_commit in plan.remote_checkout_command[-1]
+    assert SOURCE_COMMIT not in plan.remote_checkout_command[-1]
+
+
 def test_plan_contains_a_read_only_clean_checkout_guard() -> None:
     plan = _plan()
 

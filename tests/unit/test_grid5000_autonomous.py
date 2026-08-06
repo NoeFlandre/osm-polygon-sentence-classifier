@@ -730,6 +730,35 @@ def test_failed_run_extension_refuses_an_active_previous_job(
     assert remote.submission_count == 0
 
 
+def test_explicit_worker_checkout_revision_is_used_for_continuations(
+    tmp_path: Path,
+) -> None:
+    checkout_commit = "c" * 40
+    controller = AutonomousRunController(
+        replace(_config(), worker_source_commit=checkout_commit),
+        state_root=tmp_path / "runs",
+    )
+    probe = SiteProbe(
+        name="grenoble",
+        reachable=True,
+        resources=(
+            GpuResource(
+                gpu_memory_mb=16_000,
+                cuda_capability=(8, 0),
+                jobs_assigned=0,
+                production=True,
+                exotic=False,
+            ),
+        ),
+        persistent_free_bytes=10 * 1024**3,
+        queued_jobs=0,
+    )
+
+    plan = controller._build_plan(probe, resume_from_checkpoint=True)
+
+    assert plan.checkout_commit == checkout_commit
+
+
 def test_completion_verification_rejects_a_model_repository_mismatch(
     tmp_path: Path,
     monkeypatch,

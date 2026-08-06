@@ -72,7 +72,7 @@ class TrainingConfig:
     logging_steps: int = 10
     eval_steps: int = 100
     save_steps: int = 100
-    save_total_limit: int = 2
+    save_total_limit: int = 5
     run_name: str = "landuse-mmbert-small-frozen-head"
     model_revision: str | None = None
     publish_to_hub: bool = False
@@ -172,6 +172,109 @@ def _latest_training_metrics(state: Any) -> dict[str, object]:
                 if isinstance(key, str) and _is_card_scalar(value)
             }
     return {}
+
+
+def _latest_evaluation_metrics(state: Any) -> dict[str, object]:
+    history = getattr(state, "log_history", ())
+    if not isinstance(history, Sequence):
+        return {}
+    for entry in reversed(history):
+        if isinstance(entry, Mapping) and any(
+            isinstance(key, str) and key.startswith("eval_") for key in entry
+        ):
+            return {
+                key: value
+                for key, value in entry.items()
+                if isinstance(key, str) and _is_card_scalar(value)
+            }
+    return {}
+
+
+def _metrics_for_model_card(train_output: Any, trainer: Any) -> dict[str, object]:
+    metrics: dict[str, object] = {}
+    raw_training_metrics = getattr(train_output, "metrics", None)
+    if isinstance(raw_training_metrics, Mapping):
+        metrics.update(raw_training_metrics)
+    metrics.update(_latest_evaluation_metrics(getattr(trainer, "state", None)))
+    return metrics
+
+
+def _as_python(value: Any) -> object:
+    tolist = getattr(value, "tolist", None)
+    return tolist() if callable(tolist) else value
+
+
+def _classification_metrics(eval_prediction: Any) -> dict[str, float]:
+    """Compute binary accuracy, precision, recall, and F1 for Trainer evals."""
+
+    predictions = _as_python(getattr(eval_prediction, "predictions", None))
+    labels = _as_python(getattr(eval_prediction, "label_ids", None))
+    if isinstance(predictions, tuple) and predictions:
+        predictions = _as_python(predictions[0])
+    if (
+        not isinstance(predictions, Sequence)
+        or isinstance(predictions, (str, bytes))
+        or not isinstance(labels, Sequence)
+        or isinstance(labels, (str, bytes))
+        or len(predictions) != len(labels)
+        or not predictions
+    ):
+        raise TrainingError("evaluation predictions and labels are invalid")
+
+    predicted_labels: list[int] = []
+    actual_labels: list[int] = []
+    for logits, label in zip(predictions, labels, strict=True):
+        row = _as_python(logits)
+        actual = _as_python(label)
+        if (
+            not isinstance(row, Sequence)
+            or isinstance(row, (str, bytes))
+            or not row
+            or isinstance(actual, bool)
+            or not isinstance(actual, int)
+            or actual not in (0, 1)
+        ):
+            raise TrainingError("evaluation predictions and labels are invalid")
+        predicted = max(range(len(row)), key=lambda index: row[index])
+        if predicted not in (0, 1):
+            raise TrainingError("evaluation predictions and labels are invalid")
+        predicted_labels.append(predicted)
+        actual_labels.append(actual)
+
+    true_positive = sum(
+        predicted == actual == 1
+        for predicted, actual in zip(predicted_labels, actual_labels, strict=True)
+    )
+    true_negative = sum(
+        predicted == actual == 0
+        for predicted, actual in zip(predicted_labels, actual_labels, strict=True)
+    )
+    false_positive = sum(
+        predicted == 1 and actual == 0
+        for predicted, actual in zip(predicted_labels, actual_labels, strict=True)
+    )
+    false_negative = sum(
+        predicted == 0 and actual == 1
+        for predicted, actual in zip(predicted_labels, actual_labels, strict=True)
+    )
+    accuracy = (true_positive + true_negative) / len(actual_labels)
+    precision = (
+        true_positive / (true_positive + false_positive)
+        if true_positive + false_positive
+        else 0.0
+    )
+    recall = (
+        true_positive / (true_positive + false_negative)
+        if true_positive + false_negative
+        else 0.0
+    )
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return {
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+    }
 
 
 def _training_config_payload(config: TrainingConfig) -> dict[str, object]:
@@ -293,7 +396,10 @@ class _CheckpointManifestCallback:
                 _write_model_card(
                     checkpoint,
                     identity=self.identity,
-                    training_metrics=_latest_training_metrics(state),
+                    training_metrics={
+                        **_latest_training_metrics(state),
+                        **_latest_evaluation_metrics(state),
+                    },
                     checkpoint_step=global_step,
                     trackio_space_id=self.trackio_space_id,
                 )
@@ -427,6 +533,7 @@ def _build_trainer(
         "train_dataset": train_dataset,
         "eval_dataset": validation_dataset,
         "data_collator": data_collator,
+        "compute_metrics": _classification_metrics,
     }
     if checkpoint_identity is not None:
         trainer_values["callbacks"] = [
@@ -741,7 +848,6 @@ def train_landuse_classifier(
         train_output = _run_trainer(trainer, resume_from_checkpoint)
         trainer.save_model(str(output_directory))
         tokenizer.save_pretrained(str(output_directory))
-        raw_training_metrics = getattr(train_output, "metrics", None)
         _write_model_card(
             output_directory,
             identity=_model_card_identity(
@@ -749,11 +855,7 @@ def train_landuse_classifier(
                 config=training_config,
                 contract=contract,
             ),
-            training_metrics=(
-                raw_training_metrics
-                if isinstance(raw_training_metrics, Mapping)
-                else None
-            ),
+            training_metrics=_metrics_for_model_card(train_output, trainer),
             trackio_space_id=(
                 tracking.static_space_id if training_config.sync_trackio else None
             ),

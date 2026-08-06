@@ -28,7 +28,7 @@ The execution contract is:
   each round probes all configured sites and runs one 20-minute trial at a time;
   a fallback with no scheduler forecast triggers this bounded search
   immediately;
-- retain two identity-bound checkpoints and submit at most three bounded
+- retain five identity-bound checkpoints and submit at most three bounded
   successor jobs when a terminal job has no verified completion;
 - verify the completion manifest and remote Hub facts before success cleanup; and
 - remove only the exact marked successful run root unless retention is requested.

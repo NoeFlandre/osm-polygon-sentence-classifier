@@ -34,13 +34,13 @@ Grid'5000 work. The training module is a separate explicit call: it consumes
 only the clean iterator and directs model caches, checkpoints, outputs, and
 Trackio state beneath the approved root. Publication and static Trackio
 synchronization are separate opt-in flags. When enabled, the Trainer records
-metrics locally during every job segment and syncs the static Space and Bucket
-after each complete checkpoint and after the final model is saved, while the
-model repository receives a generated README at each complete checkpoint and
-after final publication. The model repository retains only one remote
-`checkpoints/last-checkpoint` snapshot; older checkpoint snapshots are not
-retained remotely. The generated README contains no credentials, sentence
-rows, or raw dataset text.
+  metrics locally during every job segment and syncs the static Space and Bucket
+  after each complete checkpoint and after the final model is saved, while the
+  model repository receives a generated README at each complete checkpoint and
+  after final publication. Evaluation metrics include accuracy, precision,
+  recall, and F1. Each checkpoint is stored beneath its permanent remote
+  `checkpoints/step-N/` directory. The generated README contains no
+  credentials, sentence rows, or raw dataset text.
 
 Credentials are used only by an explicitly authorized external CLI or runtime
 authentication flow. They must never be committed to the repository or placed

@@ -372,6 +372,11 @@ class Grid5000Plan:
     identity: Grid5000RunIdentity
     allocation: Grid5000Allocation
     resume_from_checkpoint: bool = False
+    checkout_commit: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.checkout_commit is not None:
+            _require_revision("checkout_commit", self.checkout_commit)
 
     @property
     def worker_command(self) -> str:
@@ -383,6 +388,9 @@ class Grid5000Plan:
         worker's managed persistent data root.
         """
 
+        checkout_args: tuple[str, ...] = ()
+        if self.checkout_commit is not None:
+            checkout_args = ("--checkout-commit", self.checkout_commit)
         worker_args = (
             "run",
             "--locked",
@@ -393,6 +401,7 @@ class Grid5000Plan:
             self.identity.run_id,
             "--source-commit",
             self.identity.source_commit,
+            *checkout_args,
             "--dataset-revision",
             self.identity.dataset_revision,
             "--model-revision",
@@ -443,10 +452,11 @@ class Grid5000Plan:
         """Return a read-only exact-commit and clean-checkout guard."""
 
         checkout = f'"$HOME/{REMOTE_CHECKOUT_SUBDIRECTORY}"'
+        checkout_commit = self.checkout_commit or self.identity.source_commit
         remote_command = (
             f"test -d {checkout}/.git && "
             f'test "$(git -C {checkout} rev-parse HEAD)" = '
-            f"{self.identity.source_commit} && "
+            f"{checkout_commit} && "
             f'test -z "$(git -C {checkout} status --porcelain)"'
         )
         return _ssh_argv(self.allocation.site, remote_command)

@@ -47,14 +47,15 @@ the same efficient pattern as
 By default, model publication and remote metric synchronization are disabled.
 When explicitly enabled, the completed top-level model files go to the
 [dedicated model repository](https://huggingface.co/NoeFlandre/osm-polygon-sentence-classifier)
-each complete checkpoint updates the repository's single
-`checkpoints/last-checkpoint` snapshot, and Trackio publishes a static metric
+each complete checkpoint updates its permanent
+`checkpoints/step-N/` directory, and Trackio publishes a static metric
 snapshot to the free public [Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-trackio)
 through its dedicated Bucket after each complete checkpoint and final
-publication. The model README is generated from safe run metadata and scalar
-metrics at each checkpoint and final publication. Checkpoint Hub uploads are queued in order and
-completed before the final model publication; older checkpoint snapshots are
-not retained remotely.
+publication. Evaluation logs include accuracy, precision, recall, and F1. The
+model README is generated from safe run metadata, evaluation metrics, and
+checkpoint progress at each checkpoint and final publication. Checkpoint Hub
+uploads are queued in order and completed before the final model publication;
+older checkpoint snapshots remain available remotely.
 
 The autonomous `grid5000-landuse run` command requires a pinned model revision
 and uses the current clean source commit by default. Without `--execute` it
@@ -76,7 +77,7 @@ flags, it creates the dedicated model/Trackio destinations idempotently,
 publishes each complete checkpoint and then the validated final model, verifies
 the Hub results, and
 cleans only the marked per-run remote root. The worker receives HF auth over
-SSH stdin and never records the credential. It retains two complete,
+SSH stdin and never records the credential. It retains five complete,
 identity-bound checkpoints; after an incomplete terminal job, the controller
 submits a bounded successor on the same site and the worker resumes from the
 newest valid checkpoint. It never restarts a continuation without checkpoint

@@ -34,6 +34,7 @@ OperationFactory = Callable[..., Any]
 _WEIGHT_PATTERN = re.compile(
     r"(?:model|pytorch_model)(?:-\d{5}-of-\d{5})?\.(?:bin|safetensors)$"
 )
+_CHECKPOINT_NAME_PATTERN = re.compile(r"checkpoint-([1-9][0-9]*)$")
 _ALLOWED_ROOT_NAMES = frozenset(
     {
         "added_tokens.json",
@@ -356,9 +357,10 @@ def _complete_checkpoint_files(
 
 
 def _checkpoint_path_in_repo(path: Path, checkpoint: Path) -> str:
-    if path == checkpoint / "README.md":
-        return "README.md"
-    return f"checkpoints/last-checkpoint/{path.name}"
+    match = _CHECKPOINT_NAME_PATTERN.fullmatch(checkpoint.name)
+    if match is None:
+        raise ModelPublicationError("checkpoint directory name is invalid")
+    return f"checkpoints/step-{match.group(1)}/{path.name}"
 
 
 def publish_checkpoint_directory(
@@ -369,7 +371,7 @@ def publish_checkpoint_directory(
     hub_api: Any | None = None,
     operation_factory: OperationFactory | None = None,
 ) -> ModelPublicationResult:
-    """Commit one complete checkpoint as the repository's latest snapshot."""
+    """Commit one complete checkpoint under its permanent step directory."""
 
     repository = _require_non_blank(repository_id, "repository_id")
     checkpoint = Path(directory)

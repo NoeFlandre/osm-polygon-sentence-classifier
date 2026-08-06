@@ -29,16 +29,17 @@ The foundation keeps the first interfaces narrow and local:
   records and wires a Hugging Face sequence-classification Trainer. Its
   default `jhu-clsp/mmBERT-small` encoder is multilingual and frozen; only the
   binary classification head is trained, following the FineWeb-Edu pattern.
-  Model caches, two retained checkpoints, outputs, and Trackio state are
+  Model caches, five retained checkpoints, outputs, and Trackio state are
   directed beneath the managed root. Checkpoints carry the immutable run
   identity so a later Grid5000 worker can resume safely. Explicit flags publish
-  each complete checkpoint to one ordered `checkpoints/last-checkpoint` snapshot
-  and records metrics locally through Trackio. After each complete checkpoint
-  and final publication it explicitly syncs a static snapshot to the Space and
-  Bucket. It generates a credential-free model README with checkpoint progress
-  and scalar metrics, then publishes validated final top-level model files with
-  the final README. Checkpoint uploads are drained before final publication;
-  older remote snapshots are not retained. The module does not submit
+  each complete checkpoint to its permanent `checkpoints/step-N/` directory and
+  records accuracy, precision, recall, and F1 locally through Trackio. After
+  each complete checkpoint and final publication it explicitly syncs a static
+  snapshot to the Space and Bucket. It generates a credential-free model README
+  with checkpoint progress and scalar evaluation metrics, then publishes
+  validated final top-level model files with the final README. Checkpoint
+  uploads are drained before final publication; older remote snapshots remain
+  available. The module does not submit
   Grid5000 work.
 - `publication.py` validates complete checkpoints and final model directories,
   renders the safe model README, and performs add-only commits to the configured

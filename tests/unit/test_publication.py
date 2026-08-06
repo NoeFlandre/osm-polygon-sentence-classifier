@@ -187,7 +187,7 @@ def test_checkpoint_publication_uploads_a_complete_latest_snapshot(
 
     assert result.commit_id == "e" * 40
     assert result.files == tuple(
-        f"checkpoints/last-checkpoint/{name}"
+        f"checkpoints/step-10/{name}"
         for name in (
             "checkpoint-manifest.json",
             "model.safetensors",
@@ -227,13 +227,45 @@ def test_checkpoint_publication_includes_the_generated_model_card(
         operation_factory=operation_factory,
     )
 
-    assert "README.md" in result.files
-    assert "README.md" in [item["path_in_repo"] for item in operations]
+    assert "checkpoints/step-10/README.md" in result.files
+    assert "checkpoints/step-10/README.md" in [
+        item["path_in_repo"] for item in operations
+    ]
     assert all(
-        item["path_in_repo"] == "README.md"
-        or str(item["path_in_repo"]).startswith("checkpoints/last-checkpoint/")
+        str(item["path_in_repo"]).startswith("checkpoints/step-10/")
         for item in operations
     )
+
+
+def test_checkpoint_publication_keeps_different_steps_in_different_directories(
+    tmp_path: Path,
+) -> None:
+    published_paths: list[str] = []
+
+    class FakeHub:
+        def create_commit(self, **kwargs: object) -> SimpleNamespace:
+            raw_operations = kwargs.get("operations")
+            if not isinstance(raw_operations, list):
+                raise AssertionError("operations were not supplied")
+            for operation in raw_operations:
+                if isinstance(operation, dict):
+                    published_paths.append(str(operation.get("path_in_repo")))
+            return SimpleNamespace(
+                oid="e" * 40,
+                commit_url="https://huggingface.co/test/commit/" + "e" * 40,
+            )
+
+    for step in (10, 20):
+        publish_checkpoint_directory(
+            _checkpoint_directory(tmp_path, step=step),
+            "owner/model",
+            identity=CHECKPOINT_IDENTITY,
+            hub_api=FakeHub(),
+            operation_factory=lambda **kwargs: kwargs,
+        )
+
+    assert any(path.startswith("checkpoints/step-10/") for path in published_paths)
+    assert any(path.startswith("checkpoints/step-20/") for path in published_paths)
 
 
 def test_model_card_contains_only_safe_training_metadata() -> None:

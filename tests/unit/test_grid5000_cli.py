@@ -189,11 +189,13 @@ def test_resume_can_explicitly_extend_a_failed_run_continuation_limit(
         facts={"max_continuations": 3, "continuation_count": 3},
     )
     captured: list[int] = []
+    checkout_revisions: list[str | None] = []
 
     class FakeController:
         def __init__(self, config, *, emit) -> None:
             del emit
             captured.append(config.max_continuations)
+            checkout_revisions.append(config.worker_source_commit)
 
         def run(self) -> SimpleNamespace:
             return SimpleNamespace(to_dict=lambda: {"phase": "submitted"})
@@ -203,6 +205,7 @@ def test_resume_can_explicitly_extend_a_failed_run_continuation_limit(
         "load",
         lambda _self, _run_id: state,
     )
+    monkeypatch.setattr(grid5000_cli, "_current_source_commit", lambda: "e" * 40)
     monkeypatch.setattr(grid5000_cli, "AutonomousRunController", FakeController)
 
     exit_code = grid5000_cli.main(
@@ -218,6 +221,7 @@ def test_resume_can_explicitly_extend_a_failed_run_continuation_limit(
 
     assert exit_code == 0
     assert captured == [6]
+    assert checkout_revisions == ["e" * 40]
     assert json.loads(capsys.readouterr().out) == {"phase": "submitted"}
 
 

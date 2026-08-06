@@ -69,7 +69,7 @@ def test_training_config_is_frozen_and_uses_a_managed_relative_output() -> None:
     assert not config.output_subdirectory.is_absolute()
     assert config.max_steps > 0
     assert config.max_length > 0
-    assert config.save_total_limit == 2
+    assert config.save_total_limit == 5
 
     with pytest.raises(AttributeError):
         config.max_steps = 1  # type: ignore[misc]  # ty: ignore[invalid-assignment]
@@ -108,6 +108,22 @@ def test_training_config_rejects_non_positive_integer_settings(
 ) -> None:
     with pytest.raises(TrainingError, match=field):
         cast(Any, TrainingConfig)(**{field: value})
+
+
+def test_classification_metrics_report_accuracy_precision_recall_and_f1() -> None:
+    from osm_polygon_sentence_classifier import training
+
+    metrics = training._classification_metrics(
+        SimpleNamespace(
+            predictions=[[3.0, 1.0], [1.0, 4.0], [2.0, 1.0], [0.0, 5.0]],
+            label_ids=[0, 1, 1, 1],
+        )
+    )
+
+    assert metrics["accuracy"] == pytest.approx(0.75)
+    assert metrics["precision"] == pytest.approx(1.0)
+    assert metrics["recall"] == pytest.approx(2 / 3)
+    assert metrics["f1"] == pytest.approx(0.8)
 
 
 def test_split_records_are_lazy_clean_and_label_mapped() -> None:
@@ -347,13 +363,14 @@ def test_training_wires_managed_streams_tokenizer_trainer_and_tracking(
     assert arguments["report_to"] == ["trackio"]
     assert arguments["project"] == "osm-polygon-sentence-classifier"
     assert arguments["run_name"] == "test-run"
-    assert arguments["save_total_limit"] == 2
+    assert arguments["save_total_limit"] == 5
     assert arguments["remove_unused_columns"] is False
     assert arguments["trackio_static_space_id"] is False
     assert arguments["trackio_space_id"] is None
     assert arguments["trackio_bucket_id"] is None
     assert _FakeTrainer.init_calls[0]["train_dataset"] is _FakeDataset.created[0]
     assert _FakeTrainer.init_calls[0]["eval_dataset"] is _FakeDataset.created[1]
+    assert callable(_FakeTrainer.init_calls[0]["compute_metrics"])
     assert _FakeTrainer.save_model_calls == [
         str(ProjectConfig().data_root / "models/landuse")
     ]
@@ -609,6 +626,29 @@ def test_checkpoint_callback_waits_before_retained_checkpoint_rotation(
         )
 
     assert events == ["queue", "queue", "wait"]
+
+
+def test_model_card_metrics_include_the_latest_evaluation_metrics() -> None:
+    from osm_polygon_sentence_classifier import training
+
+    metrics = training._metrics_for_model_card(
+        SimpleNamespace(metrics={"train_loss": 0.4}),
+        SimpleNamespace(
+            state=SimpleNamespace(
+                log_history=[
+                    {"eval_loss": 0.3, "eval_accuracy": 0.8, "eval_f1": 0.7},
+                    {"loss": 0.2},
+                ]
+            )
+        ),
+    )
+
+    assert metrics == {
+        "train_loss": 0.4,
+        "eval_accuracy": 0.8,
+        "eval_f1": 0.7,
+        "eval_loss": 0.3,
+    }
 
 
 def test_checkpoint_callback_supports_trainer_initialization_event() -> None:
