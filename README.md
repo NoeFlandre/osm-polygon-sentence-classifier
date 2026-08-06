@@ -16,8 +16,9 @@ Face Trainer with local Trackio reporting, and saves model artifacts beneath
 the same root. It retains two complete, identity-bound checkpoints so an
 incomplete allocation can continue safely. An authorized Grid'5000 run may
 explicitly publish the
-completed model to the dedicated model repository and synchronize finished
-metrics to the static
+completed model to the dedicated model repository, update its single
+`checkpoints/last-checkpoint` snapshot after each complete checkpoint, and
+synchronize Trackio metrics to the static
 [Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-trackio)
 and [metric Bucket](https://huggingface.co/buckets/NoeFlandre/osm-polygon-sentence-classifier-trackio-data).
 
@@ -56,7 +57,10 @@ All local datasets, checkpoints, models, and experiment logs must be kept
 beneath the external data root. Quality commands do not download data or
 create training outputs. An authorized training call stores model caches,
 checkpoints, models, and Trackio state beneath that root. Remote publication is
-final-only: checkpoint directories are never uploaded.
+opt-in: the final model is published at the repository root, and the latest
+complete checkpoint replaces the single `checkpoints/last-checkpoint` snapshot.
+The checkpoint upload is queued in order and drained before final publication;
+older checkpoint snapshots are not retained remotely.
 
 Run the audit only when the pinned dataset review is explicitly authorized:
 

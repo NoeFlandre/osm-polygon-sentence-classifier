@@ -12,7 +12,7 @@ TRACKIO_BUCKET_ID = "NoeFlandre/osm-polygon-sentence-classifier-trackio-data"
 
 
 class TrackingError(RuntimeError):
-    """Raised when the final Trackio synchronization cannot complete."""
+    """Raised when an explicit Trackio synchronization cannot complete."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +61,7 @@ def ensure_trackio_resources(
 
 
 def sync_project_to_static_space(settings: TrackioSettings) -> str:
-    """Synchronize a completed local project to the static Trackio Space."""
+    """Synchronize the current local project snapshot to the static Space."""
 
     try:
         trackio: Any = import_module("trackio")

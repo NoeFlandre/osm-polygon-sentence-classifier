@@ -1,13 +1,15 @@
-"""Validated final model publication to the project Hugging Face repository."""
+"""Validated model and checkpoint publication to the project Hub repository."""
 
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 from typing import Any
+
+from .checkpointing import CheckpointError, find_complete_checkpoint
 
 
 class ModelPublicationError(RuntimeError):
@@ -46,6 +48,20 @@ _ALLOWED_ROOT_NAMES = frozenset(
         "training_args.bin",
         "vocab.json",
         "vocab.txt",
+    }
+)
+_ALLOWED_CHECKPOINT_NAMES = frozenset(
+    {
+        "checkpoint-manifest.json",
+        "config.json",
+        "generation_config.json",
+        "model.safetensors.index.json",
+        "optimizer.pt",
+        "pytorch_model.bin.index.json",
+        "rng_state.pth",
+        "scaler.pt",
+        "scheduler.pt",
+        "trainer_state.json",
     }
 )
 
@@ -190,9 +206,94 @@ def publish_model_directory(
     )
 
 
+def _complete_checkpoint_files(
+    directory: Path,
+    *,
+    identity: Mapping[str, object],
+) -> tuple[Path, ...]:
+    try:
+        selected = find_complete_checkpoint(
+            directory,
+            identity=identity,
+        )
+    except CheckpointError as error:
+        raise ModelPublicationError("checkpoint evidence is invalid") from error
+    if selected is None:
+        raise ModelPublicationError("model output is not a complete checkpoint")
+    try:
+        files = tuple(
+            sorted(
+                path
+                for path in directory.iterdir()
+                if path.is_file()
+                and not path.is_symlink()
+                and (
+                    path.name in _ALLOWED_CHECKPOINT_NAMES
+                    or _WEIGHT_PATTERN.fullmatch(path.name)
+                )
+            )
+        )
+    except OSError as error:
+        raise ModelPublicationError("checkpoint output cannot be read") from error
+    if not files:
+        raise ModelPublicationError("checkpoint output contains no files")
+    return files
+
+
+def publish_checkpoint_directory(
+    directory: str | Path,
+    repository_id: object,
+    *,
+    identity: Mapping[str, object],
+    hub_api: Any | None = None,
+    operation_factory: OperationFactory | None = None,
+) -> ModelPublicationResult:
+    """Commit one complete checkpoint as the repository's latest snapshot."""
+
+    repository = _require_non_blank(repository_id, "repository_id")
+    checkpoint = Path(directory)
+    files = _complete_checkpoint_files(checkpoint, identity=identity)
+    factory = operation_factory or _default_operation_factory()
+    operations: list[Any] = []
+    try:
+        for path in files:
+            operations.append(
+                factory(
+                    path_in_repo=(f"checkpoints/last-checkpoint/{path.name}"),
+                    path_or_fileobj=str(path),
+                )
+            )
+    except Exception as error:
+        raise ModelPublicationError(
+            "Hugging Face checkpoint operations could not be constructed"
+        ) from error
+
+    api = hub_api or _default_hub_api()
+    try:
+        info = api.create_commit(
+            repo_id=repository,
+            repo_type="model",
+            operations=operations,
+            commit_message=f"Publish checkpoint {checkpoint.name}",
+            revision="main",
+        )
+    except Exception as error:
+        raise ModelPublicationError(
+            "Hugging Face checkpoint publication failed"
+        ) from error
+    commit_id, commit_url = _commit_facts(info)
+    return ModelPublicationResult(
+        repository_id=repository,
+        commit_id=commit_id,
+        commit_url=commit_url,
+        files=tuple(f"checkpoints/last-checkpoint/{path.name}" for path in files),
+    )
+
+
 __all__ = [
     "ModelPublicationError",
     "ModelPublicationResult",
     "ensure_model_repository",
+    "publish_checkpoint_directory",
     "publish_model_directory",
 ]

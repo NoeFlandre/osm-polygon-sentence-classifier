@@ -47,9 +47,12 @@ the same efficient pattern as
 By default, model publication and remote metric synchronization are disabled.
 When explicitly enabled, the completed top-level model files go to the
 [dedicated model repository](https://huggingface.co/NoeFlandre/osm-polygon-sentence-classifier)
-and the finished Trackio project is synchronized to the public static
+each complete checkpoint updates the repository's single
+`checkpoints/last-checkpoint` snapshot, and Trackio is synchronized to the public static
 [Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-trackio)
-through its dedicated Bucket.
+through its dedicated Bucket. Checkpoint Hub uploads are queued in order and
+completed before the final model publication; older checkpoint snapshots are
+not retained remotely.
 
 The autonomous `grid5000-landuse run` command requires a pinned model revision
 and uses the current clean source commit by default. Without `--execute` it
@@ -68,7 +71,8 @@ sites, derives the live resource class, performs both Grid'5000 usage-policy
 checks, reads the home soft quota, records durable intent before OAR, and
 refuses unsafe duplicate or ambiguous submissions. With the two publication
 flags, it creates the dedicated model/Trackio destinations idempotently,
-publishes only after final model validation, verifies the Hub results, and
+publishes each complete checkpoint and then the validated final model, verifies
+the Hub results, and
 cleans only the marked per-run remote root. The worker receives HF auth over
 SSH stdin and never records the credential. It retains two complete,
 identity-bound checkpoints; after an incomplete terminal job, the controller

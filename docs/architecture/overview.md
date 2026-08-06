@@ -23,21 +23,23 @@ The foundation keeps the first interfaces narrow and local:
   content-hash readiness reasons, and a sorted polygon split manifest;
   `audit_cli.py` writes those derived artifacts beneath `audit/landuse`.
 - `tracking.py` builds Trackio project, managed-directory, static-Space, and
-  Bucket settings. It also owns the explicit final synchronization boundary;
-  normal configuration does not import or start Trackio.
+  Bucket settings. It owns the explicit synchronization boundary; normal
+  configuration does not import or start Trackio.
 - `training.py` adapts the clean iterator to lazy split-specific Trainer
   records and wires a Hugging Face sequence-classification Trainer. Its
   default `jhu-clsp/mmBERT-small` encoder is multilingual and frozen; only the
   binary classification head is trained, following the FineWeb-Edu pattern.
   Model caches, two retained checkpoints, outputs, and Trackio state are
   directed beneath the managed root. Checkpoints carry the immutable run
-  identity so a later Grid5000 worker can resume safely. Explicit flags may
-  publish validated final top-level model files and synchronize completed
-  metrics; checkpoint directories are not published. The module does not
-  submit Grid5000 work.
-- `publication.py` validates a completed model directory and performs one
-  add-only commit to the configured Hugging Face model repository. It rejects
-  incomplete output before any Hub call.
+  identity so a later Grid5000 worker can resume safely. Explicit flags publish
+  each complete checkpoint to one ordered `checkpoints/last-checkpoint` snapshot
+  and synchronize Trackio at that boundary, then publish validated final
+  top-level model files. Checkpoint uploads are drained before final publication;
+  older remote snapshots are not retained. The module does not submit
+  Grid5000 work.
+- `publication.py` validates complete checkpoints and final model directories,
+  performing add-only commits to the configured Hugging Face model repository.
+  It rejects incomplete output before any Hub call.
 - `grid5000.py` keeps the immutable identity, policy-bounded allocation, fixed
   SSH/OAR argument construction, and compatibility submission boundary. Its
   worker command rejects non-x86_64 compute nodes before invoking the locked

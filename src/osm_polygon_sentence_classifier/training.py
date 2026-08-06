@@ -24,8 +24,18 @@ from .dataset_loader import (
     load_streaming_rows,
 )
 from .paths import ManagedPaths
-from .publication import ModelPublicationResult, publish_model_directory
-from .tracking import settings_for, sync_project_to_static_space
+from .publication import (
+    ModelPublicationError,
+    ModelPublicationResult,
+    publish_checkpoint_directory,
+    publish_model_directory,
+)
+from .tracking import (
+    TrackingError,
+    TrackioSettings,
+    settings_for,
+    sync_project_to_static_space,
+)
 
 LabelId = Literal[0, 1]
 
@@ -157,14 +167,34 @@ class _TrainingDependencies:
 
 
 class _CheckpointManifestCallback:
-    """Record identity only after Hugging Face finishes a checkpoint save."""
+    """Record, publish, and track one checkpoint after Trainer saves it."""
 
-    def __init__(self, identity: Mapping[str, object]) -> None:
+    def __init__(
+        self,
+        identity: Mapping[str, object],
+        *,
+        model_repository_id: str | None = None,
+        tracking_settings: TrackioSettings | None = None,
+        hub_api: Any | None = None,
+    ) -> None:
         self.identity = dict(identity)
+        self.model_repository_id = model_repository_id
+        self.tracking_settings = tracking_settings
+        self.hub_api = hub_api
+        self._pending_publications: list[Any] = []
 
     def on_init_end(self, args: Any, state: Any, control: Any, **kwargs: object) -> Any:
         del args, state, kwargs
         return control
+
+    def _wait_for_next_publication(self) -> None:
+        if not self._pending_publications:
+            return
+        future = self._pending_publications.pop(0)
+        try:
+            future.result()
+        except Exception as error:
+            raise TrainingError("checkpoint model publication failed") from error
 
     def on_save(self, args: Any, state: Any, control: Any, **kwargs: object) -> Any:
         del kwargs
@@ -180,20 +210,86 @@ class _CheckpointManifestCallback:
             )
         except CheckpointError as error:
             raise TrainingError("checkpoint manifest could not be written") from error
+        if self.model_repository_id is not None:
+            checkpoint = Path(output_directory) / f"checkpoint-{global_step}"
+            if self.hub_api is None:
+                try:
+                    publish_checkpoint_directory(
+                        checkpoint,
+                        self.model_repository_id,
+                        identity=self.identity,
+                    )
+                except ModelPublicationError as error:
+                    raise TrainingError(
+                        "checkpoint model publication failed"
+                    ) from error
+            else:
+                run_as_future = getattr(self.hub_api, "run_as_future", None)
+                if not callable(run_as_future):
+                    raise TrainingError(
+                        "checkpoint publication API cannot queue background work"
+                    )
+                self._pending_publications.append(
+                    run_as_future(
+                        publish_checkpoint_directory,
+                        checkpoint,
+                        self.model_repository_id,
+                        identity=self.identity,
+                        hub_api=self.hub_api,
+                    )
+                )
+                save_total_limit = getattr(args, "save_total_limit", None)
+                if (
+                    isinstance(save_total_limit, int)
+                    and not isinstance(save_total_limit, bool)
+                    and save_total_limit > 0
+                    and len(self._pending_publications) >= save_total_limit
+                ):
+                    self._wait_for_next_publication()
+        if self.tracking_settings is not None:
+            try:
+                sync_project_to_static_space(self.tracking_settings)
+            except TrackingError as error:
+                raise TrainingError(
+                    "checkpoint Trackio synchronization failed"
+                ) from error
+        return control
+
+    def on_train_end(
+        self, args: Any, state: Any, control: Any, **kwargs: object
+    ) -> Any:
+        del args, state, kwargs
+        while self._pending_publications:
+            self._wait_for_next_publication()
         return control
 
 
 def _make_checkpoint_manifest_callback(
-    identity: Mapping[str, object], trainer_callback: Any | None
+    identity: Mapping[str, object],
+    trainer_callback: Any | None,
+    *,
+    model_repository_id: str | None = None,
+    tracking_settings: TrackioSettings | None = None,
+    hub_api: Any | None = None,
 ) -> Any:
     if trainer_callback is None:
-        return _CheckpointManifestCallback(identity)
+        return _CheckpointManifestCallback(
+            identity,
+            model_repository_id=model_repository_id,
+            tracking_settings=tracking_settings,
+            hub_api=hub_api,
+        )
     callback_type = type(
         "_BoundCheckpointManifestCallback",
         (_CheckpointManifestCallback, trainer_callback),
         {},
     )
-    return callback_type(identity)
+    return callback_type(
+        identity,
+        model_repository_id=model_repository_id,
+        tracking_settings=tracking_settings,
+        hub_api=hub_api,
+    )
 
 
 def _prepare_checkpoint_resume(
@@ -230,6 +326,9 @@ def _build_trainer(
     validation_dataset: Any,
     data_collator: Any,
     checkpoint_identity: Mapping[str, object] | None,
+    model_repository_id: str | None = None,
+    tracking_settings: TrackioSettings | None = None,
+    hub_api: Any | None = None,
 ) -> Any:
     trainer_values: dict[str, object] = {
         "model": model,
@@ -243,6 +342,9 @@ def _build_trainer(
             _make_checkpoint_manifest_callback(
                 checkpoint_identity,
                 dependencies.trainer_callback,
+                model_repository_id=model_repository_id,
+                tracking_settings=tracking_settings,
+                hub_api=hub_api,
             )
         ]
     return dependencies.trainer(**trainer_values)
@@ -275,6 +377,16 @@ def _load_training_dependencies() -> _TrainingDependencies:
         trainer=transformers_module.Trainer,
         trainer_callback=transformers_module.TrainerCallback,
     )
+
+
+def _load_checkpoint_publication_api() -> Any:
+    try:
+        hub = cast(Any, import_module("huggingface_hub"))
+        return hub.HfApi()
+    except Exception as error:
+        raise TrainingError(
+            "Hugging Face checkpoint publication requires the training dependencies"
+        ) from error
 
 
 def iter_split_training_records(
@@ -428,7 +540,9 @@ def train_landuse_classifier(
     The optional dependency group is imported only when this function is called.
     Datasets, model caches, checkpoints, and Trackio state are directed beneath
     the approved external data root. Publication and Trackio synchronization are
-    disabled by default and require explicit configuration flags.
+    disabled by default and require explicit configuration flags. When
+    checkpoint identity is supplied, enabled publication and synchronization
+    are also performed at each complete checkpoint.
     """
 
     training_config = config or TrainingConfig()
@@ -504,6 +618,9 @@ def train_landuse_classifier(
             )
         )
         data_collator = dependencies.data_collator_with_padding(tokenizer=tokenizer)
+        checkpoint_hub_api = None
+        if checkpoint_identity is not None and training_config.publish_to_hub:
+            checkpoint_hub_api = _load_checkpoint_publication_api()
         trainer = _build_trainer(
             dependencies,
             model=model,
@@ -512,6 +629,13 @@ def train_landuse_classifier(
             validation_dataset=validation_dataset,
             data_collator=data_collator,
             checkpoint_identity=checkpoint_identity,
+            model_repository_id=(
+                effective_project_config.target_model_repository_id
+                if training_config.publish_to_hub
+                else None
+            ),
+            tracking_settings=tracking if training_config.sync_trackio else None,
+            hub_api=checkpoint_hub_api,
         )
         train_output = _run_trainer(trainer, resume_from_checkpoint)
         trainer.save_model(str(output_directory))

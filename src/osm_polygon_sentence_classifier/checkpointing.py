@@ -189,6 +189,27 @@ def _is_complete_checkpoint(
     return CheckpointInfo(path=checkpoint_directory, global_step=global_step)
 
 
+def find_complete_checkpoint(
+    checkpoint_directory: Path,
+    *,
+    identity: Mapping[str, object],
+) -> CheckpointInfo | None:
+    """Return an exact identity-matching checkpoint, if it is complete."""
+
+    directory = Path(checkpoint_directory)
+    if not directory.is_absolute():
+        raise CheckpointError("checkpoint directory must not be symlinked")
+    if directory.is_symlink():
+        return None
+    if _contains_symlink(directory):
+        raise CheckpointError("checkpoint directory must not be symlinked")
+    expected_identity = _canonical_json(dict(identity))
+    return _is_complete_checkpoint(
+        directory,
+        expected_identity=expected_identity,
+    )
+
+
 def find_latest_complete_checkpoint(
     output_directory: Path,
     *,
@@ -203,7 +224,6 @@ def find_latest_complete_checkpoint(
         return None
     if not output.is_dir():
         raise CheckpointError("checkpoint output path must be a directory")
-    expected_identity = _canonical_json(dict(identity))
     try:
         candidates = tuple(
             path
@@ -216,9 +236,9 @@ def find_latest_complete_checkpoint(
         result
         for candidate in candidates
         if (
-            result := _is_complete_checkpoint(
+            result := find_complete_checkpoint(
                 candidate,
-                expected_identity=expected_identity,
+                identity=identity,
             )
         )
         is not None
@@ -232,6 +252,7 @@ __all__ = [
     "CHECKPOINT_MANIFEST_FILENAME",
     "CheckpointError",
     "CheckpointInfo",
+    "find_complete_checkpoint",
     "find_latest_complete_checkpoint",
     "write_checkpoint_manifest",
 ]

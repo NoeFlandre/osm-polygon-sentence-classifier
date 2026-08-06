@@ -120,8 +120,11 @@ has terminated, the controller has found complete checkpoint evidence, and the
 same site passes the storage/policy preflight again. The successor worker
 requires a valid checkpoint and passes the newest one to the Trainer; missing,
 partial, or identity-mismatched checkpoints stop the run. When requested, the
-worker publishes the final model to the dedicated Hugging Face model repository
-and synchronizes Trackio to its static Space and Bucket.
+worker queues each complete checkpoint to the dedicated Hugging Face model
+repository's single `checkpoints/last-checkpoint` snapshot and synchronizes
+Trackio to its static Space and Bucket at the same boundary. The ordered Hub
+queue is drained before the final top-level model publication; older remote
+checkpoint snapshots are not retained.
 
 After a successful terminal job, the controller validates the manifest
 identity, verifies the recorded model commit and Trackio Space through the Hub,

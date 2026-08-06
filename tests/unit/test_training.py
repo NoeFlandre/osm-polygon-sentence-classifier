@@ -442,6 +442,160 @@ def test_checkpoint_callback_writes_identity_after_a_save(tmp_path: Path) -> Non
     assert result.global_step == 7
 
 
+def test_checkpoint_callback_publishes_then_syncs_after_manifest_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from osm_polygon_sentence_classifier import training
+
+    checkpoint = tmp_path / "checkpoint-7"
+    checkpoint.mkdir()
+    for filename in (
+        "model.safetensors",
+        "optimizer.pt",
+        "scheduler.pt",
+        "rng_state.pth",
+    ):
+        (checkpoint / filename).write_bytes(b"checkpoint")
+    (checkpoint / "trainer_state.json").write_text(
+        '{"global_step": 7}', encoding="utf-8"
+    )
+    identity = {"run_id": "a" * 20, "model_revision": "b" * 40}
+    publication_calls: list[tuple[Path, str, Mapping[str, object]]] = []
+    sync_calls: list[object] = []
+
+    def publish(
+        directory: Path,
+        repository_id: str,
+        *,
+        identity: Mapping[str, object],
+    ) -> object:
+        assert (directory / "checkpoint-manifest.json").is_file()
+        publication_calls.append((directory, repository_id, identity))
+        return object()
+
+    monkeypatch.setattr(training, "publish_checkpoint_directory", publish)
+    monkeypatch.setattr(
+        training,
+        "sync_project_to_static_space",
+        lambda settings: sync_calls.append(settings) or "space",
+    )
+    settings = cast(Any, object())
+
+    training._CheckpointManifestCallback(
+        identity,
+        model_repository_id="owner/model",
+        tracking_settings=settings,
+    ).on_save(
+        args=SimpleNamespace(output_dir=str(tmp_path)),
+        state=SimpleNamespace(global_step=7),
+        control=object(),
+    )
+
+    assert publication_calls == [(checkpoint, "owner/model", identity)]
+    assert sync_calls == [settings]
+
+
+def test_checkpoint_callback_queues_hub_publication_until_training_end(
+    tmp_path: Path,
+) -> None:
+    from osm_polygon_sentence_classifier import training
+
+    checkpoint = tmp_path / "checkpoint-7"
+    checkpoint.mkdir()
+    for filename in (
+        "model.safetensors",
+        "optimizer.pt",
+        "scheduler.pt",
+        "rng_state.pth",
+    ):
+        (checkpoint / filename).write_bytes(b"checkpoint")
+    (checkpoint / "trainer_state.json").write_text(
+        '{"global_step": 7}', encoding="utf-8"
+    )
+    events: list[str] = []
+
+    class Future:
+        def result(self) -> object:
+            events.append("wait")
+            return object()
+
+    class Hub:
+        def run_as_future(
+            self, function: object, *args: object, **kwargs: object
+        ) -> Future:
+            del function, args, kwargs
+            events.append("queue")
+            return Future()
+
+    callback = training._CheckpointManifestCallback(
+        {"run_id": "a" * 20, "model_revision": "b" * 40},
+        model_repository_id="owner/model",
+        hub_api=Hub(),
+    )
+    callback.on_save(
+        args=SimpleNamespace(output_dir=str(tmp_path)),
+        state=SimpleNamespace(global_step=7),
+        control=object(),
+    )
+    assert events == ["queue"]
+
+    callback.on_train_end(
+        args=SimpleNamespace(),
+        state=SimpleNamespace(),
+        control=object(),
+    )
+
+    assert events == ["queue", "wait"]
+
+
+def test_checkpoint_callback_waits_before_retained_checkpoint_rotation(
+    tmp_path: Path,
+) -> None:
+    from osm_polygon_sentence_classifier import training
+
+    events: list[str] = []
+
+    class Future:
+        def result(self) -> object:
+            events.append("wait")
+            return object()
+
+    class Hub:
+        def run_as_future(
+            self, function: object, *args: object, **kwargs: object
+        ) -> Future:
+            del function, args, kwargs
+            events.append("queue")
+            return Future()
+
+    callback = training._CheckpointManifestCallback(
+        {"run_id": "a" * 20, "model_revision": "b" * 40},
+        model_repository_id="owner/model",
+        hub_api=Hub(),
+    )
+    for step in (7, 8):
+        checkpoint = tmp_path / f"checkpoint-{step}"
+        checkpoint.mkdir()
+        for filename in (
+            "model.safetensors",
+            "optimizer.pt",
+            "scheduler.pt",
+            "rng_state.pth",
+        ):
+            (checkpoint / filename).write_bytes(b"checkpoint")
+        (checkpoint / "trainer_state.json").write_text(
+            f'{{"global_step": {step}}}', encoding="utf-8"
+        )
+        callback.on_save(
+            args=SimpleNamespace(output_dir=str(tmp_path), save_total_limit=2),
+            state=SimpleNamespace(global_step=step),
+            control=object(),
+        )
+
+    assert events == ["queue", "queue", "wait"]
+
+
 def test_checkpoint_callback_supports_trainer_initialization_event() -> None:
     from osm_polygon_sentence_classifier import training
 
@@ -567,6 +721,10 @@ def test_training_can_publish_the_final_model_and_sync_trackio(
         trainer=_FakeTrainer,
     )
     monkeypatch.setattr(training, "_load_training_dependencies", lambda: dependencies)
+    checkpoint_hub_api = object()
+    monkeypatch.setattr(
+        training, "_load_checkpoint_publication_api", lambda: checkpoint_hub_api
+    )
     publication_calls: list[Path] = []
     sync_calls: list[object] = []
     monkeypatch.setattr(
@@ -593,10 +751,18 @@ def test_training_can_publish_the_final_model_and_sync_trackio(
             publish_to_hub=True,
             sync_trackio=True,
         ),
+        checkpoint_identity={"run_id": "a" * 20, "model_revision": "b" * 40},
     )
 
     assert publication_calls == [ProjectConfig().data_root / "models/landuse"]
     assert len(sync_calls) == 1
+    callbacks = cast(list[Any], _FakeTrainer.init_calls[0]["callbacks"])
+    callback = callbacks[0]
+    assert callback.model_repository_id == ProjectConfig().target_model_repository_id
+    assert (
+        callback.tracking_settings.directory == ProjectConfig().data_root / "tracking"
+    )
+    assert callback.hub_api is checkpoint_hub_api
     assert result.model_publication is not None
     assert result.model_publication.commit_id == "d" * 40
     assert result.tracking_space_id == "NoeFlandre/trackio"

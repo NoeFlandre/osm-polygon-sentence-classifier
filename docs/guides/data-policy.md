@@ -31,8 +31,10 @@ described above. It does not train, upload or publish artifacts, or submit
 Grid'5000 work. The training module is a separate explicit call: it consumes
 only the clean iterator and directs model caches, checkpoints, outputs, and
 Trackio state beneath the approved root. Publication and static Trackio sync
-are separate opt-in flags, occur only after training output is saved, and use
-the preconfigured remote destinations.
+are separate opt-in flags, use the preconfigured remote destinations, and occur
+after each complete checkpoint and after the final model is saved. The model
+repository retains only one remote `checkpoints/last-checkpoint` snapshot;
+older checkpoint snapshots are not retained remotely.
 
 Credentials are used only by an explicitly authorized external CLI or runtime
 authentication flow. They must never be committed to the repository or placed
