@@ -82,11 +82,11 @@ bounded probe after a ten-minute cooldown, for at most three rounds. It cancels
 a trial that has a known late forecast or reaches its ten-minute observation
 deadline, but lets an unpredicted trial use the full observation window. It
 adopts a trial only after it is visibly `Running`, and cancels the old fallback
-only after adoption. If the fallback still has no forecast after all three
-rounds, it is canceled and the run fails explicitly rather than waiting
-forever. Each new checkpoint successor gets its own replacement decision; an
-earlier job's trial does not suppress optimization for a later queued
-successor.
+only after adoption. If the fallback still has no forecast, or its known
+forecast is still outside the immediate-start window, after all three rounds,
+it is canceled and the run fails explicitly rather than waiting forever. Each
+new checkpoint successor gets its own replacement decision; an earlier job's
+trial does not suppress optimization for a later queued successor.
 
 The complete walltime must fit the selected policy window. During weekdays,
 automatic policy uses `day` only for a complete allocation inside 09:00–19:00

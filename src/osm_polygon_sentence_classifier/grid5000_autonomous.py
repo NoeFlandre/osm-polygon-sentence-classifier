@@ -538,21 +538,28 @@ class AutonomousRunController:
         facts = dict(current.facts or {})
         attempt_count = _replacement_attempt_count_for_job(facts, job_id=job_id)
         if attempt_count >= MAX_REPLACEMENT_ATTEMPTS:
+            if not should_seek_replacement(status, now=now):
+                return current, site, job_id, remote
             if status.scheduled_start is None:
                 message = (
                     f"{site} job {job_id} remained queued with no start-time "
                     f"prediction after {MAX_REPLACEMENT_ATTEMPTS} replacement rounds"
                 )
-                self.emit(f"{message}; canceling fallback")
-                OarClient(remote).cancel(job_id)
-                return self._fail_terminal(
-                    current,
-                    site=site,
-                    job_id=job_id,
-                    remote=remote,
-                    message=message,
+            else:
+                message = (
+                    f"{site} job {job_id} remained queued with scheduled start "
+                    f"{status.scheduled_start} after "
+                    f"{MAX_REPLACEMENT_ATTEMPTS} replacement rounds"
                 )
-            return current, site, job_id, remote
+            self.emit(f"{message}; canceling stale fallback")
+            OarClient(remote).cancel(job_id)
+            return self._fail_terminal(
+                current,
+                site=site,
+                job_id=job_id,
+                remote=remote,
+                message=message,
+            )
         if not should_seek_replacement(
             status, now=now
         ) or not _replacement_retry_due_for_job(facts, job_id=job_id, now=now):

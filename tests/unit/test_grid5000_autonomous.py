@@ -294,6 +294,7 @@ def test_queued_replacement_is_retried_after_a_cooldown_but_is_bounded(
         job_id=99,
     )
     controller.state.create(current)
+    remote = _FakeRemote()
     status = JobStatus(
         job_id=99,
         state=JobState.QUEUED,
@@ -312,7 +313,7 @@ def test_queued_replacement_is_retried_after_a_cooldown_but_is_bounded(
         status=status,
         site="grenoble",
         job_id=99,
-        remote=object(),
+        remote=remote,
     )
     assert calls == [1]
     assert dict(current.facts or {})["replacement_attempt_count"] == 1
@@ -322,7 +323,7 @@ def test_queued_replacement_is_retried_after_a_cooldown_but_is_bounded(
         status=status,
         site="grenoble",
         job_id=99,
-        remote=object(),
+        remote=remote,
     )
     assert calls == [1]
 
@@ -333,7 +334,7 @@ def test_queued_replacement_is_retried_after_a_cooldown_but_is_bounded(
             status=status,
             site="grenoble",
             job_id=99,
-            remote=object(),
+            remote=remote,
         )
         assert calls == list(range(1, expected_count + 1))
 
@@ -341,14 +342,16 @@ def test_queued_replacement_is_retried_after_a_cooldown_but_is_bounded(
             now += REPLACEMENT_RETRY_INTERVAL
 
     now += REPLACEMENT_RETRY_INTERVAL
-    current, *_ = controller._handle_queued_status(
-        current,
-        status=status,
-        site="grenoble",
-        job_id=99,
-        remote=object(),
-    )
+    with pytest.raises(AutonomousRunError, match="scheduled start"):
+        controller._handle_queued_status(
+            current,
+            status=status,
+            site="grenoble",
+            job_id=99,
+            remote=remote,
+        )
     assert calls == list(range(1, MAX_REPLACEMENT_ATTEMPTS + 1))
+    assert remote.marked == ["failed"]
 
 
 def test_queued_job_without_a_forecast_starts_a_bounded_replacement_round(

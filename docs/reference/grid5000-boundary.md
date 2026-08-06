@@ -37,7 +37,8 @@ The controller never uses queue depth as an ETA, submits speculative jobs to
 multiple sites, or retries an ambiguous scheduler response. A trial is adopted
 only after OAR reports it `Running`; until then the original queued job remains
 the fallback. A timed-out or late trial is canceled. If the fallback has no
-forecast after all bounded replacement rounds, it is canceled and the run fails
+forecast, or its known forecast remains outside the immediate-start window,
+after all bounded replacement rounds, it is canceled and the run fails
 explicitly instead of polling forever. A monitor interruption does not cancel
 the active scheduler job; `resume --run-id RUN_ID --execute` reattaches to the
 durable state.
