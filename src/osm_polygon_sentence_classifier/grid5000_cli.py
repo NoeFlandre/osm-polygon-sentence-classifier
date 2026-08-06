@@ -169,6 +169,11 @@ def _add_ablation_arguments(parser: argparse.ArgumentParser) -> None:
         help="clean source revision (default: current clean checkout)",
     )
     parser.add_argument(
+        "--allow-source-commit-update",
+        action="store_true",
+        help="adopt a new source revision only for an incomplete, idle study",
+    )
+    parser.add_argument(
         "--model-revision",
         default=DEFAULT_MODEL_REVISION,
         help="pinned base-model revision",
@@ -335,6 +340,7 @@ def _build_ablation_controller(
         max_workers=arguments.max_workers,
         max_continuations=arguments.max_continuations,
         cleanup=not arguments.keep_remote,
+        allow_source_commit_update=arguments.allow_source_commit_update,
         publish_report=publish_study_report,
         emit=_print_progress,
     )

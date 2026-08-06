@@ -53,6 +53,13 @@ the next one. It never submits more than one Grid'5000 job at a time. Each
 allocation uses the existing bounded site search, policy and quota preflight,
 checkpoint continuation, architecture guard, and exact marked-root cleanup.
 
+The study specification is immutable by default. If an incomplete study must
+adopt a source revision containing a worker bug fix, pass
+`--allow-source-commit-update` together with the new pinned `--source-commit`.
+This is accepted only when the dataset, model, ablation matrix, and study
+settings are unchanged and no recorded run is active. Completed run records
+retain their original source revision in the study state history.
+
 The default allocation is a 20-minute GPU job with at most six checkpoint
 continuations. Complete checkpoints are uploaded under the ablation's model
 namespace, and Trackio is synchronized after every checkpoint and at final

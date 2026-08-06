@@ -1,7 +1,8 @@
 import json
 from types import SimpleNamespace
+from typing import cast
 
-from osm_polygon_sentence_classifier import grid5000_cli
+from osm_polygon_sentence_classifier import ablation_study, grid5000_cli
 from osm_polygon_sentence_classifier.grid5000 import (
     Grid5000Plan,
     Grid5000RunIdentity,
@@ -256,8 +257,9 @@ def test_autonomous_execution_prints_progress_to_stderr_and_json_to_stdout(
 
 
 def test_ablations_without_execute_prints_the_side_effect_free_study_plan(
-    capsys,
+    monkeypatch, capsys, tmp_path
 ) -> None:
+    monkeypatch.setattr(ablation_study, "_default_state_root", lambda: tmp_path)
     exit_code = grid5000_cli.main(
         [
             "ablations",
@@ -302,10 +304,14 @@ def test_ablations_execute_is_the_explicit_remote_execution_gate(
             SOURCE_COMMIT,
             "--model-revision",
             MODEL_REVISION,
+            "--allow-source-commit-update",
             "--execute",
         ]
     )
 
     assert exit_code == 0
     assert calls
+    assert isinstance(calls[0], dict)
+    call = cast(dict[str, object], calls[0])
+    assert call["allow_source_commit_update"] is True
     assert json.loads(capsys.readouterr().out) == {"phase": "completed"}

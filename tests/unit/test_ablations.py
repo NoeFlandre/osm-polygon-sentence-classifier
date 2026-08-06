@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -222,6 +222,80 @@ def test_study_controller_reuses_completed_state_without_resubmitting(
 
     assert state["phase"] == "completed"
     assert calls == first_call_count
+
+
+def test_incomplete_study_can_explicitly_adopt_a_new_source_revision(
+    tmp_path: Path,
+) -> None:
+    from osm_polygon_sentence_classifier.ablation_study import (
+        AblationStudyController,
+        study_specification,
+        study_specification_fingerprint,
+    )
+
+    old_specification = study_specification(
+        source_commit="b" * 40,
+        model_revision="a" * 40,
+    )
+    completed_runs = {
+        f"{definition.ablation_id}|seed-42": {
+            "ablation_id": definition.ablation_id,
+            "seed": 42,
+            "run_id": "c" * 20,
+            "phase": "completed",
+            "metrics": {"eval_f1": 0.5, "eval_macro_f1": 0.5},
+        }
+        for definition in baseline_ablation_definitions()[:-1]
+    }
+    AblationStudyStateStore(tmp_path).save(
+        {
+            "schema_version": 1,
+            "study_id": ABLATION_STUDY_ID,
+            "fingerprint": study_specification_fingerprint(old_specification),
+            "specification": old_specification,
+            "phase": "running",
+            "runs": completed_runs,
+        }
+    )
+    observed_source_commits: list[str] = []
+
+    class FakeRunController:
+        def __init__(self, config, **kwargs) -> None:
+            del kwargs
+            observed_source_commits.append(config.identity.source_commit)
+            self.config = config
+
+        def run(self):
+            return SimpleNamespace(
+                run_id=self.config.identity.run_id,
+                phase=RunPhase.COMPLETED,
+                facts={
+                    "completion": {
+                        "metrics": {
+                            "eval_f1": 0.5,
+                            "eval_macro_f1": 0.5,
+                        }
+                    }
+                },
+            )
+
+    new_source_commit = "d" * 40
+    controller = AblationStudyController(
+        source_commit=new_source_commit,
+        model_revision="a" * 40,
+        state_root=tmp_path,
+        allow_source_commit_update=True,
+        run_controller_factory=FakeRunController,
+        publish_report=lambda _state: None,
+    )
+
+    state = controller.run()
+
+    assert observed_source_commits
+    assert observed_source_commits[0] == new_source_commit
+    specification = cast(dict[str, object], state["specification"])
+    assert specification["source_commit"] == new_source_commit
+    assert state["source_commit_history"] == ["b" * 40]
 
 
 def test_study_documents_are_public_and_include_clear_run_names() -> None:

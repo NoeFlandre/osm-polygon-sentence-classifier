@@ -231,6 +231,7 @@ class AblationStudyController:
         max_workers: int = 4,
         max_continuations: int = 6,
         cleanup: bool = True,
+        allow_source_commit_update: bool = False,
         state_root: Path | None = None,
         run_controller_factory: Callable[..., Any] = AutonomousRunController,
         publish_report: Callable[[Mapping[str, object]], None] | None = None,
@@ -246,6 +247,10 @@ class AblationStudyController:
             raise AblationStudyError("GPU memory and walltime must be positive")
         if max_workers <= 0 or max_continuations <= 0:
             raise AblationStudyError("worker and continuation limits must be positive")
+        if not isinstance(allow_source_commit_update, bool):
+            raise AblationStudyError(
+                "source commit update permission must be a boolean"
+            )
         if policy_type not in {"auto", "day", "night"}:
             raise AblationStudyError("policy_type must be auto, day, or night")
         self.source_commit = source_commit
@@ -258,6 +263,7 @@ class AblationStudyController:
         self.max_workers = max_workers
         self.max_continuations = max_continuations
         self.cleanup = cleanup
+        self.allow_source_commit_update = allow_source_commit_update
         self.state = AblationStudyStateStore(state_root)
         self.run_state_root = self.state.root / "runs"
         self.run_controller_factory = run_controller_factory
@@ -309,16 +315,83 @@ class AblationStudyController:
         }
 
     def _validate_state(self, state: Mapping[str, object]) -> None:
-        if (
+        state_mismatch = (
             state.get("schema_version") != 1
             or state.get("study_id") != ABLATION_STUDY_ID
             or state.get("fingerprint") != self.fingerprint
-        ):
+        )
+        if state_mismatch:
+            if self.allow_source_commit_update and self._can_adopt_source_commit(state):
+                return
             raise AblationStudyError(
                 "existing ablation state does not match the immutable study specification"
             )
         if not isinstance(state.get("runs", {}), Mapping):
             raise AblationStudyError("ablation study run state is invalid")
+
+    def _can_adopt_source_commit(self, state: Mapping[str, object]) -> bool:
+        if (
+            state.get("schema_version") != 1
+            or state.get("study_id") != ABLATION_STUDY_ID
+        ):
+            return False
+        raw_specification = state.get("specification")
+        if not isinstance(raw_specification, Mapping):
+            return False
+        specification = cast(Mapping[str, object], raw_specification)
+        old_source_commit = specification.get("source_commit")
+        if (
+            not isinstance(old_source_commit, str)
+            or old_source_commit == self.source_commit
+            or state.get("phase") == "completed"
+        ):
+            return False
+        if study_specification_fingerprint(specification) != state.get("fingerprint"):
+            return False
+        current_without_source = {
+            key: value
+            for key, value in self.specification.items()
+            if key != "source_commit"
+        }
+        stored_without_source = {
+            key: value for key, value in specification.items() if key != "source_commit"
+        }
+        if current_without_source != stored_without_source:
+            return False
+        return not any(
+            record.get("phase") == "running" for record in self._records(state).values()
+        )
+
+    def _adopt_source_commit_if_needed(
+        self, state: dict[str, object]
+    ) -> dict[str, object]:
+        if not self.allow_source_commit_update or not self._can_adopt_source_commit(
+            state
+        ):
+            return state
+        specification = state.get("specification")
+        if not isinstance(specification, Mapping):
+            raise AblationStudyError("ablation study specification is invalid")
+        old_source_commit = specification.get("source_commit")
+        if not isinstance(old_source_commit, str):
+            raise AblationStudyError("ablation study source commit is invalid")
+        raw_history = state.get("source_commit_history", [])
+        history: list[str] = (
+            [item for item in raw_history if isinstance(item, str)]
+            if isinstance(raw_history, list)
+            else []
+        )
+        if old_source_commit not in history:
+            history.append(old_source_commit)
+        records = self._records(state)
+        for record in records.values():
+            record.setdefault("source_commit", old_source_commit)
+        state["runs"] = records
+        state["source_commit_history"] = history
+        state["specification"] = self.specification
+        state["fingerprint"] = self.fingerprint
+        self.state.save(state)
+        return state
 
     @staticmethod
     def _records(state: Mapping[str, object]) -> dict[str, dict[str, object]]:
@@ -393,6 +466,7 @@ class AblationStudyController:
             self.state.save(state)
         else:
             self._validate_state(state)
+            state = self._adopt_source_commit_if_needed(state)
         if state.get("phase") == "completed":
             return state
 
@@ -420,6 +494,7 @@ class AblationStudyController:
             records[key] = {
                 "ablation_id": pending.ablation_id,
                 "seed": pending.seed,
+                "source_commit": self.source_commit,
                 "run_id": config.identity.run_id,
                 "phase": "running",
             }
@@ -499,6 +574,7 @@ def _report_runs(state: Mapping[str, object]) -> list[dict[str, object]]:
                 "seed": run.seed,
                 "status": record.get("phase", "pending"),
                 "run_id": record.get("run_id"),
+                "source_commit": record.get("source_commit"),
                 "metrics": _metric_mapping(metrics),
                 "model_path": (
                     f"studies/{ABLATION_STUDY_ID}/{run.ablation_id}/"
@@ -543,7 +619,16 @@ def render_study_documents(state: Mapping[str, object]) -> dict[str, str]:
         "phase": status,
         "runs": rows,
     }
-    study_payload = {**dict(specification), "fingerprint": fingerprint}
+    source_commit_history = state.get("source_commit_history", [])
+    if not isinstance(source_commit_history, list) or any(
+        not isinstance(item, str) for item in source_commit_history
+    ):
+        source_commit_history = []
+    study_payload = {
+        **dict(specification),
+        "fingerprint": fingerprint,
+        "source_commit_history": source_commit_history,
+    }
     study_readme = (
         f"# Landuse classifier ablation study `{ABLATION_STUDY_ID}`\n\n"
         "This study measures controlled changes to the landuse sentence classifier. "
