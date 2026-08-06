@@ -170,7 +170,9 @@ def render_model_card(
         trackio_link = "https://huggingface.co/spaces/" + trackio_space_id.strip()
 
     tracking_section = (
-        f"[Open the live Trackio dashboard]({trackio_link})."
+        f"[Open the Trackio dashboard]({trackio_link}). "
+        "Metrics are published as static snapshots after complete checkpoints "
+        "and final publication."
         if trackio_link is not None
         else "Trackio was not enabled for this run."
     )

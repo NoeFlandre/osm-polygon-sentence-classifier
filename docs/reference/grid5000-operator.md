@@ -121,10 +121,11 @@ same site passes the storage/policy preflight again. The successor worker
 requires a valid checkpoint and passes the newest one to the Trainer; missing,
 partial, or identity-mismatched checkpoints stop the run. When requested, the
 worker queues each complete checkpoint to the dedicated Hugging Face model
-repository's single `checkpoints/last-checkpoint` snapshot. The Trainer's
-Trackio callback sends metrics directly to the writable live Gradio Space and
-Bucket during the job, including continuations. Each checkpoint and the final
-model also receive a generated credential-free README containing pinned
+repository's single `checkpoints/last-checkpoint` snapshot. The Trainer
+records metrics locally through Trackio and syncs a static snapshot to the free
+Trackio Space and Bucket after each complete checkpoint and final publication,
+including continuations. Each checkpoint and the final model also receive a
+generated credential-free README containing pinned
 identity, safe configuration, progress, and scalar metrics. The ordered Hub
 queue is drained before the final top-level model publication; older remote
 checkpoint snapshots are not retained.

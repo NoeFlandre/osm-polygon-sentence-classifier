@@ -350,11 +350,11 @@ class AutonomousRunController:
         if training.sync_trackio:
             tracking_space = manifest.get("tracking_space_id")
             settings = settings_for(ProjectConfig())
-            if tracking_space != settings.space_id:
+            if tracking_space != settings.static_space_id:
                 raise AutonomousRunError(
                     "completed worker reported the wrong Trackio Space"
                 )
-            self._hub().space_info(repo_id=settings.space_id)
+            self._hub().space_info(repo_id=settings.static_space_id)
 
     def _candidate_list(
         self,

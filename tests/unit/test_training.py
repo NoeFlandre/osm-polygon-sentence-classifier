@@ -16,8 +16,7 @@ from osm_polygon_sentence_classifier.dataset_contract import (
 )
 from osm_polygon_sentence_classifier.dataset_loader import split_for_polygon
 from osm_polygon_sentence_classifier.tracking import (
-    TRACKIO_BUCKET_ID,
-    TRACKIO_SPACE_ID,
+    TRACKIO_STATIC_SPACE_ID,
 )
 from osm_polygon_sentence_classifier.training import (
     TrainingConfig,
@@ -478,6 +477,7 @@ def test_checkpoint_callback_writes_model_card_before_publication(
         "training_config": {"max_steps": 1000},
     }
     publication_calls: list[tuple[Path, str, Mapping[str, object]]] = []
+    sync_calls: list[object] = []
 
     def publish(
         directory: Path,
@@ -491,10 +491,16 @@ def test_checkpoint_callback_writes_model_card_before_publication(
         return object()
 
     monkeypatch.setattr(training, "publish_checkpoint_directory", publish)
+    monkeypatch.setattr(
+        training,
+        "sync_project_to_static_space",
+        lambda settings: sync_calls.append(settings) or TRACKIO_STATIC_SPACE_ID,
+    )
 
     training._CheckpointManifestCallback(
         identity,
         model_repository_id="owner/model",
+        tracking_settings=cast(Any, object()),
     ).on_save(
         args=SimpleNamespace(output_dir=str(tmp_path)),
         state=SimpleNamespace(global_step=7),
@@ -502,6 +508,7 @@ def test_checkpoint_callback_writes_model_card_before_publication(
     )
 
     assert publication_calls == [(checkpoint, "owner/model", identity)]
+    assert len(sync_calls) == 1
 
 
 def test_checkpoint_callback_queues_hub_publication_until_training_end(
@@ -706,7 +713,7 @@ def test_training_passes_a_pinned_model_revision_to_both_loaders(
     assert _FakeModel.from_pretrained_calls[0]["revision"] == revision
 
 
-def test_training_can_publish_the_final_model_and_configure_live_trackio(
+def test_training_can_publish_the_final_model_and_sync_static_trackio(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -747,6 +754,12 @@ def test_training_can_publish_the_final_model_and_configure_live_trackio(
             files=("config.json", "model.safetensors"),
         ),
     )
+    sync_calls: list[object] = []
+    monkeypatch.setattr(
+        training,
+        "sync_project_to_static_space",
+        lambda settings: sync_calls.append(settings) or TRACKIO_STATIC_SPACE_ID,
+    )
     monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
     result = training.train_landuse_classifier(
         rows_factory=lambda: iter([_row()]),
@@ -762,13 +775,16 @@ def test_training_can_publish_the_final_model_and_configure_live_trackio(
     project_config = ProjectConfig.for_remote_root(tmp_path / "data")
     assert publication_calls == [project_config.data_root / "models/landuse"]
     arguments = _FakeTrainingArguments.calls[0]
-    assert arguments["trackio_space_id"] == TRACKIO_SPACE_ID
-    assert arguments["trackio_bucket_id"] == TRACKIO_BUCKET_ID
+    assert arguments["trackio_space_id"] is None
+    assert arguments["trackio_bucket_id"] is None
     callbacks = cast(list[Any], _FakeTrainer.init_calls[0]["callbacks"])
     callback = callbacks[0]
     assert callback.model_repository_id == ProjectConfig().target_model_repository_id
-    assert callback.trackio_space_id == TRACKIO_SPACE_ID
+    assert callback.trackio_space_id == TRACKIO_STATIC_SPACE_ID
+    assert callback.tracking_settings is not None
+    assert callback.tracking_settings.static_space_id == TRACKIO_STATIC_SPACE_ID
     assert callback.hub_api is checkpoint_hub_api
     assert result.model_publication is not None
     assert result.model_publication.commit_id == "d" * 40
-    assert result.tracking_space_id == TRACKIO_SPACE_ID
+    assert result.tracking_space_id == TRACKIO_STATIC_SPACE_ID
+    assert len(sync_calls) == 1

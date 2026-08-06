@@ -248,13 +248,6 @@ def _config() -> AutonomousRunConfig:
     )
 
 
-def _disable_trackio_space_deployment(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "trackio.deploy.deploy_as_space",
-        lambda *args, **kwargs: None,
-    )
-
-
 def test_legacy_replacement_state_is_upgraded_for_the_current_job() -> None:
     assert (
         _replacement_attempt_count_for_job(
@@ -477,7 +470,6 @@ def test_controller_runs_prepare_submit_monitor_publish_verify_and_cleanup(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("HF_TOKEN", "hf_test_token")
-    _disable_trackio_space_deployment(monkeypatch)
     remote = _FakeRemote()
     hub = _FakeHub()
     messages: list[str] = []
@@ -527,7 +519,6 @@ def test_controller_continues_from_a_checkpoint_after_walltime_termination(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("HF_TOKEN", "hf_test_token")
-    _disable_trackio_space_deployment(monkeypatch)
     remote = _CheckpointContinuationRemote()
     probe = SiteProbe(
         name="grenoble",
@@ -574,7 +565,6 @@ def test_controller_stops_after_the_continuation_limit(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("HF_TOKEN", "hf_test_token")
-    _disable_trackio_space_deployment(monkeypatch)
     remote = _NeverCompletesContinuationRemote()
     probe = SiteProbe(
         name="grenoble",

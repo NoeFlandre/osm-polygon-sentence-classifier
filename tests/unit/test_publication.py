@@ -261,6 +261,7 @@ def test_model_card_contains_only_safe_training_metadata() -> None:
     assert '"max_steps": 1000' in card
     assert "checkpoint at step 100" in card
     assert "https://huggingface.co/spaces/owner/trackio-live" in card
+    assert "static snapshots" in card
     assert "HF_TOKEN" not in card
     assert "must-not-appear" not in card
 

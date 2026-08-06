@@ -48,10 +48,11 @@ By default, model publication and remote metric synchronization are disabled.
 When explicitly enabled, the completed top-level model files go to the
 [dedicated model repository](https://huggingface.co/NoeFlandre/osm-polygon-sentence-classifier)
 each complete checkpoint updates the repository's single
-`checkpoints/last-checkpoint` snapshot, and Trackio sends live metrics to the
-writable public [Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-trackio-live)
-through its dedicated Bucket. The model README is generated from safe run
-metadata and scalar metrics at each checkpoint and final publication. Checkpoint Hub uploads are queued in order and
+`checkpoints/last-checkpoint` snapshot, and Trackio publishes a static metric
+snapshot to the free public [Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-trackio)
+through its dedicated Bucket after each complete checkpoint and final
+publication. The model README is generated from safe run metadata and scalar
+metrics at each checkpoint and final publication. Checkpoint Hub uploads are queued in order and
 completed before the final model publication; older checkpoint snapshots are
 not retained remotely.
 

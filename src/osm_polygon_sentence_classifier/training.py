@@ -31,7 +31,12 @@ from .publication import (
     publish_model_directory,
     render_model_card,
 )
-from .tracking import settings_for
+from .tracking import (
+    TrackingError,
+    TrackioSettings,
+    settings_for,
+    sync_project_to_static_space,
+)
 
 LabelId = Literal[0, 1]
 
@@ -212,6 +217,17 @@ def _write_model_card(
     (directory / "README.md").write_text(card, encoding="utf-8")
 
 
+def _sync_static_trackio(
+    settings: TrackioSettings,
+    *,
+    failure_message: str,
+) -> None:
+    try:
+        sync_project_to_static_space(settings)
+    except TrackingError as error:
+        raise TrainingError(failure_message) from error
+
+
 @dataclass(frozen=True, slots=True)
 class _TrainingDependencies:
     """Lazily imported Hugging Face classes, kept injectable for unit tests."""
@@ -234,11 +250,13 @@ class _CheckpointManifestCallback:
         *,
         model_repository_id: str | None = None,
         trackio_space_id: str | None = None,
+        tracking_settings: TrackioSettings | None = None,
         hub_api: Any | None = None,
     ) -> None:
         self.identity = dict(identity)
         self.model_repository_id = model_repository_id
         self.trackio_space_id = trackio_space_id
+        self.tracking_settings = tracking_settings
         self.hub_api = hub_api
         self._pending_publications: list[Any] = []
 
@@ -317,6 +335,11 @@ class _CheckpointManifestCallback:
                     and len(self._pending_publications) >= save_total_limit
                 ):
                     self._wait_for_next_publication()
+        if self.tracking_settings is not None:
+            _sync_static_trackio(
+                self.tracking_settings,
+                failure_message="checkpoint Trackio static snapshot failed",
+            )
         return control
 
     def on_train_end(
@@ -334,6 +357,7 @@ def _make_checkpoint_manifest_callback(
     *,
     model_repository_id: str | None = None,
     trackio_space_id: str | None = None,
+    tracking_settings: TrackioSettings | None = None,
     hub_api: Any | None = None,
 ) -> Any:
     if trainer_callback is None:
@@ -341,6 +365,7 @@ def _make_checkpoint_manifest_callback(
             identity,
             model_repository_id=model_repository_id,
             trackio_space_id=trackio_space_id,
+            tracking_settings=tracking_settings,
             hub_api=hub_api,
         )
     callback_type = type(
@@ -352,6 +377,7 @@ def _make_checkpoint_manifest_callback(
         identity,
         model_repository_id=model_repository_id,
         trackio_space_id=trackio_space_id,
+        tracking_settings=tracking_settings,
         hub_api=hub_api,
     )
 
@@ -392,6 +418,7 @@ def _build_trainer(
     checkpoint_identity: Mapping[str, object] | None,
     model_repository_id: str | None = None,
     trackio_space_id: str | None = None,
+    tracking_settings: TrackioSettings | None = None,
     hub_api: Any | None = None,
 ) -> Any:
     trainer_values: dict[str, object] = {
@@ -408,6 +435,7 @@ def _build_trainer(
                 dependencies.trainer_callback,
                 model_repository_id=model_repository_id,
                 trackio_space_id=trackio_space_id,
+                tracking_settings=tracking_settings,
                 hub_api=hub_api,
             )
         ]
@@ -683,12 +711,8 @@ def train_landuse_classifier(
                 training_config,
                 output_directory=output_directory,
                 tracking_project=tracking.project,
-                trackio_space_id=(
-                    tracking.space_id if training_config.sync_trackio else None
-                ),
-                trackio_bucket_id=(
-                    tracking.bucket_id if training_config.sync_trackio else None
-                ),
+                trackio_space_id=None,
+                trackio_bucket_id=None,
             )
         )
         data_collator = dependencies.data_collator_with_padding(tokenizer=tokenizer)
@@ -709,8 +733,9 @@ def train_landuse_classifier(
                 else None
             ),
             trackio_space_id=(
-                tracking.space_id if training_config.sync_trackio else None
+                tracking.static_space_id if training_config.sync_trackio else None
             ),
+            tracking_settings=(tracking if training_config.sync_trackio else None),
             hub_api=checkpoint_hub_api,
         )
         train_output = _run_trainer(trainer, resume_from_checkpoint)
@@ -730,7 +755,7 @@ def train_landuse_classifier(
                 else None
             ),
             trackio_space_id=(
-                tracking.space_id if training_config.sync_trackio else None
+                tracking.static_space_id if training_config.sync_trackio else None
             ),
         )
         model_publication = None
@@ -739,7 +764,14 @@ def train_landuse_classifier(
                 output_directory,
                 effective_project_config.target_model_repository_id,
             )
-        tracking_space_id = tracking.space_id if training_config.sync_trackio else None
+        if training_config.sync_trackio:
+            _sync_static_trackio(
+                tracking,
+                failure_message="Trackio static snapshot failed",
+            )
+        tracking_space_id = (
+            tracking.static_space_id if training_config.sync_trackio else None
+        )
 
     return TrainingResult(
         output_directory=output_directory,
