@@ -713,6 +713,7 @@ class AutonomousRunController:
             job_id=None,
             facts={
                 "continuation_count": raw_count + 1,
+                "max_continuations": self.config.max_continuations,
                 "continuation_pending": True,
                 "continuation_reason": reason,
                 "last_terminal_job_id": job_id,
@@ -730,6 +731,7 @@ class AutonomousRunController:
             job_id=successor_job_id,
             facts={
                 "continuation_count": raw_count + 1,
+                "max_continuations": self.config.max_continuations,
                 "continuation_pending": False,
                 "replacement_attempted": False,
                 "replacement_attempted_job_id": None,
@@ -790,6 +792,59 @@ class AutonomousRunController:
             site=site,
             job_id=job_id,
             facts={"completion": manifest, "cleanup": self.config.cleanup},
+        )
+
+    def _resume_failed_run(self, current: AutonomousRunState) -> AutonomousRunState:
+        """Extend only a failed run whose checkpoint limit was exhausted."""
+
+        facts = dict(current.facts or {})
+        raw_count = facts.get("continuation_count")
+        raw_limit = facts.get("max_continuations")
+        if (
+            isinstance(raw_count, bool)
+            or not isinstance(raw_count, int)
+            or raw_count < 0
+            or isinstance(raw_limit, bool)
+            or not isinstance(raw_limit, int)
+            or raw_limit <= 0
+        ):
+            raise AutonomousRunError("failed run continuation evidence is invalid")
+        expected_error = (
+            f"job ended without completion after {raw_count} checkpoint continuations"
+        )
+        if raw_count != raw_limit or facts.get("error") != expected_error:
+            raise AutonomousRunError("run is not resumable from phase failed")
+        if self.config.max_continuations <= raw_limit:
+            raise AutonomousRunError(
+                f"failed run exhausted {raw_limit} checkpoint continuations; "
+                f"resume with --max-continuations greater than {raw_limit}"
+            )
+        if current.site is None or current.job_id is None:
+            raise AutonomousRunError("failed run lacks its last Grid'5000 job")
+
+        remote = self.remote_factory(current.site)
+        self._active_remote = remote
+        try:
+            status = OarClient(remote).status(current.job_id)
+        except Exception as error:
+            raise AutonomousRunError(
+                "previous Grid'5000 job status could not be verified"
+            ) from error
+        if is_live_state(status.state):
+            raise AutonomousRunError(
+                "failed run still has an active Grid'5000 job; refusing a duplicate"
+            )
+        self.emit(
+            f"run {current.run_id}: extending from the retained checkpoint "
+            f"after job {current.job_id}"
+        )
+        return self._continue_after_incomplete(
+            current,
+            status=status,
+            site=current.site,
+            job_id=current.job_id,
+            remote=remote,
+            reason="explicit continuation extension",
         )
 
     def _monitor(
@@ -956,6 +1011,8 @@ class AutonomousRunController:
             remote = self.remote_factory(current.site or "")
             self._active_remote = remote
             return self._monitor(current, remote=remote)
+        if current.phase is RunPhase.FAILED:
+            return self._resume_failed_run(current)
         raise AutonomousRunError(
             f"run is not resumable from phase {RunPhase(current.phase).value}"
         )

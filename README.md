@@ -116,6 +116,19 @@ and the run fails explicitly instead of waiting forever. Queue depth is
 recorded for diagnostics, never used as an ETA, and speculative multi-site
 submissions are not made.
 
+If a run fails specifically after exhausting its continuation limit, a retained
+complete checkpoint can be extended safely with a larger bound:
+
+```bash
+uv run grid5000-landuse resume \
+  --run-id RUN_ID \
+  --max-continuations 6 \
+  --execute
+```
+
+The extension refuses arbitrary failed states and refuses to submit while the
+previous recorded Grid'5000 job is still active.
+
 Run the complete lifecycle with a pinned source/model pair:
 
 ```bash

@@ -42,6 +42,22 @@ uv run grid5000-landuse status --run-id RUN_ID
 uv run grid5000-landuse resume --run-id RUN_ID --execute
 ```
 
+When a run failed exactly because it exhausted its continuation limit, extend
+that persisted bound explicitly to resume from its retained checkpoint:
+
+```bash
+uv run grid5000-landuse resume \
+  --run-id RUN_ID \
+  --max-continuations 6 \
+  --execute
+```
+
+The new limit must be greater than the persisted limit. The controller accepts
+only that specific checkpoint-limit failure, verifies the previous recorded
+job is no longer active, and then reuses the normal checkpoint, policy, quota,
+submission, and monitoring safeguards. Other failed states remain stopped for
+diagnosis.
+
 `status` is local and read-only. `resume` uses the persisted identity and
 active site/job, and never creates a second submission from a submitted,
 queued, or running state. A `submitting` state remains intentionally

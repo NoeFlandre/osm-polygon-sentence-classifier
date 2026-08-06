@@ -99,6 +99,12 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="cross the explicit gate and continue remote actions",
     )
+    resume_parser.add_argument(
+        "--max-continuations",
+        type=int,
+        default=None,
+        help="extend a failed run beyond its persisted continuation limit",
+    )
     status_parser = commands.add_parser(
         "status",
         help="print one local autonomous run state",
@@ -264,7 +270,11 @@ def _autonomous_plan_payload(config: AutonomousRunConfig) -> dict[str, object]:
     }
 
 
-def _config_from_state(state_payload: Mapping[str, object]) -> AutonomousRunConfig:
+def _config_from_state(
+    state_payload: Mapping[str, object],
+    *,
+    max_continuations_override: int | None = None,
+) -> AutonomousRunConfig:
     identity_payload = state_payload.get("identity")
     if not isinstance(identity_payload, Mapping):
         raise Grid5000StateError("autonomous state identity is invalid")
@@ -296,6 +306,24 @@ def _config_from_state(state_payload: Mapping[str, object]) -> AutonomousRunConf
     max_continuations = (
         facts.get("max_continuations", 3) if isinstance(facts, Mapping) else 3
     )
+    if (
+        isinstance(max_continuations, bool)
+        or not isinstance(max_continuations, int)
+        or max_continuations <= 0
+    ):
+        raise Grid5000StateError("autonomous continuation limit is invalid")
+    if max_continuations_override is not None:
+        if (
+            isinstance(max_continuations_override, bool)
+            or not isinstance(max_continuations_override, int)
+            or max_continuations_override <= max_continuations
+        ):
+            raise Grid5000StateError(
+                "--max-continuations must be greater than the persisted limit"
+            )
+        if state_payload.get("phase") != "failed":
+            raise Grid5000StateError("--max-continuations can only extend a failed run")
+        max_continuations = max_continuations_override
     sites = (
         facts.get("sites", DEFAULT_SITES)
         if isinstance(facts, Mapping)
@@ -331,9 +359,7 @@ def _config_from_state(state_payload: Mapping[str, object]) -> AutonomousRunConf
             if policy in {"auto", "day", "night"}
             else "auto"
         ),
-        max_continuations=(
-            max_continuations if isinstance(max_continuations, int) else 3
-        ),
+        max_continuations=max_continuations,
         cleanup=cleanup if isinstance(cleanup, bool) else True,
     )
 
@@ -375,7 +401,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             state = AutonomousStateStore().load(arguments.run_id)
             if state is None:
                 raise Grid5000StateError("autonomous run state was not found")
-            autonomous = _config_from_state(state.to_dict())
+            autonomous = _config_from_state(
+                state.to_dict(),
+                max_continuations_override=arguments.max_continuations,
+            )
             if not arguments.execute:
                 _print_json(state.to_dict())
                 return 0

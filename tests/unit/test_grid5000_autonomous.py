@@ -179,6 +179,43 @@ class _NeverCompletesContinuationRemote(_CheckpointContinuationRemote):
         raise AssertionError(command)
 
 
+class _FailedRunContinuationRemote(_CheckpointContinuationRemote):
+    def __init__(self, *, old_job_state: str = "Missing") -> None:
+        super().__init__()
+        self.old_job_state = old_job_state
+        self.job_status_calls: dict[int, int] = {}
+
+    def run(self, command: str, *, input_text: str | None = None) -> CommandResult:
+        del input_text
+        if "oarsub" in command:
+            self.submission_count += 1
+            return CommandResult(returncode=0, stdout="OAR_JOB_ID=100\n")
+        if "quota" in command:
+            return CommandResult(returncode=0, stdout="0 100000000 100000001\n")
+        return CommandResult(returncode=0, stdout="ok\n")
+
+    def raw(self, command: str) -> CommandResult:
+        if command.startswith("oarstat -fj"):
+            job_id = int(command.split()[2])
+            if job_id == 99 and self.old_job_state == "Missing":
+                return CommandResult(returncode=6)
+            calls = self.job_status_calls.get(job_id, 0)
+            self.job_status_calls[job_id] = calls + 1
+            state = "Running" if calls == 0 else "Terminated"
+            return CommandResult(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        str(job_id): {
+                            "state": self.old_job_state if job_id == 99 else state,
+                            "exit_code": 0 if state == "Terminated" else None,
+                        }
+                    }
+                ),
+            )
+        raise AssertionError(command)
+
+
 class _ReplacementRemote:
     def __init__(self, site: str, state: str) -> None:
         self.site = site
@@ -602,6 +639,95 @@ def test_controller_stops_after_the_continuation_limit(
     assert state is not None
     assert state.phase == "failed"
     assert dict(state.facts or {})["continuation_count"] == 1
+
+
+def test_failed_run_can_extend_from_a_retained_checkpoint(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+    config = replace(_config(), max_continuations=2)
+    remote = _FailedRunContinuationRemote()
+    probe = SiteProbe(
+        name="grenoble",
+        reachable=True,
+        resources=(
+            GpuResource(
+                gpu_memory_mb=16_000,
+                cuda_capability=(8, 0),
+                jobs_assigned=0,
+                production=True,
+                exotic=False,
+            ),
+        ),
+        persistent_free_bytes=10 * 1024**3,
+        queued_jobs=0,
+    )
+    current = AutonomousRunState(
+        run_id=config.identity.run_id,
+        phase="failed",
+        identity=config.identity.canonical_payload,
+        site="grenoble",
+        job_id=99,
+        facts={
+            "continuation_count": 1,
+            "max_continuations": 1,
+            "error": "job ended without completion after 1 checkpoint continuations",
+        },
+    )
+    controller = AutonomousRunController(
+        config,
+        state_root=tmp_path / "runs",
+        probe_sites=lambda **_: (probe,),
+        remote_factory=lambda _site: remote,
+        hub_api=_FakeHub(),
+        poll_seconds=0,
+    )
+    controller.state.create(current)
+
+    result = controller.run()
+
+    assert result.phase == "completed"
+    assert remote.submission_count == 1
+    assert remote.marked == ["complete"]
+    state = AutonomousStateStore(tmp_path / "runs").load(config.identity.run_id)
+    assert state is not None
+    facts = dict(state.facts or {})
+    assert facts["continuation_count"] == 2
+    assert facts["max_continuations"] == 2
+
+
+def test_failed_run_extension_refuses_an_active_previous_job(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+    config = replace(_config(), max_continuations=2)
+    remote = _FailedRunContinuationRemote(old_job_state="Running")
+    current = AutonomousRunState(
+        run_id=config.identity.run_id,
+        phase="failed",
+        identity=config.identity.canonical_payload,
+        site="grenoble",
+        job_id=99,
+        facts={
+            "continuation_count": 1,
+            "max_continuations": 1,
+            "error": "job ended without completion after 1 checkpoint continuations",
+        },
+    )
+    controller = AutonomousRunController(
+        config,
+        state_root=tmp_path / "runs",
+        remote_factory=lambda _site: remote,
+        poll_seconds=0,
+    )
+    controller.state.create(current)
+
+    with pytest.raises(AutonomousRunError, match="active Grid'5000 job"):
+        controller.run()
+
+    assert remote.submission_count == 0
 
 
 def test_completion_verification_rejects_a_model_repository_mismatch(

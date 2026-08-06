@@ -62,11 +62,42 @@ def ensure_trackio_resources(
         raise TrackingError("Trackio Space and bucket provisioning failed") from error
 
 
+def _flush_current_local_run(trackio: Any) -> None:
+    """Flush queued local metrics before exporting a static snapshot.
+
+    Trackio currently exposes the local flush operation only on its active Run
+    object. Keep this compatibility adapter private and guarded so callers
+    that synchronize after a process restart remain valid; when a live Run is
+    present, the client lock prevents the background sender from racing the
+    synchronous drain.
+    """
+
+    context_vars = getattr(trackio, "context_vars", None)
+    current_run_context = getattr(context_vars, "current_run", None)
+    get_current_run = getattr(current_run_context, "get", None)
+    if not callable(get_current_run):
+        return
+    try:
+        current_run = get_current_run()
+    except LookupError:
+        return
+    flush = getattr(current_run, "_flush_queues_inline", None)
+    if not callable(flush):
+        return
+    client_lock = getattr(current_run, "_client_lock", None)
+    if client_lock is None:
+        flush()
+        return
+    with client_lock:
+        flush()
+
+
 def sync_project_to_static_space(settings: TrackioSettings) -> str:
     """Synchronize the current local project snapshot to the static Space."""
 
     try:
         trackio: Any = import_module("trackio")
+        _flush_current_local_run(trackio)
         space_id = trackio.sync(
             project=settings.project,
             space_id=settings.static_space_id,

@@ -87,6 +87,9 @@ execution. The default is a 20-minute allocation with Europe/Paris
 fallback is rechecked across all configured sites in at most three bounded
 replacement rounds, with one trial at a time and a ten-minute cooldown. A run
 allows at most three checkpoint continuations by default.
+If that limit is exhausted after a complete checkpoint was retained, use
+`resume --run-id RUN_ID --max-continuations N --execute` to extend it; the
+controller checks that the previous job is no longer active before submitting.
 
 To run the local hooks against the repository, use:
 

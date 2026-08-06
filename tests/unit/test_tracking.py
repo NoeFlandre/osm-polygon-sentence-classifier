@@ -1,3 +1,6 @@
+from threading import RLock
+from types import SimpleNamespace
+
 import pytest
 
 from osm_polygon_sentence_classifier.config import ProjectConfig
@@ -53,6 +56,36 @@ def test_tracking_sync_uses_the_dedicated_static_space_and_bucket(monkeypatch) -
             "force": True,
         }
     ]
+
+
+def test_tracking_sync_flushes_queued_metrics_before_static_upload(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeRun:
+        def __init__(self) -> None:
+            self._client_lock = RLock()
+
+        def _flush_queues_inline(self) -> None:
+            calls.append("flush")
+
+    run = FakeRun()
+
+    class FakeTrackio:
+        context_vars = SimpleNamespace(
+            current_run=SimpleNamespace(get=lambda: run),
+        )
+
+        @staticmethod
+        def sync(**kwargs: object) -> str:
+            del kwargs
+            calls.append("sync")
+            return TRACKIO_STATIC_SPACE_ID
+
+    monkeypatch.setitem(__import__("sys").modules, "trackio", FakeTrackio)
+
+    sync_project_to_static_space(settings_for(ProjectConfig()))
+
+    assert calls == ["flush", "sync"]
 
 
 def test_tracking_sync_wraps_trackio_failures(monkeypatch) -> None:
