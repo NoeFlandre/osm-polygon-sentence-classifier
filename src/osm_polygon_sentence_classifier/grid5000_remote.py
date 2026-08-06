@@ -143,11 +143,18 @@ class Grid5000Remote:
         *,
         run_id: str,
         source_commit: str,
+        allow_failed_run: bool = False,
     ) -> RemotePreparationResult:
-        """Clone/reuse a clean detached checkout and create a managed run root."""
+        """Prepare a clean checkout and activate the managed run root.
+
+        ``allow_failed_run`` is reserved for an explicit continuation after
+        the caller has verified retained checkpoint evidence.
+        """
 
         _validate_run_id(run_id)
         _validate_revision(source_commit)
+        if not isinstance(allow_failed_run, bool):
+            raise ValueError("allow_failed_run must be a boolean")
         repo = f'"$HOME/{REMOTE_CHECKOUT_SUBDIRECTORY}"'
         data_root = f'"$HOME/{REMOTE_DATA_SUBDIRECTORY}"'
         run_root = (
@@ -196,7 +203,17 @@ mkdir -p -m 0700 "$run_root"
 if [ -f "$run_root/.operator-managed.json" ]; then
   [ ! -L "$run_root/.operator-managed.json" ]
   grep -Fq {shlex.quote(f'"run_id":"{run_id}"')} "$run_root/.operator-managed.json"
-  grep -Fq '"status":"active"' "$run_root/.operator-managed.json"
+  if grep -Fq '"status":"active"' "$run_root/.operator-managed.json"; then
+    :
+  elif {str(allow_failed_run).lower()} && grep -Fq '"status":"failed"' "$run_root/.operator-managed.json"; then
+    temporary="$run_root/.operator-managed.json.tmp"
+    printf '%s\n' {shlex.quote(marker)} >"$temporary"
+    chmod 0600 "$temporary"
+    mv -f -- "$temporary" "$run_root/.operator-managed.json"
+  else
+    echo 'remote run root is not active' >&2
+    exit 70
+  fi
 else
   printf '%s\n' {shlex.quote(marker)} >"$run_root/.operator-managed.json"
   chmod 0600 "$run_root/.operator-managed.json"
@@ -263,10 +280,17 @@ printf 'HF_AUTH_INSTALLED\n'
         *,
         output_subdirectory: str | Path,
         identity: Mapping[str, object],
+        allow_failed_status: bool = False,
     ) -> bool:
-        """Check for complete files bound to the exact run identity."""
+        """Check for complete files bound to the exact run identity.
+
+        A failed marker is accepted only for an explicit continuation whose
+        caller has already verified the previous job is no longer live.
+        """
 
         _validate_run_id(run_id)
+        if not isinstance(allow_failed_status, bool):
+            raise ValueError("allow_failed_status must be a boolean")
         try:
             identity_json = json.dumps(
                 dict(identity),
@@ -294,7 +318,11 @@ marker="$root/.operator-managed.json"
 [ -d "$root" ] && [ ! -L "$root" ]
 [ -f "$marker" ] && [ ! -L "$marker" ]
 grep -Fq {run_marker} "$marker"
-grep -Fq '"status":"active"' "$marker"
+if {str(allow_failed_status).lower()}; then
+  grep -Eq '"status":"(active|failed)"' "$marker"
+else
+  grep -Fq '"status":"active"' "$marker"
+fi
 if [ ! -d "$output" ] || [ -L "$output" ]; then
   printf 'CHECKPOINT_MISSING\n'
   exit 0

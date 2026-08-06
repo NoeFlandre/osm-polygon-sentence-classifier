@@ -108,3 +108,35 @@ def test_checkpoint_probe_is_read_only_and_marker_bound() -> None:
     assert '"identity"' in command
     assert "rm -rf" not in command
     assert "a" * 20 in command
+
+
+def test_checkpoint_probe_can_read_a_failed_marker_for_explicit_resume() -> None:
+    runner = _RecordingRemoteRunner()
+    remote = Grid5000Remote("lille", runner=runner)
+
+    ready = remote.has_complete_checkpoint(
+        "a" * 20,
+        output_subdirectory=Path("models/landuse"),
+        identity=IDENTITY,
+        allow_failed_status=True,
+    )
+
+    assert ready is True
+    command = runner.calls[0][0][-1]
+    assert 'grep -Eq \'"status":"(active|failed)"\'' in command
+
+
+def test_prepare_reopens_a_failed_marker_only_when_explicitly_allowed() -> None:
+    runner = _RecordingRemoteRunner()
+    remote = Grid5000Remote("lille", runner=runner)
+
+    result = remote.prepare(
+        run_id="a" * 20,
+        source_commit="b" * 40,
+        allow_failed_run=True,
+    )
+
+    assert result.run_id == "a" * 20
+    command = runner.calls[0][0][-1]
+    assert 'grep -Fq \'"status":"failed"\'' in command
+    assert "REMOTE_PREPARED" in command

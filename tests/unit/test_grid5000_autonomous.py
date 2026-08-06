@@ -7,6 +7,7 @@ import pytest
 
 from osm_polygon_sentence_classifier.grid5000 import (
     CommandResult,
+    Grid5000ExecutionError,
     Grid5000RunIdentity,
 )
 from osm_polygon_sentence_classifier.grid5000_autonomous import (
@@ -54,14 +55,22 @@ class _FakeHub:
 class _FakeRemote:
     def __init__(self) -> None:
         self.prepared = False
+        self.prepared_allow_failed_run: bool | None = None
         self.installed_token: str | None = None
         self.cleaned = False
         self.marked: list[str] = []
         self.status_calls = 0
 
-    def prepare(self, *, run_id: str, source_commit: str) -> RemotePreparationResult:
+    def prepare(
+        self,
+        *,
+        run_id: str,
+        source_commit: str,
+        allow_failed_run: bool = False,
+    ) -> RemotePreparationResult:
         del source_commit
         self.prepared = True
+        self.prepared_allow_failed_run = allow_failed_run
         return RemotePreparationResult("grenoble", run_id, reused_checkout=False)
 
     def install_hugging_face_token(self, token: str) -> None:
@@ -115,6 +124,7 @@ class _CheckpointContinuationRemote(_FakeRemote):
     def __init__(self) -> None:
         super().__init__()
         self.submission_count = 0
+        self.checkpoint_allow_failed_status: bool | None = None
 
     def run(self, command: str, *, input_text: str | None = None) -> CommandResult:
         del input_text
@@ -153,8 +163,10 @@ class _CheckpointContinuationRemote(_FakeRemote):
         *,
         output_subdirectory: str,
         identity: dict[str, object],
+        allow_failed_status: bool = False,
     ) -> bool:
         del run_id, output_subdirectory, identity
+        self.checkpoint_allow_failed_status = allow_failed_status
         return True
 
 
@@ -216,13 +228,42 @@ class _FailedRunContinuationRemote(_CheckpointContinuationRemote):
         raise AssertionError(command)
 
 
+class _FlakyCheckpointProbeRemote(_FailedRunContinuationRemote):
+    def __init__(self) -> None:
+        super().__init__()
+        self.checkpoint_probe_calls = 0
+
+    def has_complete_checkpoint(
+        self,
+        run_id: str,
+        *,
+        output_subdirectory: str,
+        identity: dict[str, object],
+        allow_failed_status: bool = False,
+    ) -> bool:
+        del run_id, output_subdirectory, identity
+        self.checkpoint_allow_failed_status = allow_failed_status
+        self.checkpoint_probe_calls += 1
+        if self.checkpoint_probe_calls == 1:
+            raise Grid5000ExecutionError(
+                "remote command failed with exit code 255: connection timed out"
+            )
+        return True
+
+
 class _ReplacementRemote:
     def __init__(self, site: str, state: str) -> None:
         self.site = site
         self.state = state
         self.cancelled: list[int] = []
 
-    def prepare(self, *, run_id: str, source_commit: str) -> RemotePreparationResult:
+    def prepare(
+        self,
+        *,
+        run_id: str,
+        source_commit: str,
+        allow_failed_run: bool = False,
+    ) -> RemotePreparationResult:
         del source_commit
         return RemotePreparationResult(self.site, run_id, reused_checkout=True)
 
@@ -695,6 +736,61 @@ def test_failed_run_can_extend_from_a_retained_checkpoint(
     facts = dict(state.facts or {})
     assert facts["continuation_count"] == 2
     assert facts["max_continuations"] == 2
+    assert remote.checkpoint_allow_failed_status is True
+    assert remote.prepared_allow_failed_run is True
+
+
+def test_failed_run_retries_a_transient_checkpoint_probe(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+    config = replace(_config(), max_continuations=2)
+    remote = _FlakyCheckpointProbeRemote()
+    probe = SiteProbe(
+        name="grenoble",
+        reachable=True,
+        resources=(
+            GpuResource(
+                gpu_memory_mb=16_000,
+                cuda_capability=(8, 0),
+                jobs_assigned=0,
+                production=True,
+                exotic=False,
+            ),
+        ),
+        persistent_free_bytes=10 * 1024**3,
+        queued_jobs=0,
+    )
+    sleeps: list[float] = []
+    controller = AutonomousRunController(
+        config,
+        state_root=tmp_path / "runs",
+        probe_sites=lambda **_: (probe,),
+        remote_factory=lambda _site: remote,
+        hub_api=_FakeHub(),
+        poll_seconds=30,
+        sleeper=sleeps.append,
+    )
+    current = AutonomousRunState(
+        run_id=config.identity.run_id,
+        phase="failed",
+        identity=config.identity.canonical_payload,
+        site="grenoble",
+        job_id=99,
+        facts={
+            "continuation_count": 1,
+            "max_continuations": 1,
+            "error": "job ended without completion after 1 checkpoint continuations",
+        },
+    )
+    controller.state.create(current)
+
+    result = controller.run()
+
+    assert result.phase == "completed"
+    assert remote.checkpoint_probe_calls == 2
+    assert sleeps[0] == 5.0
 
 
 def test_failed_run_extension_refuses_an_active_previous_job(
