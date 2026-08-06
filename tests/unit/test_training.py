@@ -264,6 +264,17 @@ class _FakeLayer:
         return self.parameters_list
 
 
+class _FakeOrderedLayers:
+    def __init__(self, layers: Iterable[_FakeLayer]) -> None:
+        self.layers = list(layers)
+
+    def __len__(self) -> int:
+        return len(self.layers)
+
+    def __getitem__(self, index: int | slice) -> _FakeLayer | list[_FakeLayer]:
+        return self.layers[index]
+
+
 class _FakeLayeredModel(_FakeModel):
     def __init__(self) -> None:
         super().__init__()
@@ -300,6 +311,26 @@ def test_last2_training_unfreezes_only_the_last_two_encoder_layers() -> None:
         for parameter in layer.parameters()
     )
     assert all(parameter.requires_grad for parameter in model.classifier.parameters())
+
+
+def test_last2_training_accepts_module_list_like_encoder_layers() -> None:
+    from osm_polygon_sentence_classifier import training
+
+    model = _FakeLayeredModel()
+    ordered_layers = _FakeOrderedLayers(_FakeLayer() for _ in range(4))
+    model.base_model.layers = ordered_layers
+
+    training._configure_trainable_layers(model, "last2")
+
+    assert all(
+        not parameter.requires_grad
+        for parameter in ordered_layers.layers[0].parameters()
+    )
+    assert all(
+        parameter.requires_grad
+        for layer in ordered_layers.layers[-2:]
+        for parameter in layer.parameters()
+    )
 
 
 def test_balanced_class_weights_use_the_pinned_training_label_counts() -> None:

@@ -849,6 +849,14 @@ def _encoder_layers(model: Any) -> Sequence[Any]:
     for candidate in candidates:
         if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes)):
             return candidate
+        # torch.nn.ModuleList is ordered and sliceable, but it does not register
+        # as collections.abc.Sequence at runtime.
+        if (
+            not isinstance(candidate, (str, bytes, Mapping))
+            and callable(getattr(candidate, "__len__", None))
+            and callable(getattr(candidate, "__getitem__", None))
+        ):
+            return cast(Sequence[Any], candidate)
     raise TrainingError("model does not expose ordered encoder layers")
 
 
