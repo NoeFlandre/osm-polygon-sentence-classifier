@@ -37,25 +37,35 @@ def test_distant_queued_forecast_is_eligible_for_one_trial() -> None:
     assert timedelta(minutes=10) == IMMEDIATE_START_LIMIT
 
 
-def test_running_or_unknown_forecast_is_not_replaced() -> None:
+def test_queued_job_without_a_forecast_is_eligible_for_one_trial() -> None:
+    now = datetime(2026, 8, 5, 10, 0, tzinfo=UTC)
+    status = JobStatus(job_id=1, state=JobState.QUEUED)
+
+    assert should_seek_replacement(status, now=now)
+
+
+def test_running_job_is_not_replaced() -> None:
     now = datetime(2026, 8, 5, 10, 0, tzinfo=UTC)
 
     assert not should_seek_replacement(
         JobStatus(job_id=1, state=JobState.RUNNING), now=now
     )
-    assert not should_seek_replacement(
-        JobStatus(job_id=1, state=JobState.QUEUED), now=now
-    )
 
 
 def test_replacement_cancels_a_trial_that_reaches_its_deadline() -> None:
-    clock_values = iter((0.0, 0.0, 2.0, 2.0))
+    elapsed = 0.0
     cancelled: list[tuple[str, int]] = []
+    observed: list[tuple[str, int]] = []
 
     def monotonic() -> float:
-        return next(clock_values)
+        return elapsed
+
+    def sleep(seconds: float) -> None:
+        nonlocal elapsed
+        elapsed += seconds
 
     def status(site: str, job_id: int) -> JobStatus:
+        observed.append((site, job_id))
         return JobStatus(job_id=job_id, state=JobState.QUEUED)
 
     outcome = attempt_immediate_replacement(
@@ -65,14 +75,15 @@ def test_replacement_cancels_a_trial_that_reaches_its_deadline() -> None:
         submit=lambda _candidate: 11,
         status=status,
         cancel=lambda site, job_id: cancelled.append((site, job_id)),
-        sleep=lambda _seconds: None,
+        sleep=sleep,
         monotonic=monotonic,
         trial_seconds=1.0,
-        poll_seconds=0.1,
+        poll_seconds=0.5,
     )
 
     assert outcome == ReplacementOutcome("nancy", 10, False)
     assert cancelled == [("grenoble", 11)]
+    assert observed == [("nancy", 10), ("grenoble", 11)] * 2
 
 
 def test_replacement_keeps_the_fallback_when_it_starts_first() -> None:

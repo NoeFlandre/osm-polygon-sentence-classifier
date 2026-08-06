@@ -9,7 +9,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, NoReturn, cast
 
 from .config import ProjectConfig
 from .grid5000 import (
@@ -537,11 +537,25 @@ class AutonomousRunController:
         now = _now()
         facts = dict(current.facts or {})
         attempt_count = _replacement_attempt_count_for_job(facts, job_id=job_id)
-        if (
-            attempt_count >= MAX_REPLACEMENT_ATTEMPTS
-            or not should_seek_replacement(status, now=now)
-            or not _replacement_retry_due_for_job(facts, job_id=job_id, now=now)
-        ):
+        if attempt_count >= MAX_REPLACEMENT_ATTEMPTS:
+            if status.scheduled_start is None:
+                message = (
+                    f"{site} job {job_id} remained queued with no start-time "
+                    f"prediction after {MAX_REPLACEMENT_ATTEMPTS} replacement rounds"
+                )
+                self.emit(f"{message}; canceling fallback")
+                OarClient(remote).cancel(job_id)
+                return self._fail_terminal(
+                    current,
+                    site=site,
+                    job_id=job_id,
+                    remote=remote,
+                    message=message,
+                )
+            return current, site, job_id, remote
+        if not should_seek_replacement(
+            status, now=now
+        ) or not _replacement_retry_due_for_job(facts, job_id=job_id, now=now):
             return current, site, job_id, remote
         attempt_count += 1
         attempt_timestamp = now.isoformat()
@@ -595,7 +609,7 @@ class AutonomousRunController:
         job_id: int,
         remote: Any,
         message: str,
-    ) -> AutonomousRunState:
+    ) -> NoReturn:
         failed = self._transition(
             current,
             RunPhase.FAILED,

@@ -351,6 +351,116 @@ def test_queued_replacement_is_retried_after_a_cooldown_but_is_bounded(
     assert calls == list(range(1, MAX_REPLACEMENT_ATTEMPTS + 1))
 
 
+def test_queued_job_without_a_forecast_starts_a_bounded_replacement_round(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _config()
+    controller = AutonomousRunController(config, state_root=tmp_path / "runs")
+    now = datetime(2026, 8, 5, 19, 0, tzinfo=UTC)
+    monkeypatch.setattr(
+        "osm_polygon_sentence_classifier.grid5000_autonomous._now",
+        lambda: now,
+    )
+    current = AutonomousRunState(
+        run_id=config.identity.run_id,
+        phase="queued",
+        identity=config.identity.canonical_payload,
+        site="grenoble",
+        job_id=99,
+        updated_at=now.isoformat(),
+    )
+    controller.state.create(current)
+    calls: list[int] = []
+
+    def try_replacement(**kwargs: object) -> tuple[str, int, object]:
+        calls.append(len(calls) + 1)
+        return "grenoble", 99, kwargs["fallback_remote"]
+
+    monkeypatch.setattr(controller, "_try_replacement", try_replacement)
+
+    current, *_ = controller._handle_queued_status(
+        current,
+        status=JobStatus(job_id=99, state=JobState.QUEUED),
+        site="grenoble",
+        job_id=99,
+        remote=object(),
+    )
+
+    assert calls == [1]
+    assert dict(current.facts or {})["replacement_attempt_count"] == 1
+
+
+def test_unpredicted_fallback_is_canceled_after_bounded_replacement_rounds(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _config()
+    controller = AutonomousRunController(config, state_root=tmp_path / "runs")
+    now = datetime(2026, 8, 5, 19, 0, tzinfo=UTC)
+    monkeypatch.setattr(
+        "osm_polygon_sentence_classifier.grid5000_autonomous._now",
+        lambda: now,
+    )
+
+    class CancelRecordingRemote:
+        def __init__(self) -> None:
+            self.commands: list[str] = []
+            self.marked: list[str] = []
+
+        def run(
+            self,
+            command: str,
+            *,
+            input_text: str | None = None,
+        ) -> CommandResult:
+            del input_text
+            self.commands.append(command)
+            return CommandResult(returncode=0, stdout="ok\n")
+
+        def mark_status(self, run_id: str, status: str) -> None:
+            del run_id
+            self.marked.append(status)
+
+    remote = CancelRecordingRemote()
+    current = AutonomousRunState(
+        run_id=config.identity.run_id,
+        phase="queued",
+        identity=config.identity.canonical_payload,
+        site="grenoble",
+        job_id=99,
+        updated_at=now.isoformat(),
+    )
+    controller.state.create(current)
+    monkeypatch.setattr(
+        controller,
+        "_try_replacement",
+        lambda **kwargs: ("grenoble", 99, kwargs["fallback_remote"]),
+    )
+
+    for _ in range(MAX_REPLACEMENT_ATTEMPTS):
+        current, *_ = controller._handle_queued_status(
+            current,
+            status=JobStatus(job_id=99, state=JobState.QUEUED),
+            site="grenoble",
+            job_id=99,
+            remote=remote,
+        )
+        now += REPLACEMENT_RETRY_INTERVAL
+
+    with pytest.raises(AutonomousRunError, match="no start-time prediction"):
+        controller._handle_queued_status(
+            current,
+            status=JobStatus(job_id=99, state=JobState.QUEUED),
+            site="grenoble",
+            job_id=99,
+            remote=remote,
+        )
+
+    assert remote.commands == ["oardel 99"]
+    assert remote.marked == ["failed"]
+
+
 def test_controller_runs_prepare_submit_monitor_publish_verify_and_cleanup(
     tmp_path: Path,
     monkeypatch,

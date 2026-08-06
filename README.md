@@ -101,9 +101,12 @@ job; it never restarts from scratch. The default limit is three continuation
 jobs and can be changed with `--max-continuations`. If OAR forecasts the
 fallback too late, it probes every configured site, tries one replacement at
 a time, and repeats the bounded probe after a ten-minute cooldown, for at most
-three rounds. It adopts only a replacement that is visibly running. Queue
-depth is recorded for diagnostics, never used as an ETA, and speculative
-multi-site submissions are not made.
+three rounds. The same search starts immediately when OAR provides no start
+prediction. It adopts only a replacement that is visibly running; if an
+unpredicted fallback still has not started after those rounds, it is canceled
+and the run fails explicitly instead of waiting forever. Queue depth is
+recorded for diagnostics, never used as an ETA, and speculative multi-site
+submissions are not made.
 
 Run the complete lifecycle with a pinned source/model pair:
 

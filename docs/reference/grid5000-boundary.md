@@ -26,6 +26,8 @@ The execution contract is:
 - record durable intent before OAR and refuse ambiguous resubmission;
 - monitor one fallback job, with at most three sequential replacement rounds;
   each round probes all configured sites and runs one 20-minute trial at a time;
+  a fallback with no scheduler forecast triggers this bounded search
+  immediately;
 - retain two identity-bound checkpoints and submit at most three bounded
   successor jobs when a terminal job has no verified completion;
 - verify the completion manifest and remote Hub facts before success cleanup; and
@@ -34,9 +36,11 @@ The execution contract is:
 The controller never uses queue depth as an ETA, submits speculative jobs to
 multiple sites, or retries an ambiguous scheduler response. A trial is adopted
 only after OAR reports it `Running`; until then the original queued job remains
-the fallback. A timed-out or late trial is canceled. A monitor interruption
-does not cancel the active scheduler job; `resume --run-id RUN_ID --execute`
-reattaches to the durable state.
+the fallback. A timed-out or late trial is canceled. If the fallback has no
+forecast after all bounded replacement rounds, it is canceled and the run fails
+explicitly instead of polling forever. A monitor interruption does not cancel
+the active scheduler job; `resume --run-id RUN_ID --execute` reattaches to the
+durable state.
 
 The compute worker validates Linux, OAR identity, exact checkout revision and
 cleanliness, an x86_64 compute-node architecture, exactly one visible CUDA GPU,

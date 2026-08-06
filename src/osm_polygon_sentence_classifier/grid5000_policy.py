@@ -50,7 +50,14 @@ def should_seek_replacement(
     now: datetime,
     immediate_start_limit: timedelta = IMMEDIATE_START_LIMIT,
 ) -> bool:
-    """Return whether a queued fallback forecast exceeds the short exception."""
+    """Return whether a queued fallback needs a bounded replacement trial.
+
+    OAR may leave ``scheduled_start`` unset while a job remains queued. That is
+    not evidence of an imminent start, so the controller treats it as eligible
+    for one bounded replacement round. Trial candidates use
+    :func:`forecast_exceeds_immediate_window` instead, which preserves their
+    full observation window when their own forecast is unknown.
+    """
 
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("now must be timezone-aware")
@@ -60,7 +67,7 @@ def should_seek_replacement(
         return False
     forecast = _forecast_datetime(status.scheduled_start)
     if forecast is None:
-        return False
+        return True
     return forecast > now.astimezone(GRID5000_TIMEZONE) + immediate_start_limit
 
 
@@ -70,8 +77,13 @@ def forecast_exceeds_immediate_window(
     now: datetime,
     immediate_start_limit: timedelta = IMMEDIATE_START_LIMIT,
 ) -> bool:
-    """Return whether a replacement trial is no longer policy-immediate."""
+    """Return whether a replacement trial is known to be too late."""
 
+    if (
+        status.state is not JobState.QUEUED
+        or _forecast_datetime(status.scheduled_start) is None
+    ):
+        return False
     return should_seek_replacement(
         status,
         now=now,

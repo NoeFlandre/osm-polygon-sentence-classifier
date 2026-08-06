@@ -75,13 +75,18 @@ production/standard resources and Nancy-style default/exotic resources without
 hard-coding either site. Only one
 fallback job is live at a time. If its forecast is more than ten minutes away,
 the controller probes every configured site and tries replacement sites
-sequentially with a 20-minute trial allocation. It repeats that bounded probe
-after a ten-minute cooldown, for at most three rounds. It cancels a trial that
-misses its immediate-start window or reaches its ten-minute observation
-deadline, adopts a trial only after it is visibly `Running`, and cancels the
-old fallback only after adoption. Each new checkpoint successor gets its own
-replacement decision; an earlier job's trial does not suppress optimization
-for a later queued successor.
+sequentially with a 20-minute trial allocation. A queued fallback without a
+scheduler forecast is treated the same way immediately; it must not be polled
+indefinitely just because OAR has no prediction. The controller repeats that
+bounded probe after a ten-minute cooldown, for at most three rounds. It cancels
+a trial that has a known late forecast or reaches its ten-minute observation
+deadline, but lets an unpredicted trial use the full observation window. It
+adopts a trial only after it is visibly `Running`, and cancels the old fallback
+only after adoption. If the fallback still has no forecast after all three
+rounds, it is canceled and the run fails explicitly rather than waiting
+forever. Each new checkpoint successor gets its own replacement decision; an
+earlier job's trial does not suppress optimization for a later queued
+successor.
 
 The complete walltime must fit the selected policy window. During weekdays,
 automatic policy uses `day` only for a complete allocation inside 09:00–19:00
