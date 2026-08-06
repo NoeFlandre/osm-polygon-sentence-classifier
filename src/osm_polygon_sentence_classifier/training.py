@@ -324,9 +324,10 @@ def _sync_static_trackio(
     settings: TrackioSettings,
     *,
     failure_message: str,
+    finalize: bool = False,
 ) -> None:
     try:
-        sync_project_to_static_space(settings)
+        sync_project_to_static_space(settings, finalize=finalize)
     except TrackingError as error:
         raise TrainingError(failure_message) from error
 
@@ -445,6 +446,7 @@ class _CheckpointManifestCallback:
             _sync_static_trackio(
                 self.tracking_settings,
                 failure_message="checkpoint Trackio static snapshot failed",
+                finalize=False,
             )
         return control
 
@@ -870,6 +872,7 @@ def train_landuse_classifier(
             _sync_static_trackio(
                 tracking,
                 failure_message="Trackio static snapshot failed",
+                finalize=True,
             )
         tracking_space_id = (
             tracking.static_space_id if training_config.sync_trackio else None

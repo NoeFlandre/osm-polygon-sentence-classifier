@@ -494,7 +494,7 @@ def test_checkpoint_callback_writes_model_card_before_publication(
         "training_config": {"max_steps": 1000},
     }
     publication_calls: list[tuple[Path, str, Mapping[str, object]]] = []
-    sync_calls: list[object] = []
+    sync_calls: list[tuple[object, dict[str, object]]] = []
 
     def publish(
         directory: Path,
@@ -511,7 +511,8 @@ def test_checkpoint_callback_writes_model_card_before_publication(
     monkeypatch.setattr(
         training,
         "sync_project_to_static_space",
-        lambda settings: sync_calls.append(settings) or TRACKIO_STATIC_SPACE_ID,
+        lambda settings, **kwargs: sync_calls.append((settings, kwargs))
+        or TRACKIO_STATIC_SPACE_ID,
     )
 
     training._CheckpointManifestCallback(
@@ -526,6 +527,7 @@ def test_checkpoint_callback_writes_model_card_before_publication(
 
     assert publication_calls == [(checkpoint, "owner/model", identity)]
     assert len(sync_calls) == 1
+    assert sync_calls[0][1] == {"finalize": False}
 
 
 def test_checkpoint_callback_queues_hub_publication_until_training_end(
@@ -794,11 +796,12 @@ def test_training_can_publish_the_final_model_and_sync_static_trackio(
             files=("config.json", "model.safetensors"),
         ),
     )
-    sync_calls: list[object] = []
+    sync_calls: list[tuple[object, dict[str, object]]] = []
     monkeypatch.setattr(
         training,
         "sync_project_to_static_space",
-        lambda settings: sync_calls.append(settings) or TRACKIO_STATIC_SPACE_ID,
+        lambda settings, **kwargs: sync_calls.append((settings, kwargs))
+        or TRACKIO_STATIC_SPACE_ID,
     )
     monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
     result = training.train_landuse_classifier(
@@ -828,3 +831,4 @@ def test_training_can_publish_the_final_model_and_sync_static_trackio(
     assert result.model_publication.commit_id == "d" * 40
     assert result.tracking_space_id == TRACKIO_STATIC_SPACE_ID
     assert len(sync_calls) == 1
+    assert sync_calls[0][1] == {"finalize": True}

@@ -51,8 +51,11 @@ each complete checkpoint updates its permanent
 `checkpoints/step-N/` directory, and Trackio publishes a static metric
 snapshot to the free public [Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-trackio)
 through its dedicated Bucket after each complete checkpoint and final
-publication. Evaluation logs include accuracy, precision, recall, and F1. The
-model README is generated from safe run metadata, evaluation metrics, and
+publication. On network-backed Grid'5000 storage, append-only Trackio fragments
+are imported into the project database before each snapshot, and the final
+snapshot closes the active run first. Evaluation logs include accuracy,
+precision, recall, and F1. The model README is generated from safe run metadata,
+evaluation metrics, and
 checkpoint progress at each checkpoint and final publication. Checkpoint Hub
 uploads are queued in order and completed before the final model publication;
 older checkpoint snapshots remain available remotely.

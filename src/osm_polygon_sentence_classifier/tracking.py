@@ -55,11 +55,28 @@ def ensure_trackio_resources(
             repo_id=settings.static_space_id,
             repo_type="space",
             space_sdk="static",
+            private=False,
             exist_ok=True,
         )
-        api.create_bucket(bucket_id=settings.bucket_id, exist_ok=True)
+        api.create_bucket(
+            bucket_id=settings.bucket_id,
+            private=False,
+            exist_ok=True,
+        )
     except Exception as error:
         raise TrackingError("Trackio Space and bucket provisioning failed") from error
+
+
+def _current_local_run(trackio: Any) -> Any | None:
+    context_vars = getattr(trackio, "context_vars", None)
+    current_run_context = getattr(context_vars, "current_run", None)
+    get_current_run = getattr(current_run_context, "get", None)
+    if not callable(get_current_run):
+        return None
+    try:
+        return get_current_run()
+    except LookupError:
+        return None
 
 
 def _flush_current_local_run(trackio: Any) -> None:
@@ -72,14 +89,8 @@ def _flush_current_local_run(trackio: Any) -> None:
     synchronous drain.
     """
 
-    context_vars = getattr(trackio, "context_vars", None)
-    current_run_context = getattr(context_vars, "current_run", None)
-    get_current_run = getattr(current_run_context, "get", None)
-    if not callable(get_current_run):
-        return
-    try:
-        current_run = get_current_run()
-    except LookupError:
+    current_run = _current_local_run(trackio)
+    if current_run is None:
         return
     flush = getattr(current_run, "_flush_queues_inline", None)
     if not callable(flush):
@@ -92,12 +103,46 @@ def _flush_current_local_run(trackio: Any) -> None:
         flush()
 
 
-def sync_project_to_static_space(settings: TrackioSettings) -> str:
-    """Synchronize the current local project snapshot to the static Space."""
+def _finish_current_local_run(trackio: Any) -> None:
+    current_run = _current_local_run(trackio)
+    if current_run is None:
+        return
+    finish = getattr(trackio, "finish", None)
+    if not callable(finish):
+        raise TrackingError("Trackio finalization is unavailable")
+    finish()
+
+
+def _import_local_fragments(trackio: Any) -> None:
+    fragments = getattr(trackio, "fragments", None)
+    if fragments is None:
+        fragments = import_module("trackio.fragments")
+    import_inbox_dir = getattr(fragments, "import_inbox_dir", None)
+    if not callable(import_inbox_dir):
+        raise TrackingError("Trackio local fragment import is unavailable")
+    import_inbox_dir()
+
+
+def sync_project_to_static_space(
+    settings: TrackioSettings,
+    *,
+    finalize: bool = False,
+) -> str:
+    """Synchronize the current local project snapshot to the static Space.
+
+    Grid'5000 home storage may make Trackio select append-only JSONL fragments
+    instead of SQLite. Import those fragments before the static exporter reads
+    the project database. ``finalize`` is used only after training so the
+    active Trackio run is closed before the final import and upload.
+    """
 
     try:
         trackio: Any = import_module("trackio")
-        _flush_current_local_run(trackio)
+        if finalize:
+            _finish_current_local_run(trackio)
+        else:
+            _flush_current_local_run(trackio)
+        _import_local_fragments(trackio)
         space_id = trackio.sync(
             project=settings.project,
             space_id=settings.static_space_id,

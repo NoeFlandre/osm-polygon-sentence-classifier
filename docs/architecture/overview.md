@@ -34,8 +34,10 @@ The foundation keeps the first interfaces narrow and local:
   identity so a later Grid5000 worker can resume safely. Explicit flags publish
   each complete checkpoint to its permanent `checkpoints/step-N/` directory and
   records accuracy, precision, recall, and F1 locally through Trackio. After
-  each complete checkpoint and final publication it explicitly syncs a static
-  snapshot to the Space and Bucket. It generates a credential-free model README
+  each complete checkpoint and final publication it imports any network-safe
+  Trackio JSONL fragments, then explicitly syncs a static snapshot to the public
+  Space and Bucket; the final sync closes the active Trackio run first. It
+  generates a credential-free model README
   with checkpoint progress and scalar evaluation metrics, then publishes
   validated final top-level model files with the final README. Checkpoint
   uploads are drained before final publication; older remote snapshots remain

@@ -61,6 +61,7 @@ def test_model_repository_setup_is_idempotent() -> None:
         {
             "repo_id": "NoeFlandre/osm-polygon-sentence-classifier",
             "repo_type": "model",
+            "private": False,
             "exist_ok": True,
         }
     ]

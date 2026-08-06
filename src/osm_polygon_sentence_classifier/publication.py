@@ -226,6 +226,7 @@ def ensure_model_repository(
         api.create_repo(
             repo_id=repository,
             repo_type="model",
+            private=False,
             exist_ok=True,
         )
     except ModelPublicationError:

@@ -36,7 +36,14 @@ def test_tracking_environment_only_points_trackio_at_managed_storage() -> None:
 def test_tracking_sync_uses_the_dedicated_static_space_and_bucket(monkeypatch) -> None:
     calls: list[dict[str, object]] = []
 
+    class FakeFragments:
+        @staticmethod
+        def import_inbox_dir() -> None:
+            pass
+
     class FakeTrackio:
+        fragments = FakeFragments
+
         @staticmethod
         def sync(**kwargs: object) -> str:
             calls.append(kwargs)
@@ -70,10 +77,16 @@ def test_tracking_sync_flushes_queued_metrics_before_static_upload(monkeypatch) 
 
     run = FakeRun()
 
+    class FakeFragments:
+        @staticmethod
+        def import_inbox_dir() -> None:
+            calls.append("import")
+
     class FakeTrackio:
         context_vars = SimpleNamespace(
             current_run=SimpleNamespace(get=lambda: run),
         )
+        fragments = FakeFragments
 
         @staticmethod
         def sync(**kwargs: object) -> str:
@@ -85,11 +98,60 @@ def test_tracking_sync_flushes_queued_metrics_before_static_upload(monkeypatch) 
 
     sync_project_to_static_space(settings_for(ProjectConfig()))
 
-    assert calls == ["flush", "sync"]
+    assert calls == ["flush", "import", "sync"]
+
+
+def test_final_tracking_sync_finishes_run_before_importing_fragments(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    class FakeRun:
+        def __init__(self) -> None:
+            self._client_lock = RLock()
+
+        def _flush_queues_inline(self) -> None:
+            calls.append("flush")
+
+    run = FakeRun()
+
+    class FakeFragments:
+        @staticmethod
+        def import_inbox_dir() -> None:
+            calls.append("import")
+
+    class FakeTrackio:
+        context_vars = SimpleNamespace(
+            current_run=SimpleNamespace(get=lambda: run),
+        )
+        fragments = FakeFragments
+
+        @staticmethod
+        def finish() -> None:
+            calls.append("finish")
+
+        @staticmethod
+        def sync(**kwargs: object) -> str:
+            del kwargs
+            calls.append("sync")
+            return TRACKIO_STATIC_SPACE_ID
+
+    monkeypatch.setitem(__import__("sys").modules, "trackio", FakeTrackio)
+
+    sync_project_to_static_space(settings_for(ProjectConfig()), finalize=True)
+
+    assert calls == ["finish", "import", "sync"]
 
 
 def test_tracking_sync_wraps_trackio_failures(monkeypatch) -> None:
+    class FakeFragments:
+        @staticmethod
+        def import_inbox_dir() -> None:
+            pass
+
     class BrokenTrackio:
+        fragments = FakeFragments
+
         @staticmethod
         def sync(**kwargs: object) -> str:
             del kwargs
@@ -123,12 +185,13 @@ def test_trackio_resource_setup_creates_the_free_static_space_and_bucket() -> No
                 "repo_id": TRACKIO_SPACE_ID,
                 "repo_type": "space",
                 "space_sdk": "static",
+                "private": False,
                 "exist_ok": True,
             },
         ),
         (
             "bucket",
-            {"bucket_id": TRACKIO_BUCKET_ID, "exist_ok": True},
+            {"bucket_id": TRACKIO_BUCKET_ID, "private": False, "exist_ok": True},
         ),
     ]
 

@@ -64,8 +64,12 @@ create training outputs. An authorized training call stores model caches,
 checkpoints, models, and Trackio state beneath that root. Remote publication is
 opt-in: the final model is published at the repository root, and every complete
 checkpoint is published beneath its permanent `checkpoints/step-N/` directory.
-The checkpoint upload is queued in order and drained before final publication;
-older checkpoint snapshots remain available for inspection.
+The model repository and free static Trackio Space/Bucket are provisioned as
+public destinations. The checkpoint upload is queued in order and drained
+before final publication; older checkpoint snapshots remain available for
+inspection. On network-backed Grid'5000 storage, Trackio JSONL fragments are
+imported before each static snapshot so the public dashboard contains the
+recorded metrics.
 
 Run the audit only when the pinned dataset review is explicitly authorized:
 
