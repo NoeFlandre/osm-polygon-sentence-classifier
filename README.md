@@ -15,12 +15,14 @@ data root. The training module consumes the clean iterator, uses a Hugging
 Face Trainer with local Trackio reporting, and saves model artifacts beneath
 the same root. It retains two complete, identity-bound checkpoints so an
 incomplete allocation can continue safely. An authorized Grid'5000 run may
-explicitly publish the
-completed model to the dedicated model repository, update its single
-`checkpoints/last-checkpoint` snapshot after each complete checkpoint, and
-synchronize Trackio metrics to the static
-[Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-trackio)
+explicitly publish the completed model to the dedicated model repository,
+update its single `checkpoints/last-checkpoint` snapshot after each complete
+checkpoint, and send live Trackio metrics to the writable
+[Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-trackio-live)
 and [metric Bucket](https://huggingface.co/buckets/NoeFlandre/osm-polygon-sentence-classifier-trackio-data).
+The model repository README is generated from the pinned dataset/model
+identity, safe training configuration, checkpoint progress, and scalar
+metrics at each published checkpoint and at final publication.
 
 The clean iterator `iter_clean_training_examples` is the only permitted
 training-input boundary. The public iterator remains lazy until consumed, and
@@ -144,7 +146,7 @@ uv run grid5000-landuse plan \
 
 The `run --execute` gate is the only path that performs SSH, policy, quota,
 OAR, Hub provisioning, publication, or cleanup. It creates the dedicated
-model repository and Trackio static Space/bucket idempotently. HF credentials
+model repository and Trackio live Gradio Space/bucket idempotently. HF credentials
 are sent to the selected frontend only through SSH stdin and never enter a
 command or durable state. The worker writes a credential-free completion
 manifest before the controller verifies Hub facts and cleans its exact marked

@@ -28,6 +28,7 @@ from osm_polygon_sentence_classifier.grid5000_state import (
     AutonomousRunState,
     AutonomousStateStore,
 )
+from osm_polygon_sentence_classifier.tracking import TRACKIO_SPACE_ID
 from osm_polygon_sentence_classifier.training import TrainingConfig
 
 
@@ -98,7 +99,7 @@ class _FakeRemote:
                 "repository_id": "NoeFlandre/osm-polygon-sentence-classifier",
                 "commit_id": "d" * 40,
             },
-            "tracking_space_id": ("NoeFlandre/osm-polygon-sentence-classifier-trackio"),
+            "tracking_space_id": TRACKIO_SPACE_ID,
         }
 
     def mark_status(self, run_id: str, status: str) -> None:
@@ -244,6 +245,13 @@ def _config() -> AutonomousRunConfig:
         requirements=SiteRequirements(gpu_memory_mb=8_000),
         walltime_seconds=1_800,
         cleanup=True,
+    )
+
+
+def _disable_trackio_space_deployment(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "trackio.deploy.deploy_as_space",
+        lambda *args, **kwargs: None,
     )
 
 
@@ -469,6 +477,7 @@ def test_controller_runs_prepare_submit_monitor_publish_verify_and_cleanup(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+    _disable_trackio_space_deployment(monkeypatch)
     remote = _FakeRemote()
     hub = _FakeHub()
     messages: list[str] = []
@@ -518,6 +527,7 @@ def test_controller_continues_from_a_checkpoint_after_walltime_termination(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+    _disable_trackio_space_deployment(monkeypatch)
     remote = _CheckpointContinuationRemote()
     probe = SiteProbe(
         name="grenoble",
@@ -564,6 +574,7 @@ def test_controller_stops_after_the_continuation_limit(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+    _disable_trackio_space_deployment(monkeypatch)
     remote = _NeverCompletesContinuationRemote()
     probe = SiteProbe(
         name="grenoble",
@@ -627,9 +638,7 @@ def test_completion_verification_rejects_a_model_repository_mismatch(
                     "repository_id": "NoeFlandre/wrong-model",
                     "commit_id": "d" * 40,
                 },
-                "tracking_space_id": (
-                    "NoeFlandre/osm-polygon-sentence-classifier-trackio"
-                ),
+                "tracking_space_id": TRACKIO_SPACE_ID,
             },
         )
 

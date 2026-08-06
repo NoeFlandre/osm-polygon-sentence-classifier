@@ -5,6 +5,7 @@ from osm_polygon_sentence_classifier.tracking import (
     TRACKING_SUBDIRECTORY,
     TRACKIO_BUCKET_ID,
     TRACKIO_SPACE_ID,
+    TRACKIO_STATIC_SPACE_ID,
     TrackingError,
     TrackioSettings,
     ensure_trackio_resources,
@@ -36,17 +37,17 @@ def test_tracking_sync_uses_the_dedicated_static_space_and_bucket(monkeypatch) -
         @staticmethod
         def sync(**kwargs: object) -> str:
             calls.append(kwargs)
-            return TRACKIO_SPACE_ID
+            return TRACKIO_STATIC_SPACE_ID
 
     monkeypatch.setitem(__import__("sys").modules, "trackio", FakeTrackio)
 
     result = sync_project_to_static_space(settings_for(ProjectConfig()))
 
-    assert result == TRACKIO_SPACE_ID
+    assert result == TRACKIO_STATIC_SPACE_ID
     assert calls == [
         {
             "project": "osm-polygon-sentence-classifier",
-            "space_id": TRACKIO_SPACE_ID,
+            "space_id": TRACKIO_STATIC_SPACE_ID,
             "bucket_id": TRACKIO_BUCKET_ID,
             "sdk": "static",
             "force": True,
@@ -67,8 +68,9 @@ def test_tracking_sync_wraps_trackio_failures(monkeypatch) -> None:
         sync_project_to_static_space(settings_for(ProjectConfig()))
 
 
-def test_trackio_resource_setup_creates_the_static_space_and_bucket() -> None:
+def test_trackio_resource_setup_creates_the_live_space_and_bucket() -> None:
     calls: list[tuple[str, dict[str, object]]] = []
+    deploy_calls: list[tuple[str, dict[str, object]]] = []
 
     class FakeHub:
         def create_repo(self, **kwargs: object) -> None:
@@ -77,7 +79,14 @@ def test_trackio_resource_setup_creates_the_static_space_and_bucket() -> None:
         def create_bucket(self, **kwargs: object) -> None:
             calls.append(("bucket", kwargs))
 
-    ensure_trackio_resources(settings_for(ProjectConfig()), hub_api=FakeHub())
+    def deploy_space(space_id: str, **kwargs: object) -> None:
+        deploy_calls.append((space_id, kwargs))
+
+    ensure_trackio_resources(
+        settings_for(ProjectConfig()),
+        hub_api=FakeHub(),
+        deploy_space=deploy_space,
+    )
 
     assert calls == [
         (
@@ -85,7 +94,7 @@ def test_trackio_resource_setup_creates_the_static_space_and_bucket() -> None:
             {
                 "repo_id": TRACKIO_SPACE_ID,
                 "repo_type": "space",
-                "space_sdk": "static",
+                "space_sdk": "gradio",
                 "exist_ok": True,
             },
         ),
@@ -94,3 +103,7 @@ def test_trackio_resource_setup_creates_the_static_space_and_bucket() -> None:
             {"bucket_id": TRACKIO_BUCKET_ID, "exist_ok": True},
         ),
     ]
+
+    assert TRACKIO_SPACE_ID.endswith("-trackio-live")
+    assert TRACKIO_SPACE_ID != TRACKIO_STATIC_SPACE_ID
+    assert deploy_calls == [(TRACKIO_SPACE_ID, {"bucket_id": TRACKIO_BUCKET_ID})]

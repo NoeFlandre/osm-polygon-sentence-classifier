@@ -15,6 +15,10 @@ from osm_polygon_sentence_classifier.dataset_contract import (
     LANDUSE_DATASET_CONTRACT,
 )
 from osm_polygon_sentence_classifier.dataset_loader import split_for_polygon
+from osm_polygon_sentence_classifier.tracking import (
+    TRACKIO_BUCKET_ID,
+    TRACKIO_SPACE_ID,
+)
 from osm_polygon_sentence_classifier.training import (
     TrainingConfig,
     TrainingError,
@@ -297,6 +301,7 @@ def test_training_wires_managed_streams_tokenizer_trainer_and_tracking(
         trainer=_FakeTrainer,
     )
     monkeypatch.setattr(training, "_load_training_dependencies", lambda: dependencies)
+    monkeypatch.setattr(training, "_write_model_card", lambda *args, **kwargs: None)
 
     result = train_landuse_classifier(
         rows_factory=lambda: iter([_row()]),
@@ -346,6 +351,8 @@ def test_training_wires_managed_streams_tokenizer_trainer_and_tracking(
     assert arguments["save_total_limit"] == 2
     assert arguments["remove_unused_columns"] is False
     assert arguments["trackio_static_space_id"] is False
+    assert arguments["trackio_space_id"] is None
+    assert arguments["trackio_bucket_id"] is None
     assert _FakeTrainer.init_calls[0]["train_dataset"] is _FakeDataset.created[0]
     assert _FakeTrainer.init_calls[0]["eval_dataset"] is _FakeDataset.created[1]
     assert _FakeTrainer.save_model_calls == [
@@ -375,6 +382,7 @@ def test_training_resumes_from_a_checkpoint_and_registers_identity_callback(
         trainer=_FakeTrainer,
     )
     monkeypatch.setattr(training, "_load_training_dependencies", lambda: dependencies)
+    monkeypatch.setattr(training, "_write_model_card", lambda *args, **kwargs: None)
     _FakeTrainer.init_calls.clear()
     _FakeTrainer.train_calls.clear()
 
@@ -442,7 +450,7 @@ def test_checkpoint_callback_writes_identity_after_a_save(tmp_path: Path) -> Non
     assert result.global_step == 7
 
 
-def test_checkpoint_callback_publishes_then_syncs_after_manifest_write(
+def test_checkpoint_callback_writes_model_card_before_publication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -460,9 +468,16 @@ def test_checkpoint_callback_publishes_then_syncs_after_manifest_write(
     (checkpoint / "trainer_state.json").write_text(
         '{"global_step": 7}', encoding="utf-8"
     )
-    identity = {"run_id": "a" * 20, "model_revision": "b" * 40}
+    identity = {
+        "run_id": "a" * 20,
+        "source_commit": "c" * 40,
+        "dataset_revision": "d" * 40,
+        "model_name_or_path": "test-model",
+        "model_revision": "b" * 40,
+        "task_name": "landuse",
+        "training_config": {"max_steps": 1000},
+    }
     publication_calls: list[tuple[Path, str, Mapping[str, object]]] = []
-    sync_calls: list[object] = []
 
     def publish(
         directory: Path,
@@ -471,21 +486,15 @@ def test_checkpoint_callback_publishes_then_syncs_after_manifest_write(
         identity: Mapping[str, object],
     ) -> object:
         assert (directory / "checkpoint-manifest.json").is_file()
+        assert (directory / "README.md").is_file()
         publication_calls.append((directory, repository_id, identity))
         return object()
 
     monkeypatch.setattr(training, "publish_checkpoint_directory", publish)
-    monkeypatch.setattr(
-        training,
-        "sync_project_to_static_space",
-        lambda settings: sync_calls.append(settings) or "space",
-    )
-    settings = cast(Any, object())
 
     training._CheckpointManifestCallback(
         identity,
         model_repository_id="owner/model",
-        tracking_settings=settings,
     ).on_save(
         args=SimpleNamespace(output_dir=str(tmp_path)),
         state=SimpleNamespace(global_step=7),
@@ -493,7 +502,6 @@ def test_checkpoint_callback_publishes_then_syncs_after_manifest_write(
     )
 
     assert publication_calls == [(checkpoint, "owner/model", identity)]
-    assert sync_calls == [settings]
 
 
 def test_checkpoint_callback_queues_hub_publication_until_training_end(
@@ -683,6 +691,7 @@ def test_training_passes_a_pinned_model_revision_to_both_loaders(
         trainer=_FakeTrainer,
     )
     monkeypatch.setattr(training, "_load_training_dependencies", lambda: dependencies)
+    monkeypatch.setattr(training, "_write_model_card", lambda *args, **kwargs: None)
     revision = "d" * 40
 
     train_landuse_classifier(
@@ -697,7 +706,8 @@ def test_training_passes_a_pinned_model_revision_to_both_loaders(
     assert _FakeModel.from_pretrained_calls[0]["revision"] == revision
 
 
-def test_training_can_publish_the_final_model_and_sync_trackio(
+def test_training_can_publish_the_final_model_and_configure_live_trackio(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from osm_polygon_sentence_classifier import training
@@ -726,7 +736,6 @@ def test_training_can_publish_the_final_model_and_sync_trackio(
         training, "_load_checkpoint_publication_api", lambda: checkpoint_hub_api
     )
     publication_calls: list[Path] = []
-    sync_calls: list[object] = []
     monkeypatch.setattr(
         training,
         "publish_model_directory",
@@ -738,12 +747,7 @@ def test_training_can_publish_the_final_model_and_sync_trackio(
             files=("config.json", "model.safetensors"),
         ),
     )
-    monkeypatch.setattr(
-        training,
-        "sync_project_to_static_space",
-        lambda settings: sync_calls.append(settings) or "NoeFlandre/trackio",
-    )
-
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
     result = training.train_landuse_classifier(
         rows_factory=lambda: iter([_row()]),
         config=TrainingConfig(
@@ -751,18 +755,20 @@ def test_training_can_publish_the_final_model_and_sync_trackio(
             publish_to_hub=True,
             sync_trackio=True,
         ),
+        project_config=ProjectConfig.for_remote_root(tmp_path / "data"),
         checkpoint_identity={"run_id": "a" * 20, "model_revision": "b" * 40},
     )
 
-    assert publication_calls == [ProjectConfig().data_root / "models/landuse"]
-    assert len(sync_calls) == 1
+    project_config = ProjectConfig.for_remote_root(tmp_path / "data")
+    assert publication_calls == [project_config.data_root / "models/landuse"]
+    arguments = _FakeTrainingArguments.calls[0]
+    assert arguments["trackio_space_id"] == TRACKIO_SPACE_ID
+    assert arguments["trackio_bucket_id"] == TRACKIO_BUCKET_ID
     callbacks = cast(list[Any], _FakeTrainer.init_calls[0]["callbacks"])
     callback = callbacks[0]
     assert callback.model_repository_id == ProjectConfig().target_model_repository_id
-    assert (
-        callback.tracking_settings.directory == ProjectConfig().data_root / "tracking"
-    )
+    assert callback.trackio_space_id == TRACKIO_SPACE_ID
     assert callback.hub_api is checkpoint_hub_api
     assert result.model_publication is not None
     assert result.model_publication.commit_id == "d" * 40
-    assert result.tracking_space_id == "NoeFlandre/trackio"
+    assert result.tracking_space_id == TRACKIO_SPACE_ID

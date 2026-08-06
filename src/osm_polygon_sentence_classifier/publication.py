@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import math
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -10,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .checkpointing import CheckpointError, find_complete_checkpoint
+from .config import SOURCE_DATASET_ID, TARGET_MODEL_REPOSITORY_ID
 
 
 class ModelPublicationError(RuntimeError):
@@ -38,6 +41,7 @@ _ALLOWED_ROOT_NAMES = frozenset(
         "generation_config.json",
         "merges.txt",
         "pytorch_model.bin.index.json",
+        "README.md",
         "model.safetensors.index.json",
         "sentencepiece.bpe.model",
         "special_tokens_map.json",
@@ -52,6 +56,7 @@ _ALLOWED_ROOT_NAMES = frozenset(
 )
 _ALLOWED_CHECKPOINT_NAMES = frozenset(
     {
+        "README.md",
         "checkpoint-manifest.json",
         "config.json",
         "generation_config.json",
@@ -95,6 +100,114 @@ def _default_operation_factory() -> OperationFactory:
         raise ModelPublicationError(
             "Hugging Face publication requires the training dependencies"
         ) from error
+
+
+_SENSITIVE_KEY_PARTS = ("credential", "password", "secret", "token")
+
+
+def _safe_scalar(value: object) -> bool:
+    if value is None or isinstance(value, (bool, int, str)):
+        return True
+    return isinstance(value, float) and math.isfinite(value)
+
+
+def _safe_scalar_mapping(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    safe: dict[str, object] = {}
+    for key, item in value.items():
+        if (
+            isinstance(key, str)
+            and not any(part in key.lower() for part in _SENSITIVE_KEY_PARTS)
+            and _safe_scalar(item)
+        ):
+            safe[key] = item
+    return dict(sorted(safe.items()))
+
+
+def _safe_line(value: object, fallback: str) -> str:
+    if (
+        isinstance(value, str)
+        and value.strip()
+        and "\n" not in value
+        and "\r" not in value
+    ):
+        return value.strip()
+    return fallback
+
+
+def render_model_card(
+    *,
+    identity: Mapping[str, object],
+    training_metrics: Mapping[str, object] | None = None,
+    checkpoint_step: int | None = None,
+    trackio_space_id: str | None = None,
+) -> str:
+    """Render a deterministic, credential-free model card from run facts."""
+
+    task_name = _safe_line(identity.get("task_name"), "landuse")
+    model_name = _safe_line(identity.get("model_name_or_path"), "not recorded")
+    model_revision = _safe_line(identity.get("model_revision"), "not pinned")
+    dataset_revision = _safe_line(identity.get("dataset_revision"), "not recorded")
+    source_commit = _safe_line(identity.get("source_commit"), "not recorded")
+    training_config = _safe_scalar_mapping(identity.get("training_config"))
+    metrics = _safe_scalar_mapping(training_metrics)
+    if (
+        isinstance(checkpoint_step, int)
+        and not isinstance(checkpoint_step, bool)
+        and checkpoint_step >= 0
+    ):
+        progress = f"checkpoint at step {checkpoint_step}"
+    else:
+        progress = "final model"
+    trackio_link = None
+    if (
+        isinstance(trackio_space_id, str)
+        and trackio_space_id.strip()
+        and "\n" not in trackio_space_id
+        and "\r" not in trackio_space_id
+    ):
+        trackio_link = "https://huggingface.co/spaces/" + trackio_space_id.strip()
+
+    tracking_section = (
+        f"[Open the live Trackio dashboard]({trackio_link})."
+        if trackio_link is not None
+        else "Trackio was not enabled for this run."
+    )
+    return (
+        "---\n"
+        "library_name: transformers\n"
+        "pipeline_tag: text-classification\n"
+        "tags:\n"
+        "- landuse\n"
+        "- text-classification\n"
+        "---\n\n"
+        "# OSM Polygon Landuse Sentence Classifier\n\n"
+        f"This model classifies whether a sentence is relevant to landuse. "
+        f"The recorded training status is **{progress}**.\n\n"
+        "## Training data\n\n"
+        f"- Dataset: [{SOURCE_DATASET_ID}]"
+        f"(https://huggingface.co/datasets/{SOURCE_DATASET_ID})\n"
+        f"- Dataset revision: `{dataset_revision}`\n"
+        f"- Task: `{task_name}`\n"
+        "- Labels: `no` (0), `yes` (1)\n\n"
+        "## Model and provenance\n\n"
+        f"- Base model: `{model_name}`\n"
+        f"- Base-model revision: `{model_revision}`\n"
+        f"- Source-code commit: `{source_commit}`\n"
+        f"- Model repository: [{TARGET_MODEL_REPOSITORY_ID}]"
+        f"(https://huggingface.co/{TARGET_MODEL_REPOSITORY_ID})\n\n"
+        "## Training configuration\n\n"
+        "```json\n"
+        f"{json.dumps(training_config, ensure_ascii=False, sort_keys=True, indent=2)}\n"
+        "```\n\n"
+        "## Metrics\n\n"
+        "```json\n"
+        f"{json.dumps(metrics, ensure_ascii=False, sort_keys=True, indent=2)}\n"
+        "```\n\n"
+        "## Experiment tracking\n\n"
+        f"{tracking_section}\n"
+    )
 
 
 def ensure_model_repository(
@@ -240,6 +353,12 @@ def _complete_checkpoint_files(
     return files
 
 
+def _checkpoint_path_in_repo(path: Path, checkpoint: Path) -> str:
+    if path == checkpoint / "README.md":
+        return "README.md"
+    return f"checkpoints/last-checkpoint/{path.name}"
+
+
 def publish_checkpoint_directory(
     directory: str | Path,
     repository_id: object,
@@ -259,7 +378,7 @@ def publish_checkpoint_directory(
         for path in files:
             operations.append(
                 factory(
-                    path_in_repo=(f"checkpoints/last-checkpoint/{path.name}"),
+                    path_in_repo=_checkpoint_path_in_repo(path, checkpoint),
                     path_or_fileobj=str(path),
                 )
             )
@@ -286,7 +405,7 @@ def publish_checkpoint_directory(
         repository_id=repository,
         commit_id=commit_id,
         commit_url=commit_url,
-        files=tuple(f"checkpoints/last-checkpoint/{path.name}" for path in files),
+        files=tuple(_checkpoint_path_in_repo(path, checkpoint) for path in files),
     )
 
 
@@ -296,4 +415,5 @@ __all__ = [
     "ensure_model_repository",
     "publish_checkpoint_directory",
     "publish_model_directory",
+    "render_model_card",
 ]

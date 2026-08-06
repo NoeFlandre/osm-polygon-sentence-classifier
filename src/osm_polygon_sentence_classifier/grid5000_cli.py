@@ -61,7 +61,7 @@ def _add_plan_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--sync-trackio",
         action="store_true",
-        help="synchronize completed metrics to the static Trackio Space",
+        help="send live metrics to the writable Trackio Space",
     )
 
 

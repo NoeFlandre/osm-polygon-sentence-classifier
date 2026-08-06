@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
@@ -7,7 +8,8 @@ from .config import ProjectConfig
 from .paths import resolve_managed_path
 
 TRACKING_SUBDIRECTORY = Path("tracking")
-TRACKIO_SPACE_ID = "NoeFlandre/osm-polygon-sentence-classifier-trackio"
+TRACKIO_SPACE_ID = "NoeFlandre/osm-polygon-sentence-classifier-trackio-live"
+TRACKIO_STATIC_SPACE_ID = "NoeFlandre/osm-polygon-sentence-classifier-trackio"
 TRACKIO_BUCKET_ID = "NoeFlandre/osm-polygon-sentence-classifier-trackio-data"
 
 
@@ -23,6 +25,7 @@ class TrackioSettings:
     directory: Path
     space_id: str = TRACKIO_SPACE_ID
     bucket_id: str = TRACKIO_BUCKET_ID
+    static_space_id: str = TRACKIO_STATIC_SPACE_ID
 
     def environment(self) -> dict[str, str]:
         """Return environment values needed to keep local Trackio data managed."""
@@ -41,8 +44,9 @@ def ensure_trackio_resources(
     settings: TrackioSettings,
     *,
     hub_api: Any | None = None,
+    deploy_space: Callable[..., Any] | None = None,
 ) -> None:
-    """Create the dedicated static Space and bucket idempotently."""
+    """Create and deploy the dedicated live Gradio Space and bucket."""
 
     try:
         api = hub_api
@@ -52,10 +56,14 @@ def ensure_trackio_resources(
         api.create_repo(
             repo_id=settings.space_id,
             repo_type="space",
-            space_sdk="static",
+            space_sdk="gradio",
             exist_ok=True,
         )
         api.create_bucket(bucket_id=settings.bucket_id, exist_ok=True)
+        if deploy_space is None:
+            deploy_module = import_module("trackio.deploy")
+            deploy_space = deploy_module.deploy_as_space
+        deploy_space(settings.space_id, bucket_id=settings.bucket_id)
     except Exception as error:
         raise TrackingError("Trackio Space and bucket provisioning failed") from error
 
@@ -67,7 +75,7 @@ def sync_project_to_static_space(settings: TrackioSettings) -> str:
         trackio: Any = import_module("trackio")
         space_id = trackio.sync(
             project=settings.project,
-            space_id=settings.space_id,
+            space_id=settings.static_space_id,
             bucket_id=settings.bucket_id,
             sdk="static",
             force=True,
@@ -82,6 +90,7 @@ def sync_project_to_static_space(settings: TrackioSettings) -> str:
 __all__ = [
     "TRACKIO_BUCKET_ID",
     "TRACKIO_SPACE_ID",
+    "TRACKIO_STATIC_SPACE_ID",
     "TRACKING_SUBDIRECTORY",
     "TrackingError",
     "TrackioSettings",

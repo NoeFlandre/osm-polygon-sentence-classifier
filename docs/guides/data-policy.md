@@ -18,9 +18,10 @@ The source for the training stage is the
 [NoeFlandre/osm-polygon-wikidata-sentence-relevance dataset](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance).
 The dedicated model destination is the
 [NoeFlandre/osm-polygon-sentence-classifier model repository](https://huggingface.co/NoeFlandre/osm-polygon-sentence-classifier).
-Completed metrics use the public static
-[Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-trackio)
-and its dedicated Hugging Face Bucket.
+Live metrics use the public writable Gradio
+[Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-trackio-live)
+and its dedicated Hugging Face Bucket. The older static Space is not used by
+new training runs.
 
 ## Audit and foundation boundary
 
@@ -30,11 +31,14 @@ summarizes rows, and the explicit writer assigns the report and manifest
 described above. It does not train, upload or publish artifacts, or submit
 Grid'5000 work. The training module is a separate explicit call: it consumes
 only the clean iterator and directs model caches, checkpoints, outputs, and
-Trackio state beneath the approved root. Publication and static Trackio sync
-are separate opt-in flags, use the preconfigured remote destinations, and occur
-after each complete checkpoint and after the final model is saved. The model
-repository retains only one remote `checkpoints/last-checkpoint` snapshot;
-older checkpoint snapshots are not retained remotely.
+Trackio state beneath the approved root. Publication and live Trackio reporting
+are separate opt-in flags. When enabled, the Trainer sends metrics directly to
+the writable Space and Bucket during every job segment, while the model
+repository receives a generated README at each complete checkpoint and after
+the final model is saved. The model repository retains only one remote
+`checkpoints/last-checkpoint` snapshot; older checkpoint snapshots are not
+retained remotely. The generated README contains no credentials, sentence
+rows, or raw dataset text.
 
 Credentials are used only by an explicitly authorized external CLI or runtime
 authentication flow. They must never be committed to the repository or placed
