@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import sys
@@ -307,6 +308,7 @@ def write_completion_manifest(
             else None
         ),
         "tracking_space_id": result.tracking_space_id,
+        "metrics": _safe_manifest_metrics(result.metrics),
     }
     temporary = manifest_path.with_name(".completion.json.tmp")
     try:
@@ -320,6 +322,24 @@ def write_completion_manifest(
         temporary.unlink(missing_ok=True)
         raise WorkerError("completion manifest cannot be written") from error
     return manifest_path
+
+
+def _safe_manifest_metrics(metrics: Mapping[str, object] | None) -> dict[str, object]:
+    if metrics is None:
+        return {}
+    if not isinstance(metrics, Mapping):
+        raise WorkerError("training metrics are invalid")
+    safe_metrics: dict[str, object] = {}
+    for key, value in metrics.items():
+        if not isinstance(key, str) or any(
+            part in key.casefold() for part in ("token", "secret", "password")
+        ):
+            continue
+        if isinstance(value, (bool, int, str)) or (
+            isinstance(value, float) and math.isfinite(value)
+        ):
+            safe_metrics[key] = value
+    return safe_metrics
 
 
 def _contains_symlink(path: Path) -> bool:

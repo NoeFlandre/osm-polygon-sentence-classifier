@@ -11,6 +11,12 @@ from dataclasses import fields
 from pathlib import Path
 from typing import Literal, cast
 
+from .ablation_study import (
+    DEFAULT_MODEL_REVISION,
+    AblationStudyController,
+    AblationStudyError,
+    publish_study_report,
+)
 from .dataset_contract import LANDUSE_DATASET_CONTRACT
 from .grid5000 import (
     DEFAULT_DAY_WALLTIME_SECONDS,
@@ -110,6 +116,11 @@ def _parser() -> argparse.ArgumentParser:
         help="print one local autonomous run state",
     )
     status_parser.add_argument("--run-id", required=True)
+    ablations_parser = commands.add_parser(
+        "ablations",
+        help="plan or autonomously run the reproducible landuse ablation study",
+    )
+    _add_ablation_arguments(ablations_parser)
     return parser
 
 
@@ -151,10 +162,64 @@ def _add_autonomous_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_ablation_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--source-commit",
+        default=None,
+        help="clean source revision (default: current clean checkout)",
+    )
+    parser.add_argument(
+        "--model-revision",
+        default=DEFAULT_MODEL_REVISION,
+        help="pinned base-model revision",
+    )
+    parser.add_argument("--model-name", default=DEFAULT_MODEL_NAME)
+    parser.add_argument(
+        "--site",
+        action="append",
+        default=None,
+        help="Grid'5000 frontend; repeat to restrict discovery (default: all sites)",
+    )
+    parser.add_argument(
+        "--walltime-seconds",
+        type=int,
+        default=DEFAULT_AUTONOMOUS_WALLTIME_SECONDS,
+    )
+    parser.add_argument(
+        "--policy-type",
+        choices=("auto", "day", "night"),
+        default="auto",
+    )
+    parser.add_argument("--gpu-memory-mb", type=int, default=8_000)
+    parser.add_argument("--max-workers", type=int, default=4)
+    parser.add_argument("--max-continuations", type=int, default=6)
+    parser.add_argument(
+        "--keep-remote",
+        action="store_true",
+        help="retain exact managed remote study run roots after completion",
+    )
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="cross the explicit gate and perform Grid'5000 and Hugging Face actions",
+    )
+
+
 def _training_config_payload(config: TrainingConfig) -> dict[str, object]:
     payload: dict[str, object] = {}
     for item in fields(config):
         value = getattr(config, item.name)
+        if (
+            item.name
+            in {
+                "trainable_layers",
+                "class_weight_mode",
+                "tracking_project",
+                "artifact_namespace",
+            }
+            and value is None
+        ):
+            continue
         payload[item.name] = str(value) if isinstance(value, Path) else value
     return payload
 
@@ -252,6 +317,26 @@ def _build_autonomous_config(arguments: argparse.Namespace) -> AutonomousRunConf
         max_workers=arguments.max_workers,
         max_continuations=arguments.max_continuations,
         cleanup=not arguments.keep_remote,
+    )
+
+
+def _build_ablation_controller(
+    arguments: argparse.Namespace,
+) -> AblationStudyController:
+    source_commit = arguments.source_commit or _current_source_commit()
+    return AblationStudyController(
+        source_commit=source_commit,
+        model_revision=arguments.model_revision,
+        model_name_or_path=arguments.model_name,
+        sites=tuple(arguments.site or DEFAULT_SITES),
+        gpu_memory_mb=arguments.gpu_memory_mb,
+        walltime_seconds=arguments.walltime_seconds,
+        policy_type=arguments.policy_type,
+        max_workers=arguments.max_workers,
+        max_continuations=arguments.max_continuations,
+        cleanup=not arguments.keep_remote,
+        publish_report=publish_study_report,
+        emit=_print_progress,
     )
 
 
@@ -400,69 +485,96 @@ def _print_progress(message: str) -> None:
     print(f"[grid5000] {message}", file=sys.stderr, flush=True)
 
 
+def _handle_run(arguments: argparse.Namespace) -> int:
+    autonomous = _build_autonomous_config(arguments)
+    if not arguments.execute:
+        _print_json(_autonomous_plan_payload(autonomous))
+        return 0
+    result = AutonomousRunController(autonomous, emit=_print_progress).run()
+    _print_json(result.to_dict())
+    return 0
+
+
+def _handle_ablations(arguments: argparse.Namespace) -> int:
+    controller = _build_ablation_controller(arguments)
+    result = controller.run() if arguments.execute else controller.plan()
+    _print_json(result)
+    return 0
+
+
+def _handle_status(arguments: argparse.Namespace) -> int:
+    state = AutonomousStateStore().load(arguments.run_id)
+    if state is None:
+        raise Grid5000StateError("autonomous run state was not found")
+    _print_json(state.to_dict())
+    return 0
+
+
+def _handle_resume(arguments: argparse.Namespace) -> int:
+    state = AutonomousStateStore().load(arguments.run_id)
+    if state is None:
+        raise Grid5000StateError("autonomous run state was not found")
+    autonomous = _config_from_state(
+        state.to_dict(),
+        max_continuations_override=arguments.max_continuations,
+        worker_source_commit_override=(
+            _current_source_commit()
+            if arguments.execute and arguments.max_continuations is not None
+            else None
+        ),
+    )
+    if not arguments.execute:
+        _print_json(state.to_dict())
+        return 0
+    result = AutonomousRunController(autonomous, emit=_print_progress).run()
+    _print_json(result.to_dict())
+    return 0
+
+
+def _handle_plan_or_submit(arguments: argparse.Namespace) -> int:
+    plan = _build_plan(arguments)
+    if arguments.command == "plan":
+        _print_json(plan.to_dict())
+        return 0
+    submission = Grid5000Operator(plan).submit(execute=arguments.execute)
+    _print_json(
+        {
+            "executed": submission.executed,
+            "job_id": submission.job_id,
+            "plan": submission.plan.to_dict(),
+        }
+    )
+    return 0
+
+
+def _dispatch(arguments: argparse.Namespace) -> int:
+    handlers = {
+        "run": _handle_run,
+        "ablations": _handle_ablations,
+        "status": _handle_status,
+        "resume": _handle_resume,
+        "plan": _handle_plan_or_submit,
+        "submit": _handle_plan_or_submit,
+    }
+    handler = handlers.get(arguments.command)
+    if handler is None:
+        raise Grid5000ConfigurationError("unknown Grid'5000 command")
+    return handler(arguments)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run a side-effect-free plan unless an explicit execute gate is supplied."""
 
     parser = _parser()
     arguments = parser.parse_args(argv)
     try:
-        if arguments.command == "run":
-            autonomous = _build_autonomous_config(arguments)
-            if not arguments.execute:
-                _print_json(_autonomous_plan_payload(autonomous))
-                return 0
-            result = AutonomousRunController(
-                autonomous,
-                emit=_print_progress,
-            ).run()
-            _print_json(result.to_dict())
-            return 0
-        if arguments.command == "status":
-            state = AutonomousStateStore().load(arguments.run_id)
-            if state is None:
-                raise Grid5000StateError("autonomous run state was not found")
-            _print_json(state.to_dict())
-            return 0
-        if arguments.command == "resume":
-            state = AutonomousStateStore().load(arguments.run_id)
-            if state is None:
-                raise Grid5000StateError("autonomous run state was not found")
-            autonomous = _config_from_state(
-                state.to_dict(),
-                max_continuations_override=arguments.max_continuations,
-                worker_source_commit_override=(
-                    _current_source_commit()
-                    if arguments.execute and arguments.max_continuations is not None
-                    else None
-                ),
-            )
-            if not arguments.execute:
-                _print_json(state.to_dict())
-                return 0
-            result = AutonomousRunController(
-                autonomous,
-                emit=_print_progress,
-            ).run()
-            _print_json(result.to_dict())
-            return 0
-        plan = _build_plan(arguments)
-        if arguments.command == "plan":
-            _print_json(plan.to_dict())
-            return 0
-        submission = Grid5000Operator(plan).submit(execute=arguments.execute)
-        _print_json(
-            {
-                "executed": submission.executed,
-                "job_id": submission.job_id,
-                "plan": submission.plan.to_dict(),
-            }
-        )
-        return 0
+        return _dispatch(arguments)
     except (
         Grid5000ConfigurationError,
         Grid5000ExecutionError,
         Grid5000StateError,
         AutonomousRunError,
+        AblationStudyError,
         TrainingError,
     ) as error:
         print(f"error: {error}", file=sys.stderr)

@@ -25,7 +25,8 @@ compute.
 The model repository README is generated from the pinned dataset/model
 identity, safe training configuration, checkpoint progress, and scalar
 metrics at each published checkpoint and at final publication. Evaluation
-metrics include accuracy, precision, recall, and F1.
+metrics include accuracy, precision, recall, positive-class F1, macro-F1,
+balanced accuracy, and class support.
 
 The clean iterator `iter_clean_training_examples` is the only permitted
 training-input boundary. The public iterator remains lazy until consumed, and
@@ -51,6 +52,17 @@ The choice is guided by the model authors' [reported gains](https://huggingface.
 over older multilingual encoders on classification and multilingual retrieval
 benchmarks; the held-out landuse evaluation remains the decision criterion for
 this project.
+
+The completed single-run baseline and the reproducible landuse ablation study
+share the public model repository and Trackio dashboard but use separate model
+namespaces and run names. The ablation study is run with:
+
+```bash
+uv run grid5000-landuse ablations --execute
+```
+
+See the [ablation study guide](docs/guides/ablations.md) for the fixed matrix,
+selection rule, replication plan, and artifact layout.
 
 ## Data and model repositories
 

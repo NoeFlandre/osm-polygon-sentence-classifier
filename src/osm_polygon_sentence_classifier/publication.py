@@ -9,7 +9,7 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from importlib import import_module
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .checkpointing import CheckpointError, find_complete_checkpoint
@@ -162,6 +162,15 @@ def _publication_run_id(identity: Mapping[str, object]) -> str:
 
 def _model_artifact_prefix(identity: Mapping[str, object]) -> str:
     training_config = identity.get("training_config")
+    namespace = (
+        training_config.get("artifact_namespace")
+        if isinstance(training_config, Mapping)
+        else None
+    )
+    if isinstance(namespace, str) and namespace.strip():
+        parts = tuple(namespace.strip("/").split("/"))
+        if parts and all(part not in {"", ".", ".."} for part in parts):
+            return "/".join(parts) + f"/run-{_publication_run_id(identity)}"
     run_name = (
         training_config.get("run_name")
         if isinstance(training_config, Mapping)
@@ -429,6 +438,70 @@ def publish_model_directory(
     )
 
 
+def publish_study_documents(
+    repository_id: object,
+    documents: Mapping[str, str],
+    *,
+    hub_api: Any | None = None,
+    operation_factory: OperationFactory | None = None,
+) -> ModelPublicationResult:
+    """Commit generated study documentation under explicit repository paths."""
+
+    repository = _require_non_blank(repository_id, "repository_id")
+    if not documents:
+        raise ModelPublicationError("study documents cannot be empty")
+    factory = operation_factory or _default_operation_factory()
+    operations: list[Any] = []
+    published_paths: list[str] = []
+    try:
+        for raw_path, content in sorted(documents.items()):
+            path = PurePosixPath(raw_path)
+            if (
+                not isinstance(raw_path, str)
+                or path.is_absolute()
+                or not path.parts
+                or any(part in {"", ".", ".."} for part in path.parts)
+                or "\\" in raw_path
+                or "\n" in raw_path
+                or "\r" in raw_path
+            ):
+                raise ModelPublicationError("study document path is unsafe")
+            if not isinstance(content, str) or not content.strip():
+                raise ModelPublicationError("study document content is empty")
+            operations.append(
+                factory(
+                    path_in_repo=path.as_posix(),
+                    path_or_fileobj=content.encode("utf-8"),
+                )
+            )
+            published_paths.append(path.as_posix())
+    except ModelPublicationError:
+        raise
+    except Exception as error:
+        raise ModelPublicationError(
+            "study document operations could not be constructed"
+        ) from error
+
+    api = hub_api or _default_hub_api()
+    try:
+        info = api.create_commit(
+            repo_id=repository,
+            repo_type="model",
+            operations=operations,
+            commit_message="Update landuse ablation study report",
+            revision="main",
+        )
+    except Exception as error:
+        raise ModelPublicationError("study documentation publication failed") from error
+    commit_id, commit_url = _commit_facts(info)
+    return ModelPublicationResult(
+        repository_id=repository,
+        commit_id=commit_id,
+        commit_url=commit_url,
+        files=tuple(published_paths),
+    )
+
+
 def _complete_checkpoint_files(
     directory: Path,
     *,
@@ -539,6 +612,7 @@ __all__ = [
     "ensure_model_repository",
     "publish_checkpoint_directory",
     "publish_model_directory",
+    "publish_study_documents",
     "render_model_card",
     "render_repository_readme",
 ]

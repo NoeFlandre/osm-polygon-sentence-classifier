@@ -1,5 +1,7 @@
+from pathlib import Path
 from threading import RLock
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -31,6 +33,63 @@ def test_tracking_settings_use_the_project_name_and_managed_directory() -> None:
 def test_tracking_environment_only_points_trackio_at_managed_storage() -> None:
     settings = settings_for(ProjectConfig())
     assert settings.environment() == {"TRACKIO_DIR": str(settings.directory)}
+
+
+def test_settings_for_uses_an_explicit_study_project_when_requested() -> None:
+    settings = settings_for(
+        ProjectConfig(),
+        project="landuse-ablation-study-v1",
+    )
+
+    assert settings.project == "landuse-ablation-study-v1"
+    assert settings.space_id == TRACKIO_SPACE_ID
+    assert settings.bucket_id == TRACKIO_BUCKET_ID
+
+
+def test_settings_for_rejects_an_explicit_empty_project_name() -> None:
+    with pytest.raises(TrackingError, match="non-empty"):
+        settings_for(ProjectConfig(), project="")
+
+
+def test_restore_static_snapshot_merges_existing_bucket_data(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from osm_polygon_sentence_classifier import tracking
+
+    settings = TrackioSettings(
+        project="osm-polygon-sentence-classifier",
+        directory=tmp_path / "tracking",
+    )
+    calls: list[Any] = []
+
+    class FakeHub:
+        @staticmethod
+        def download_bucket_files(bucket_id, files, **kwargs) -> None:
+            calls.append((bucket_id, files, kwargs))
+            for _remote, local in files:
+                path = tmp_path / "tracking" / Path(local).name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"snapshot")
+
+    class FakeStorage:
+        @staticmethod
+        def import_from_parquet() -> None:
+            calls.append("import")
+
+    monkeypatch.setattr(
+        tracking,
+        "import_module",
+        lambda name: FakeHub
+        if name == "huggingface_hub"
+        else SimpleNamespace(SQLiteStorage=FakeStorage),
+    )
+
+    tracking.restore_static_project_snapshot(settings)
+
+    assert calls[0][0] == settings.bucket_id
+    assert calls[-1] == "import"
+    assert (settings.directory / "osm-polygon-sentence-classifier.parquet").is_file()
 
 
 def test_tracking_sync_uses_the_dedicated_static_space_and_bucket(monkeypatch) -> None:

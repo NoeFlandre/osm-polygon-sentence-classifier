@@ -29,4 +29,5 @@ Start with the [getting-started guide](guides/getting-started.md), review the
 [data policy](guides/data-policy.md), and read the
 [Grid'5000 boundary](reference/grid5000-boundary.md) and the
 [operator reference](reference/grid5000-operator.md) before proposing a
-training workflow.
+training workflow. The reproducible comparison workflow is documented in the
+[landuse ablation study guide](guides/ablations.md).

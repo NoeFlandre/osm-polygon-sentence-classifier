@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
@@ -32,11 +33,20 @@ class TrackioSettings:
         return {"TRACKIO_DIR": str(self.directory)}
 
 
-def settings_for(config: ProjectConfig) -> TrackioSettings:
+def settings_for(
+    config: ProjectConfig,
+    *,
+    project: str | None = None,
+) -> TrackioSettings:
     """Build Trackio settings without importing or initializing Trackio."""
 
     directory = resolve_managed_path(config.data_root, TRACKING_SUBDIRECTORY)
-    return TrackioSettings(project=config.project_name, directory=directory)
+    effective_project = config.project_name if project is None else project
+    if not isinstance(effective_project, str) or not effective_project.strip():
+        raise TrackingError("Trackio project must be a non-empty string")
+    if "\n" in effective_project or "\r" in effective_project:
+        raise TrackingError("Trackio project must be a single-line string")
+    return TrackioSettings(project=effective_project, directory=directory)
 
 
 def ensure_trackio_resources(
@@ -65,6 +75,55 @@ def ensure_trackio_resources(
         )
     except Exception as error:
         raise TrackingError("Trackio Space and bucket provisioning failed") from error
+
+
+def restore_static_project_snapshot(settings: TrackioSettings) -> None:
+    """Restore the previous static snapshot before appending a new remote run.
+
+    Grid'5000 allocations use isolated run directories. Static Trackio exports
+    contain Parquet snapshots rather than the source SQLite database, so each
+    ablation allocation restores those snapshots into Trackio's local database
+    before logging. This keeps the existing dashboard cumulative across jobs.
+    """
+
+    try:
+        settings.directory.mkdir(parents=True, exist_ok=True)
+        project_stem = re.sub(r"[^A-Za-z0-9_-]+", "_", settings.project).strip("_")
+        if not project_stem:
+            raise TrackingError("Trackio project name cannot produce a local filename")
+        files = [
+            (
+                "metrics.parquet",
+                settings.directory / f"{project_stem}.parquet",
+            ),
+            (
+                "aux/system_metrics.parquet",
+                settings.directory / f"{project_stem}_system.parquet",
+            ),
+            (
+                "aux/configs.parquet",
+                settings.directory / f"{project_stem}_configs.parquet",
+            ),
+            (
+                "aux/traces.parquet",
+                settings.directory / f"{project_stem}_traces.parquet",
+            ),
+        ]
+        hub = import_module("huggingface_hub")
+        download = getattr(hub, "download_bucket_files", None)
+        if not callable(download):
+            raise TrackingError("Hugging Face bucket download is unavailable")
+        download(settings.bucket_id, files, raise_on_missing_files=False)
+        trackio = import_module("trackio")
+        storage = getattr(trackio, "SQLiteStorage", None)
+        import_from_parquet = getattr(storage, "import_from_parquet", None)
+        if not callable(import_from_parquet):
+            raise TrackingError("Trackio Parquet import is unavailable")
+        import_from_parquet()
+    except TrackingError:
+        raise
+    except Exception as error:
+        raise TrackingError("Trackio static snapshot restoration failed") from error
 
 
 def _current_local_run(trackio: Any) -> Any | None:
@@ -165,6 +224,7 @@ __all__ = [
     "TrackingError",
     "TrackioSettings",
     "ensure_trackio_resources",
+    "restore_static_project_snapshot",
     "settings_for",
     "sync_project_to_static_space",
 ]

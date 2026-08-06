@@ -253,3 +253,59 @@ def test_autonomous_execution_prints_progress_to_stderr_and_json_to_stdout(
     assert exit_code == 0
     assert json.loads(captured.out) == {"phase": "completed"}
     assert captured.err == "[grid5000] submitted\n"
+
+
+def test_ablations_without_execute_prints_the_side_effect_free_study_plan(
+    capsys,
+) -> None:
+    exit_code = grid5000_cli.main(
+        [
+            "ablations",
+            "--source-commit",
+            SOURCE_COMMIT,
+            "--model-revision",
+            MODEL_REVISION,
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["study_id"] == "landuse-v1"
+    assert payload["total_runs"] == 7
+    assert payload["model_repository_id"] == (
+        "NoeFlandre/osm-polygon-sentence-classifier"
+    )
+
+
+def test_ablations_execute_is_the_explicit_remote_execution_gate(
+    monkeypatch,
+    capsys,
+) -> None:
+    calls: list[object] = []
+
+    class FakeController:
+        def __init__(self, **kwargs) -> None:
+            calls.append(kwargs)
+
+        def plan(self) -> dict[str, object]:
+            raise AssertionError("execute mode must run the study")
+
+        def run(self) -> dict[str, object]:
+            return {"phase": "completed"}
+
+    monkeypatch.setattr(grid5000_cli, "AblationStudyController", FakeController)
+
+    exit_code = grid5000_cli.main(
+        [
+            "ablations",
+            "--source-commit",
+            SOURCE_COMMIT,
+            "--model-revision",
+            MODEL_REVISION,
+            "--execute",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls
+    assert json.loads(capsys.readouterr().out) == {"phase": "completed"}

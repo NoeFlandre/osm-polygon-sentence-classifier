@@ -35,11 +35,14 @@ from .publication import (
 from .tracking import (
     TrackingError,
     TrackioSettings,
+    restore_static_project_snapshot,
     settings_for,
     sync_project_to_static_space,
 )
 
 LabelId = Literal[0, 1]
+TrainableLayers = Literal["head", "last2"]
+ClassWeightMode = Literal["none", "balanced"]
 
 LABEL_TO_ID: dict[TrainingLabel, LabelId] = {"no": 0, "yes": 1}
 ID_TO_LABEL: dict[int, str] = {0: "no", 1: "yes"}
@@ -76,73 +79,110 @@ class TrainingConfig:
     save_total_limit: int = 5
     run_name: str = "landuse-mmbert-small-frozen-head"
     model_revision: str | None = None
+    trainable_layers: TrainableLayers | None = None
+    class_weight_mode: ClassWeightMode | None = None
+    tracking_project: str | None = None
+    artifact_namespace: str | None = None
     publish_to_hub: bool = False
     sync_trackio: bool = False
 
     def __post_init__(self) -> None:
-        if (
-            not isinstance(self.model_name_or_path, str)
-            or not self.model_name_or_path.strip()
-        ):
-            raise TrainingError("model_name_or_path must be a non-empty string")
-        if not isinstance(self.run_name, str) or not self.run_name.strip():
-            raise TrainingError("run_name must be a non-empty string")
-        if self.model_revision is not None and (
-            not isinstance(self.model_revision, str)
-            or re.fullmatch(r"[0-9a-f]{40}", self.model_revision) is None
-        ):
-            raise TrainingError(
-                "model_revision must be exactly 40 lowercase hexadecimal characters"
-            )
+        _validate_training_identity(self)
         _validate_boolean_settings(self)
-
-        output_subdirectory = Path(self.output_subdirectory)
-        if (
-            not output_subdirectory.parts
-            or output_subdirectory.is_absolute()
-            or any(part in (".", "..") for part in output_subdirectory.parts)
-        ):
-            raise TrainingError(
-                "output_subdirectory must be a clean relative path beneath the "
-                "managed data root"
-            )
-        object.__setattr__(self, "output_subdirectory", output_subdirectory)
-
-        if (
-            isinstance(self.validation_fraction, bool)
-            or not isinstance(self.validation_fraction, (int, float))
-            or not math.isfinite(self.validation_fraction)
-            or not 0 <= self.validation_fraction <= 1
-        ):
-            raise TrainingError(
-                "validation_fraction must be a finite number between 0 and 1"
-            )
-        for name in (
-            "max_length",
-            "max_steps",
-            "per_device_train_batch_size",
-            "per_device_eval_batch_size",
-            "logging_steps",
-            "eval_steps",
-            "save_steps",
-            "save_total_limit",
-        ):
-            value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-                raise TrainingError(f"{name} must be a positive integer")
-        if (
-            isinstance(self.learning_rate, bool)
-            or not isinstance(self.learning_rate, (int, float))
-            or not math.isfinite(self.learning_rate)
-            or self.learning_rate <= 0
-        ):
-            raise TrainingError("learning_rate must be a positive finite number")
+        _normalize_training_paths(self)
+        _validate_numeric_settings(self)
 
 
 def _validate_boolean_settings(config: TrainingConfig) -> None:
     for name in ("publish_to_hub", "sync_trackio"):
         if not isinstance(getattr(config, name), bool):
             raise TrainingError(f"{name} must be a boolean")
+
+
+def _validate_training_identity(config: TrainingConfig) -> None:
+    if (
+        not isinstance(config.model_name_or_path, str)
+        or not config.model_name_or_path.strip()
+    ):
+        raise TrainingError("model_name_or_path must be a non-empty string")
+    if not isinstance(config.run_name, str) or not config.run_name.strip():
+        raise TrainingError("run_name must be a non-empty string")
+    if config.model_revision is not None and (
+        not isinstance(config.model_revision, str)
+        or re.fullmatch(r"[0-9a-f]{40}", config.model_revision) is None
+    ):
+        raise TrainingError(
+            "model_revision must be exactly 40 lowercase hexadecimal characters"
+        )
+    if config.trainable_layers not in {None, "head", "last2"}:
+        raise TrainingError("trainable_layers must be head or last2")
+    if config.class_weight_mode not in {None, "none", "balanced"}:
+        raise TrainingError("class_weight_mode must be none or balanced")
+    for name in ("tracking_project", "artifact_namespace"):
+        value = getattr(config, name)
+        if value is not None and (
+            not isinstance(value, str)
+            or not value.strip()
+            or "\n" in value
+            or "\r" in value
+        ):
+            raise TrainingError(f"{name} must be a non-empty single-line string")
+
+
+def _normalize_training_paths(config: TrainingConfig) -> None:
+    output_subdirectory = Path(config.output_subdirectory)
+    if (
+        not output_subdirectory.parts
+        or output_subdirectory.is_absolute()
+        or any(part in (".", "..") for part in output_subdirectory.parts)
+    ):
+        raise TrainingError(
+            "output_subdirectory must be a clean relative path beneath the "
+            "managed data root"
+        )
+    object.__setattr__(config, "output_subdirectory", output_subdirectory)
+
+    if config.artifact_namespace is not None:
+        namespace = Path(config.artifact_namespace)
+        if (
+            not namespace.parts
+            or namespace.is_absolute()
+            or any(part in (".", "..") for part in namespace.parts)
+        ):
+            raise TrainingError("artifact_namespace must be a clean relative path")
+        object.__setattr__(config, "artifact_namespace", namespace.as_posix())
+
+
+def _validate_numeric_settings(config: TrainingConfig) -> None:
+    if (
+        isinstance(config.validation_fraction, bool)
+        or not isinstance(config.validation_fraction, (int, float))
+        or not math.isfinite(config.validation_fraction)
+        or not 0 <= config.validation_fraction <= 1
+    ):
+        raise TrainingError(
+            "validation_fraction must be a finite number between 0 and 1"
+        )
+    for name in (
+        "max_length",
+        "max_steps",
+        "per_device_train_batch_size",
+        "per_device_eval_batch_size",
+        "logging_steps",
+        "eval_steps",
+        "save_steps",
+        "save_total_limit",
+    ):
+        value = getattr(config, name)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise TrainingError(f"{name} must be a positive integer")
+    if (
+        isinstance(config.learning_rate, bool)
+        or not isinstance(config.learning_rate, (int, float))
+        or not math.isfinite(config.learning_rate)
+        or config.learning_rate <= 0
+    ):
+        raise TrainingError("learning_rate must be a positive finite number")
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +193,7 @@ class TrainingResult:
     train_output: object
     model_publication: ModelPublicationResult | None = None
     tracking_space_id: str | None = None
+    metrics: Mapping[str, object] | None = None
 
 
 def _is_card_scalar(value: object) -> bool:
@@ -270,18 +311,71 @@ def _classification_metrics(eval_prediction: Any) -> dict[str, float]:
         else 0.0
     )
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    negative_support = true_negative + false_positive
+    positive_support = true_positive + false_negative
+
+    def _f1_for_class(
+        true_positive_: int, false_positive_: int, false_negative_: int
+    ) -> float:
+        precision_ = (
+            true_positive_ / (true_positive_ + false_positive_)
+            if true_positive_ + false_positive_
+            else 0.0
+        )
+        recall_ = (
+            true_positive_ / (true_positive_ + false_negative_)
+            if true_positive_ + false_negative_
+            else 0.0
+        )
+        return (
+            2 * precision_ * recall_ / (precision_ + recall_)
+            if precision_ + recall_
+            else 0.0
+        )
+
+    negative_f1 = _f1_for_class(true_negative, false_positive, false_negative)
+    positive_f1 = _f1_for_class(true_positive, false_negative, false_positive)
+    negative_recall = true_negative / negative_support if negative_support else 0.0
+    positive_recall = recall
     return {
         "accuracy": accuracy,
         "precision": precision,
         "recall": recall,
         "f1": f1,
+        "macro_f1": (negative_f1 + positive_f1) / 2,
+        "balanced_accuracy": (negative_recall + positive_recall) / 2,
+        "negative_support": float(negative_support),
+        "positive_support": float(positive_support),
     }
+
+
+def _balanced_class_weights() -> tuple[float, float]:
+    """Return normalized inverse-frequency weights from the pinned train split."""
+
+    negative_count = 35_560
+    positive_count = 8_648
+    total = negative_count + positive_count
+    return (
+        total / (2 * negative_count),
+        total / (2 * positive_count),
+    )
 
 
 def _training_config_payload(config: TrainingConfig) -> dict[str, object]:
     payload: dict[str, object] = {}
     for item in fields(config):
         value = getattr(config, item.name)
+        if (
+            item.name
+            in {
+                "trainable_layers",
+                "class_weight_mode",
+                "tracking_project",
+                "artifact_namespace",
+            }
+            and value is None
+        ):
+            continue
         payload[item.name] = str(value) if isinstance(value, Path) else value
     return payload
 
@@ -516,6 +610,44 @@ def _prepare_checkpoint_resume(
     return resume_from_checkpoint, identity
 
 
+def _weighted_trainer_type(trainer_type: Any) -> Any:
+    """Bind the fixed training-split class weights to a Trainer subclass."""
+
+    class WeightedTrainer(trainer_type):
+        def compute_loss(
+            self,
+            model: Any,
+            inputs: dict[str, Any],
+            return_outputs: bool = False,
+            num_items_in_batch: Any = None,
+        ) -> Any:
+            del num_items_in_batch
+            try:
+                torch = import_module("torch")
+            except ModuleNotFoundError as error:
+                raise TrainingError(
+                    "balanced loss requires the torch training dependency"
+                ) from error
+            labels = inputs.pop("labels")
+            outputs = model(**inputs)
+            logits = getattr(outputs, "logits", None)
+            if logits is None and isinstance(outputs, Mapping):
+                logits = outputs.get("logits")
+            if logits is None:
+                raise TrainingError(
+                    "model output does not expose classification logits"
+                )
+            weights = torch.tensor(
+                _balanced_class_weights(),
+                dtype=logits.dtype,
+                device=logits.device,
+            )
+            loss = torch.nn.functional.cross_entropy(logits, labels, weight=weights)
+            return (loss, outputs) if return_outputs else loss
+
+    return WeightedTrainer
+
+
 def _build_trainer(
     dependencies: _TrainingDependencies,
     *,
@@ -529,6 +661,7 @@ def _build_trainer(
     trackio_space_id: str | None = None,
     tracking_settings: TrackioSettings | None = None,
     hub_api: Any | None = None,
+    class_weight_mode: ClassWeightMode | None = None,
 ) -> Any:
     trainer_values: dict[str, object] = {
         "model": model,
@@ -549,7 +682,10 @@ def _build_trainer(
                 hub_api=hub_api,
             )
         ]
-    return dependencies.trainer(**trainer_values)
+    trainer_type = dependencies.trainer
+    if class_weight_mode == "balanced":
+        trainer_type = _weighted_trainer_type(trainer_type)
+    return trainer_type(**trainer_values)
 
 
 def _run_trainer(trainer: Any, resume_from_checkpoint: Path | None) -> object:
@@ -701,8 +837,76 @@ def _freeze_encoder_for_head_training(model: Any) -> None:
         parameter.requires_grad = True
 
 
+def _encoder_layers(model: Any) -> Sequence[Any]:
+    base_model = getattr(model, "base_model", None)
+    candidates = (
+        getattr(base_model, "layers", None),
+        getattr(getattr(base_model, "encoder", None), "layer", None),
+        getattr(getattr(base_model, "model", None), "layers", None),
+        getattr(getattr(model, "model", None), "layers", None),
+        getattr(model, "layers", None),
+    )
+    for candidate in candidates:
+        if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes)):
+            return candidate
+    raise TrainingError("model does not expose ordered encoder layers")
+
+
+def _configure_trainable_layers(
+    model: Any,
+    trainable_layers: TrainableLayers | None,
+) -> None:
+    if trainable_layers in {None, "head"}:
+        _freeze_encoder_for_head_training(model)
+        return
+    if trainable_layers != "last2":
+        raise TrainingError("unsupported trainable layer mode")
+    _configure_last_two_layers(model)
+
+
+def _configure_last_two_layers(model: Any) -> None:
+    _freeze_all_parameters(model)
+    layers = _encoder_layers(model)
+    if len(layers) < 2:
+        raise TrainingError("model must expose at least two encoder layers")
+    _set_layer_parameters(layers, requires_grad=False)
+    _set_layer_parameters(layers[-2:], requires_grad=True)
+    _enable_classifier_heads(model)
+
+
+def _freeze_all_parameters(model: Any) -> None:
+    parameters = getattr(model, "parameters", None)
+    if not callable(parameters):
+        raise TrainingError("model must expose a parameters() method")
+    for parameter in parameters():
+        parameter.requires_grad = False
+
+
+def _set_layer_parameters(layers: Sequence[Any], *, requires_grad: bool) -> None:
+    for layer in layers:
+        layer_parameters = getattr(layer, "parameters", None)
+        if not callable(layer_parameters):
+            raise TrainingError("encoder layer does not expose parameters()")
+        for parameter in layer_parameters():
+            parameter.requires_grad = requires_grad
+
+
+def _enable_classifier_heads(model: Any) -> None:
+    head = getattr(model, "head", None)
+    classifier = getattr(model, "classifier", None)
+    for module in (head, classifier):
+        module_parameters = getattr(module, "parameters", None)
+        if callable(module_parameters):
+            for parameter in module_parameters():
+                parameter.requires_grad = True
+
+
 @contextmanager
-def _managed_training_environment(config: ProjectConfig) -> Iterator[None]:
+def _managed_training_environment(
+    config: ProjectConfig,
+    *,
+    tracking_project: str | None = None,
+) -> Iterator[None]:
     paths = ManagedPaths(config)
     token = os.environ.get("HF_TOKEN", "").strip()
     if not token:
@@ -716,7 +920,7 @@ def _managed_training_environment(config: ProjectConfig) -> Iterator[None]:
             token = ""
     values = {
         "HF_HOME": str(paths.child("cache/huggingface")),
-        **settings_for(config).environment(),
+        **settings_for(config, project=tracking_project).environment(),
     }
     if token:
         values["HF_TOKEN"] = token
@@ -756,7 +960,10 @@ def train_landuse_classifier(
     paths = ManagedPaths(effective_project_config)
     output_directory = paths.child(training_config.output_subdirectory)
     model_cache_directory = paths.child("cache/huggingface/models")
-    tracking = settings_for(effective_project_config)
+    tracking = settings_for(
+        effective_project_config,
+        project=training_config.tracking_project,
+    )
     resume_from_checkpoint, checkpoint_identity = _prepare_checkpoint_resume(
         output_directory,
         resume_from_checkpoint=resume_from_checkpoint,
@@ -774,7 +981,15 @@ def train_landuse_classifier(
 
         effective_rows_factory = load_rows
 
-    with _managed_training_environment(effective_project_config):
+    with _managed_training_environment(
+        effective_project_config,
+        tracking_project=training_config.tracking_project,
+    ):
+        if (
+            training_config.sync_trackio
+            and training_config.tracking_project is not None
+        ):
+            restore_static_project_snapshot(tracking)
         dependencies = _load_training_dependencies()
         tokenizer_kwargs: dict[str, object] = {
             "cache_dir": str(model_cache_directory),
@@ -815,7 +1030,7 @@ def train_landuse_classifier(
             training_config.model_name_or_path,
             **model_kwargs,
         )
-        _freeze_encoder_for_head_training(model)
+        _configure_trainable_layers(model, training_config.trainable_layers)
         training_arguments = dependencies.training_arguments(
             **_training_argument_values(
                 training_config,
@@ -847,10 +1062,12 @@ def train_landuse_classifier(
             ),
             tracking_settings=(tracking if training_config.sync_trackio else None),
             hub_api=checkpoint_hub_api,
+            class_weight_mode=training_config.class_weight_mode,
         )
         train_output = _run_trainer(trainer, resume_from_checkpoint)
         trainer.save_model(str(output_directory))
         tokenizer.save_pretrained(str(output_directory))
+        final_metrics = _metrics_for_model_card(train_output, trainer)
         model_card_identity = _model_card_identity(
             checkpoint_identity,
             config=training_config,
@@ -859,7 +1076,7 @@ def train_landuse_classifier(
         _write_model_card(
             output_directory,
             identity=model_card_identity,
-            training_metrics=_metrics_for_model_card(train_output, trainer),
+            training_metrics=final_metrics,
             trackio_space_id=(
                 tracking.static_space_id if training_config.sync_trackio else None
             ),
@@ -870,13 +1087,17 @@ def train_landuse_classifier(
                 output_directory,
                 effective_project_config.target_model_repository_id,
                 identity=model_card_identity,
-                repository_readme=render_repository_readme(
-                    identity=model_card_identity,
-                    trackio_space_id=(
-                        tracking.static_space_id
-                        if training_config.sync_trackio
-                        else None
-                    ),
+                repository_readme=(
+                    render_repository_readme(
+                        identity=model_card_identity,
+                        trackio_space_id=(
+                            tracking.static_space_id
+                            if training_config.sync_trackio
+                            else None
+                        ),
+                    )
+                    if training_config.artifact_namespace is None
+                    else None
                 ),
             )
         if training_config.sync_trackio:
@@ -894,6 +1115,7 @@ def train_landuse_classifier(
         train_output=train_output,
         model_publication=model_publication,
         tracking_space_id=tracking_space_id,
+        metrics=final_metrics,
     )
 
 

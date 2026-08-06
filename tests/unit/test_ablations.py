@@ -1,0 +1,263 @@
+from __future__ import annotations
+
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from osm_polygon_sentence_classifier.ablation_study import (
+    ABLATION_STUDY_ID,
+    ABLATION_TRACKING_PROJECT,
+    AblationStudyError,
+    AblationStudyStateStore,
+    baseline_ablation_definitions,
+    build_ablation_training_config,
+    planned_ablation_runs,
+    rank_screening_results,
+    render_study_documents,
+)
+from osm_polygon_sentence_classifier.grid5000_state import RunPhase
+
+
+def test_screening_matrix_has_one_control_and_one_factor_per_variant() -> None:
+    definitions = baseline_ablation_definitions()
+
+    assert [definition.ablation_id for definition in definitions] == [
+        "a00-baseline-head-256-lr3e-4",
+        "a01-head-128",
+        "a02-head-512",
+        "a03-head-lr1e-4",
+        "a04-head-lr1e-3",
+        "a05-balanced-head",
+        "a06-last2-256",
+    ]
+    assert definitions[0].max_length == 256
+    assert definitions[0].learning_rate == pytest.approx(3e-4)
+    assert definitions[0].trainable_layers == "head"
+    assert definitions[0].class_weight_mode == "none"
+    assert definitions[5].class_weight_mode == "balanced"
+    assert definitions[6].trainable_layers == "last2"
+
+
+def test_ablation_training_config_is_isolated_and_identity_friendly() -> None:
+    definition = baseline_ablation_definitions()[1]
+
+    config = build_ablation_training_config(
+        definition,
+        seed=42,
+        model_revision="a" * 40,
+        publish_to_hub=True,
+        sync_trackio=True,
+    )
+
+    assert config.output_subdirectory == Path(
+        f"studies/{ABLATION_STUDY_ID}/{definition.ablation_id}/models/landuse"
+    )
+    assert config.artifact_namespace == (
+        f"studies/{ABLATION_STUDY_ID}/{definition.ablation_id}"
+    )
+    assert config.tracking_project == ABLATION_TRACKING_PROJECT
+    assert config.run_name == f"{ABLATION_STUDY_ID}|{definition.ablation_id}|seed-42"
+    assert config.max_length == 128
+    assert config.publish_to_hub is True
+
+
+def test_planned_runs_adds_only_two_replicated_non_control_finalists() -> None:
+    definitions = baseline_ablation_definitions()
+    results = {
+        definition.ablation_id: {
+            "eval_f1": 0.1 + index / 100,
+            "eval_macro_f1": 0.2 + index / 100,
+        }
+        for index, definition in enumerate(definitions)
+    }
+    results["a01-head-128"] = {"eval_f1": 0.99, "eval_macro_f1": 0.1}
+    results["a02-head-512"] = {"eval_f1": 0.98, "eval_macro_f1": 0.1}
+
+    runs = planned_ablation_runs(screening_results=results)
+
+    assert len(runs) == 13
+    assert [(run.ablation_id, run.seed) for run in runs[:7]] == [
+        (definition.ablation_id, 42) for definition in definitions
+    ]
+    assert [(run.ablation_id, run.seed) for run in runs[7:]] == [
+        ("a00-baseline-head-256-lr3e-4", 43),
+        ("a00-baseline-head-256-lr3e-4", 44),
+        ("a01-head-128", 43),
+        ("a01-head-128", 44),
+        ("a02-head-512", 43),
+        ("a02-head-512", 44),
+    ]
+
+
+def test_rank_screening_results_uses_positive_f1_then_macro_f1() -> None:
+    ranked = rank_screening_results(
+        {
+            "a00-baseline-head-256-lr3e-4": {
+                "eval_f1": 0.70,
+                "eval_macro_f1": 0.80,
+            },
+            "a01-head-128": {"eval_f1": 0.70, "eval_macro_f1": 0.81},
+            "a02-head-512": {"eval_f1": 0.90, "eval_macro_f1": 0.60},
+            "a03-head-lr1e-4": {"eval_f1": 0.20, "eval_macro_f1": 0.90},
+        }
+    )
+
+    assert ranked == [
+        "a02-head-512",
+        "a01-head-128",
+        "a00-baseline-head-256-lr3e-4",
+        "a03-head-lr1e-4",
+    ]
+
+
+def test_rank_screening_results_requires_a_positive_f1() -> None:
+    with pytest.raises(AblationStudyError, match="eval_f1"):
+        rank_screening_results({"a01-head-128": {"eval_macro_f1": 0.8}})
+
+
+def test_study_state_store_rejects_a_symlinked_root(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    root = tmp_path / "state"
+    root.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(AblationStudyError, match="symlink"):
+        AblationStudyStateStore(root).save({"phase": "running"})
+
+
+def test_study_controller_runs_screening_then_replicates_finalists(
+    tmp_path: Path,
+) -> None:
+    from osm_polygon_sentence_classifier.ablation_study import AblationStudyController
+
+    calls: list[tuple[str, int]] = []
+
+    class FakeRunController:
+        def __init__(self, config, **kwargs) -> None:
+            del kwargs
+            self.config = config
+
+        def run(self):
+            training = self.config.identity.training_config
+            ablation_id = str(training["run_name"]).split("|")[1]
+            seed = int(str(training["run_name"]).rsplit("-", 1)[1])
+            calls.append((ablation_id, seed))
+            score = {
+                "a01-head-128": 0.99,
+                "a02-head-512": 0.98,
+            }.get(ablation_id, 0.1)
+            return SimpleNamespace(
+                run_id=self.config.identity.run_id,
+                phase=RunPhase.COMPLETED,
+                facts={
+                    "completion": {
+                        "metrics": {
+                            "eval_f1": score,
+                            "eval_macro_f1": score,
+                        }
+                    }
+                },
+            )
+
+    controller = AblationStudyController(
+        source_commit="b" * 40,
+        model_revision="a" * 40,
+        state_root=tmp_path,
+        run_controller_factory=FakeRunController,
+        publish_report=lambda _state: None,
+    )
+
+    state = controller.run()
+
+    assert state["phase"] == "completed"
+    assert len(calls) == 13
+    assert calls[:7] == [
+        (definition.ablation_id, 42) for definition in baseline_ablation_definitions()
+    ]
+    assert calls[7:] == [
+        ("a00-baseline-head-256-lr3e-4", 43),
+        ("a00-baseline-head-256-lr3e-4", 44),
+        ("a01-head-128", 43),
+        ("a01-head-128", 44),
+        ("a02-head-512", 43),
+        ("a02-head-512", 44),
+    ]
+
+
+def test_study_controller_reuses_completed_state_without_resubmitting(
+    tmp_path: Path,
+) -> None:
+    from osm_polygon_sentence_classifier.ablation_study import AblationStudyController
+
+    calls = 0
+
+    class FakeRunController:
+        def __init__(self, config, **kwargs) -> None:
+            del config, kwargs
+
+        def run(self):
+            nonlocal calls
+            calls += 1
+            return SimpleNamespace(
+                run_id="a" * 20,
+                phase=RunPhase.COMPLETED,
+                facts={"completion": {"metrics": {"eval_f1": 0.5}}},
+            )
+
+    kwargs: dict[str, Any] = {
+        "source_commit": "b" * 40,
+        "model_revision": "a" * 40,
+        "state_root": tmp_path,
+        "run_controller_factory": FakeRunController,
+        "publish_report": lambda _state: None,
+    }
+    first = AblationStudyController(**kwargs)
+    first.run()
+    first_call_count = calls
+
+    second = AblationStudyController(**kwargs)
+    state = second.run()
+
+    assert state["phase"] == "completed"
+    assert calls == first_call_count
+
+
+def test_study_documents_are_public_and_include_clear_run_names() -> None:
+    from osm_polygon_sentence_classifier.ablation_study import (
+        study_specification,
+        study_specification_fingerprint,
+    )
+
+    specification = study_specification(
+        source_commit="b" * 40,
+        model_revision="a" * 40,
+    )
+    state = {
+        "study_id": ABLATION_STUDY_ID,
+        "fingerprint": study_specification_fingerprint(specification),
+        "specification": specification,
+        "phase": "running",
+        "runs": {
+            "a01-head-128|seed-42": {
+                "ablation_id": "a01-head-128",
+                "seed": 42,
+                "run_id": "c" * 20,
+                "phase": "completed",
+                "metrics": {"eval_f1": 0.8, "eval_macro_f1": 0.7},
+            }
+        },
+    }
+
+    documents = render_study_documents(state)
+
+    assert set(documents) == {
+        "README.md",
+        "studies/landuse-v1/README.md",
+        "studies/landuse-v1/results.json",
+        "studies/landuse-v1/study.json",
+    }
+    assert "a01-head-128" in documents["studies/landuse-v1/README.md"]
+    assert "eval_f1" in documents["studies/landuse-v1/results.json"]
+    assert "Grid'5000" in documents["studies/landuse-v1/README.md"]

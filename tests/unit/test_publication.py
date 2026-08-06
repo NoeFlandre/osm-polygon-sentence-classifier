@@ -9,6 +9,7 @@ from osm_polygon_sentence_classifier.publication import (
     ensure_model_repository,
     publish_checkpoint_directory,
     publish_model_directory,
+    publish_study_documents,
     render_model_card,
     render_repository_readme,
 )
@@ -146,6 +147,64 @@ def test_model_publication_groups_final_files_by_experiment_and_run(
     )
     assert [item["path_in_repo"] for item in operations] == list(result.files)
     assert operations[0]["path_or_fileobj"] == b"# repository guide\n"
+
+
+def test_model_publication_uses_the_explicit_study_namespace(
+    tmp_path: Path,
+) -> None:
+    directory = _model_directory(tmp_path)
+    operations: list[dict[str, object]] = []
+
+    class FakeHub:
+        def create_commit(self, **kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                oid="c" * 40,
+                commit_url="https://huggingface.co/test/commit/" + "c" * 40,
+            )
+
+    identity = {
+        "run_id": "r" * 20,
+        "training_config": {
+            "run_name": "ablation-run",
+            "artifact_namespace": "studies/landuse-v1/a01-head-128",
+        },
+    }
+
+    result = publish_model_directory(
+        directory,
+        "owner/model",
+        identity=identity,
+        hub_api=FakeHub(),
+        operation_factory=lambda **kwargs: operations.append(kwargs) or kwargs,
+    )
+
+    assert result.files[0].startswith(
+        "studies/landuse-v1/a01-head-128/run-rrrrrrrrrrrrrrrrrrrr/final/"
+    )
+
+
+def test_study_documents_are_committed_only_under_declared_public_paths() -> None:
+    operations: list[dict[str, object]] = []
+
+    class FakeHub:
+        def create_commit(self, **kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                oid="d" * 40,
+                commit_url="https://huggingface.co/test/commit/" + "d" * 40,
+            )
+
+    result = publish_study_documents(
+        "owner/model",
+        {
+            "README.md": "# study\n",
+            "studies/landuse-v1/study.json": "{}\n",
+        },
+        hub_api=FakeHub(),
+        operation_factory=lambda **kwargs: operations.append(kwargs) or kwargs,
+    )
+
+    assert result.files == ("README.md", "studies/landuse-v1/study.json")
+    assert all(".." not in str(operation["path_in_repo"]) for operation in operations)
 
 
 def test_model_publication_accepts_a_one_line_repository_readme(

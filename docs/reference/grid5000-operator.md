@@ -75,6 +75,21 @@ The compatibility `submit` command remains available for a manually selected
 site. It is plan-only unless `--execute` is present; new workflows should use
 `run`.
 
+## Ablation study
+
+The multi-run workflow uses the same guarded lifecycle one ablation at a time:
+
+```bash
+uv run grid5000-landuse ablations --execute
+```
+
+It persists its own study state, keeps the existing model repository and
+Trackio Space, and scopes model artifacts under `studies/landuse-v1/`. The
+ablation run names identify the variant and seed. Each Grid'5000 allocation
+restores the previous static Trackio snapshot before logging, so a new isolated
+allocation does not erase earlier runs from the public dashboard. The command
+is plan-only without `--execute` and is safe to repeat after interruption.
+
 ## Site discovery and policy
 
 An executing `run` probes every configured site concurrently using bounded SSH
@@ -142,7 +157,8 @@ partial, or identity-mismatched checkpoints stop the run. When requested, the
 worker queues each complete checkpoint to the dedicated Hugging Face model
 repository under the run-scoped permanent
 `experiments/<experiment>/run-<run-id>/checkpoints/step-N/` directory. The Trainer
-records accuracy, precision, recall, and F1 locally through Trackio and syncs a static snapshot to the free
+records accuracy, precision, recall, positive-class F1, macro-F1, balanced
+accuracy, and class support locally through Trackio and syncs a static snapshot to the free
 Trackio Space and Bucket after each complete checkpoint and final publication,
 including continuations. Each checkpoint and the final model also receive a
 generated credential-free README containing pinned

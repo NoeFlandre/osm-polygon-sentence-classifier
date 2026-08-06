@@ -124,6 +124,29 @@ def test_classification_metrics_report_accuracy_precision_recall_and_f1() -> Non
     assert metrics["precision"] == pytest.approx(1.0)
     assert metrics["recall"] == pytest.approx(2 / 3)
     assert metrics["f1"] == pytest.approx(0.8)
+    assert metrics["macro_f1"] == pytest.approx(0.7333333333333334)
+    assert metrics["balanced_accuracy"] == pytest.approx(5 / 6)
+    assert metrics["positive_support"] == pytest.approx(3)
+    assert metrics["negative_support"] == pytest.approx(1)
+
+
+def test_training_config_supports_ablation_controls() -> None:
+    config = TrainingConfig(
+        trainable_layers="last2",
+        class_weight_mode="balanced",
+        tracking_project="landuse-ablation-study-v1",
+        artifact_namespace="studies/landuse-v1/a06-last2-256",
+    )
+
+    assert config.trainable_layers == "last2"
+    assert config.class_weight_mode == "balanced"
+    assert config.tracking_project == "landuse-ablation-study-v1"
+    assert config.artifact_namespace == "studies/landuse-v1/a06-last2-256"
+
+
+def test_training_config_rejects_an_unsafe_artifact_namespace() -> None:
+    with pytest.raises(TrainingError, match="artifact_namespace"):
+        TrainingConfig(artifact_namespace="../outside")
 
 
 def test_split_records_are_lazy_clean_and_label_mapped() -> None:
@@ -233,6 +256,20 @@ class _FakeModel:
         ]
 
 
+class _FakeLayer:
+    def __init__(self) -> None:
+        self.parameters_list = [_FakeParameter()]
+
+    def parameters(self) -> Iterable["_FakeParameter"]:
+        return self.parameters_list
+
+
+class _FakeLayeredModel(_FakeModel):
+    def __init__(self) -> None:
+        super().__init__()
+        self.base_model = SimpleNamespace(layers=[_FakeLayer() for _ in range(4)])
+
+
 class _FakeParameter:
     def __init__(self) -> None:
         self.requires_grad = True
@@ -244,6 +281,33 @@ class _FakeClassifier:
 
     def parameters(self) -> Iterable[_FakeParameter]:
         return self.parameters_list
+
+
+def test_last2_training_unfreezes_only_the_last_two_encoder_layers() -> None:
+    from osm_polygon_sentence_classifier import training
+
+    model = _FakeLayeredModel()
+
+    training._configure_trainable_layers(model, "last2")
+
+    assert all(
+        not parameter.requires_grad
+        for parameter in model.base_model.layers[0].parameters()
+    )
+    assert all(
+        parameter.requires_grad
+        for layer in model.base_model.layers[-2:]
+        for parameter in layer.parameters()
+    )
+    assert all(parameter.requires_grad for parameter in model.classifier.parameters())
+
+
+def test_balanced_class_weights_use_the_pinned_training_label_counts() -> None:
+    from osm_polygon_sentence_classifier import training
+
+    assert training._balanced_class_weights() == pytest.approx(
+        (44208 / (2 * 35560), 44208 / (2 * 8648))
+    )
 
 
 class _FakeTrainingArguments:
@@ -381,6 +445,69 @@ def test_training_wires_managed_streams_tokenizer_trainer_and_tracking(
         "HF_HOME": str(ProjectConfig().data_root / "cache/huggingface"),
         "TRACKIO_DIR": str(ProjectConfig().data_root / "tracking"),
     }
+
+
+def test_training_uses_the_ablation_trackio_project_and_artifact_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from osm_polygon_sentence_classifier import training
+
+    dependencies = training._TrainingDependencies(
+        iterable_dataset=_FakeDataset,
+        auto_tokenizer=_FakeTokenizer,
+        auto_model_for_sequence_classification=_FakeModel,
+        data_collator_with_padding=_FakeDataCollator,
+        training_arguments=_FakeTrainingArguments,
+        trainer=_FakeTrainer,
+    )
+    monkeypatch.setattr(training, "_load_training_dependencies", lambda: dependencies)
+    monkeypatch.setattr(training, "_write_model_card", lambda *args, **kwargs: None)
+    _FakeTrainingArguments.calls.clear()
+
+    result = train_landuse_classifier(
+        rows_factory=lambda: iter([_row()]),
+        config=TrainingConfig(
+            model_name_or_path="test-model",
+            run_name="landuse-v1|a01-head-128|seed-42",
+            output_subdirectory=Path("studies/landuse-v1/a01-head-128/models/landuse"),
+            tracking_project="osm-polygon-sentence-classifier",
+            artifact_namespace="studies/landuse-v1/a01-head-128",
+        ),
+    )
+
+    assert result.output_directory == ProjectConfig().data_root / (
+        "studies/landuse-v1/a01-head-128/models/landuse"
+    )
+    assert _FakeTrainingArguments.calls[0]["project"] == (
+        "osm-polygon-sentence-classifier"
+    )
+
+
+def test_weighted_trainer_is_used_for_balanced_loss() -> None:
+    from osm_polygon_sentence_classifier import training
+
+    dependencies = training._TrainingDependencies(
+        iterable_dataset=_FakeDataset,
+        auto_tokenizer=_FakeTokenizer,
+        auto_model_for_sequence_classification=_FakeModel,
+        data_collator_with_padding=_FakeDataCollator,
+        training_arguments=_FakeTrainingArguments,
+        trainer=_FakeTrainer,
+    )
+
+    trainer = training._build_trainer(
+        dependencies,
+        model=object(),
+        training_arguments=object(),
+        train_dataset=object(),
+        validation_dataset=object(),
+        data_collator=object(),
+        checkpoint_identity=None,
+        class_weight_mode="balanced",
+    )
+
+    assert isinstance(trainer, _FakeTrainer)
+    assert type(trainer) is not _FakeTrainer
 
 
 def test_training_resumes_from_a_checkpoint_and_registers_identity_callback(

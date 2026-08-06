@@ -724,7 +724,11 @@ def test_worker_completion_manifest_is_credential_free_and_identity_bound(
             "model_revision": MODEL_REVISION,
         }
     )
-    result = TrainingResult(output_directory=output_directory, train_output=object())
+    result = TrainingResult(
+        output_directory=output_directory,
+        train_output=object(),
+        metrics={"eval_f1": 0.7, "eval_macro_f1": 0.6},
+    )
 
     manifest = write_completion_manifest(
         identity,
@@ -735,6 +739,7 @@ def test_worker_completion_manifest_is_credential_free_and_identity_bound(
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert payload["run_id"] == identity.run_id
     assert payload["output_directory"] == "model"
+    assert payload["metrics"] == {"eval_f1": 0.7, "eval_macro_f1": 0.6}
     assert "token" not in manifest.read_text(encoding="utf-8").casefold()
     assert manifest.stat().st_mode & 0o777 == 0o600
 

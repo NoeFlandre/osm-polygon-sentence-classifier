@@ -40,6 +40,7 @@ nav:
       - Getting started: guides/getting-started.md
       - Development: guides/development.md
       - Data policy: guides/data-policy.md
+      - Landuse ablation study: guides/ablations.md
   - Architecture:
       - Overview: architecture/overview.md
   - Reference:
