@@ -553,7 +553,11 @@ def test_worker_runs_training_only_after_preflight(tmp_path: Path) -> None:
     )
 
     assert result is expected_result
-    assert received["config"] is training_config
+    assert isinstance(received["config"], TrainingConfig)
+    assert received["config"].run_name == (
+        f"{training_config.run_name} | run-{identity.run_id[:8]} "
+        "| segment-from-0000 | oar-12345"
+    )
     assert received["project_config"] == ProjectConfig.for_remote_root(
         Path.home() / "training-data"
     )
@@ -657,6 +661,8 @@ def test_worker_passes_the_latest_checkpoint_to_training(
 
     assert received["resume_from_checkpoint"] == checkpoint
     assert received["checkpoint_identity"] == identity.canonical_payload
+    assert isinstance(received["config"], TrainingConfig)
+    assert received["config"].run_name.endswith("| segment-from-0012 | oar-12345")
 
 
 def test_worker_requires_hugging_face_auth_before_publishing_or_tracking(

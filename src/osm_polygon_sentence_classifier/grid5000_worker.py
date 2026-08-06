@@ -7,7 +7,7 @@ import os
 import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib import import_module
 from pathlib import Path
 from typing import Any, cast
@@ -47,6 +47,21 @@ class WorkerFacts:
     job_id: int
     source_commit: str
     cuda_device_name: str
+
+
+def _trackio_segment_run_name(
+    base_name: str,
+    *,
+    run_id: str,
+    starting_step: int,
+    job_id: int,
+) -> str:
+    """Name one allocation segment so continuations are legible in Trackio."""
+
+    return (
+        f"{base_name} | run-{run_id[:8]} | "
+        f"segment-from-{starting_step:04d} | oar-{job_id}"
+    )
 
 
 CudaProbe = Callable[[], tuple[bool, int, str, tuple[int, int]]]
@@ -209,7 +224,7 @@ def run_landuse_training_worker(
         raise WorkerError(
             "worker Hugging Face authentication is unavailable for publication"
         )
-    validate_compute_node(
+    worker_facts = validate_compute_node(
         expected_source_commit=checkout_source_commit or identity.source_commit,
         checkout=checkout,
         environ=effective_environment,
@@ -232,8 +247,17 @@ def run_landuse_training_worker(
         raise WorkerError("checkpoint evidence is invalid") from error
     if require_checkpoint and checkpoint is None:
         raise WorkerError("no complete checkpoint is available for continuation")
+    trackio_config = replace(
+        effective_config,
+        run_name=_trackio_segment_run_name(
+            effective_config.run_name,
+            run_id=identity.run_id,
+            starting_step=checkpoint.global_step if checkpoint is not None else 0,
+            job_id=worker_facts.job_id,
+        ),
+    )
     return train(
-        config=effective_config,
+        config=trackio_config,
         project_config=project_config,
         resume_from_checkpoint=checkpoint.path if checkpoint is not None else None,
         checkpoint_identity=identity.canonical_payload,

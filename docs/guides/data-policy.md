@@ -18,6 +18,9 @@ The source for the training stage is the
 [NoeFlandre/osm-polygon-wikidata-sentence-relevance dataset](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance).
 The dedicated model destination is the
 [NoeFlandre/osm-polygon-sentence-classifier model repository](https://huggingface.co/NoeFlandre/osm-polygon-sentence-classifier).
+Its root is documentation-only: each run stores final artifacts under
+`experiments/<experiment>/run-<run-id>/final/` and complete checkpoints under
+the matching `checkpoints/step-N/` directories.
 Metrics use the free public static
 [Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-trackio)
 and its dedicated Hugging Face Bucket. Training records locally first, then

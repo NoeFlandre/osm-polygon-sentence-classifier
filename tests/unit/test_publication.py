@@ -10,6 +10,7 @@ from osm_polygon_sentence_classifier.publication import (
     publish_checkpoint_directory,
     publish_model_directory,
     render_model_card,
+    render_repository_readme,
 )
 
 CHECKPOINT_IDENTITY = {"run_id": "a" * 20, "model_revision": "b" * 40}
@@ -105,6 +106,77 @@ def test_model_publication_commits_only_final_root_files(tmp_path: Path) -> None
     assert commits[0]["operations"] == operations
 
 
+def test_model_publication_groups_final_files_by_experiment_and_run(
+    tmp_path: Path,
+) -> None:
+    directory = _model_directory(tmp_path)
+    operations: list[dict[str, object]] = []
+
+    class FakeHub:
+        def create_commit(self, **kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                oid="c" * 40,
+                commit_url="https://huggingface.co/test/commit/" + "c" * 40,
+            )
+
+    def operation_factory(**kwargs: object) -> dict[str, object]:
+        operations.append(kwargs)
+        return kwargs
+
+    identity = {
+        "run_id": "r" * 20,
+        "task_name": "landuse",
+        "training_config": {"run_name": "landuse-baseline"},
+    }
+
+    result = publish_model_directory(
+        directory,
+        "owner/model",
+        identity=identity,
+        repository_readme="# repository guide\n",
+        hub_api=FakeHub(),
+        operation_factory=operation_factory,
+    )
+
+    assert result.files == (
+        "README.md",
+        "experiments/landuse-baseline/run-rrrrrrrrrrrrrrrrrrrr/final/config.json",
+        "experiments/landuse-baseline/run-rrrrrrrrrrrrrrrrrrrr/final/model.safetensors",
+        "experiments/landuse-baseline/run-rrrrrrrrrrrrrrrrrrrr/final/tokenizer.json",
+    )
+    assert [item["path_in_repo"] for item in operations] == list(result.files)
+    assert operations[0]["path_or_fileobj"] == b"# repository guide\n"
+
+
+def test_model_publication_accepts_a_one_line_repository_readme(
+    tmp_path: Path,
+) -> None:
+    directory = _model_directory(tmp_path)
+    operations: list[dict[str, object]] = []
+
+    class FakeHub:
+        def create_commit(self, **kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                oid="c" * 40,
+                commit_url="https://huggingface.co/test/commit/" + "c" * 40,
+            )
+
+    result = publish_model_directory(
+        directory,
+        "owner/model",
+        identity={
+            "run_id": "r" * 20,
+            "training_config": {"run_name": "landuse"},
+        },
+        repository_readme="# guide",
+        hub_api=FakeHub(),
+        operation_factory=lambda **kwargs: operations.append(kwargs) or kwargs,
+    )
+
+    assert result.files[0] == "README.md"
+    assert operations[0]["path_or_fileobj"] == b"# guide"
+
+
 def test_model_publication_includes_the_generated_model_card(tmp_path: Path) -> None:
     directory = _model_directory(tmp_path)
     (directory / "README.md").write_text("generated card", encoding="utf-8")
@@ -188,7 +260,7 @@ def test_checkpoint_publication_uploads_a_complete_latest_snapshot(
 
     assert result.commit_id == "e" * 40
     assert result.files == tuple(
-        f"checkpoints/step-10/{name}"
+        f"experiments/landuse/run-aaaaaaaaaaaaaaaaaaaa/checkpoints/step-10/{name}"
         for name in (
             "checkpoint-manifest.json",
             "model.safetensors",
@@ -228,12 +300,18 @@ def test_checkpoint_publication_includes_the_generated_model_card(
         operation_factory=operation_factory,
     )
 
-    assert "checkpoints/step-10/README.md" in result.files
-    assert "checkpoints/step-10/README.md" in [
-        item["path_in_repo"] for item in operations
-    ]
+    assert (
+        "experiments/landuse/run-aaaaaaaaaaaaaaaaaaaa/checkpoints/step-10/README.md"
+        in result.files
+    )
+    assert (
+        "experiments/landuse/run-aaaaaaaaaaaaaaaaaaaa/checkpoints/step-10/README.md"
+        in [item["path_in_repo"] for item in operations]
+    )
     assert all(
-        str(item["path_in_repo"]).startswith("checkpoints/step-10/")
+        str(item["path_in_repo"]).startswith(
+            "experiments/landuse/run-aaaaaaaaaaaaaaaaaaaa/checkpoints/step-10/"
+        )
         for item in operations
     )
 
@@ -265,8 +343,18 @@ def test_checkpoint_publication_keeps_different_steps_in_different_directories(
             operation_factory=lambda **kwargs: kwargs,
         )
 
-    assert any(path.startswith("checkpoints/step-10/") for path in published_paths)
-    assert any(path.startswith("checkpoints/step-20/") for path in published_paths)
+    assert any(
+        path.startswith(
+            "experiments/landuse/run-aaaaaaaaaaaaaaaaaaaa/checkpoints/step-10/"
+        )
+        for path in published_paths
+    )
+    assert any(
+        path.startswith(
+            "experiments/landuse/run-aaaaaaaaaaaaaaaaaaaa/checkpoints/step-20/"
+        )
+        for path in published_paths
+    )
 
 
 def test_model_card_contains_only_safe_training_metadata() -> None:
@@ -297,6 +385,24 @@ def test_model_card_contains_only_safe_training_metadata() -> None:
     assert "static snapshots" in card
     assert "HF_TOKEN" not in card
     assert "must-not-appear" not in card
+
+
+def test_repository_readme_documents_the_organized_public_layout() -> None:
+    readme = render_repository_readme(
+        identity={
+            "run_id": "a" * 20,
+            "task_name": "landuse",
+            "model_name_or_path": "test-model",
+            "model_revision": "b" * 40,
+            "training_config": {"run_name": "baseline"},
+        },
+        trackio_space_id="owner/trackio",
+    )
+
+    assert "experiments/baseline/run-aaaaaaaaaaaaaaaaaaaa/final/" in readme
+    assert "experiments/baseline/run-aaaaaaaaaaaaaaaaaaaa/checkpoints/step-N/" in readme
+    assert "no model files are stored at the repository root" in readme
+    assert "https://huggingface.co/spaces/owner/trackio" in readme
 
 
 def test_checkpoint_publication_rejects_an_incomplete_snapshot_before_hub_call(

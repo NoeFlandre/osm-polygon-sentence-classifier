@@ -45,16 +45,18 @@ encoder is frozen and only its binary classification head is trained, using
 the same efficient pattern as
 [FineWeb-Edu](https://github.com/huggingface/cosmopedia/tree/main/classification).
 By default, model publication and remote metric synchronization are disabled.
-When explicitly enabled, the completed top-level model files go to the
+When explicitly enabled, the final model files go to the
 [dedicated model repository](https://huggingface.co/NoeFlandre/osm-polygon-sentence-classifier)
-each complete checkpoint updates its permanent
-`checkpoints/step-N/` directory, and Trackio publishes a static metric
+under that run's `final/` directory, and each complete checkpoint updates its
+permanent `experiments/<experiment>/run-<run-id>/checkpoints/step-N/`
+directory. Trackio publishes a static metric
 snapshot to the free public [Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-trackio)
 through its dedicated Bucket after each complete checkpoint and final
 publication. On network-backed Grid'5000 storage, append-only Trackio fragments
 are imported into the project database before each snapshot, and the final
-snapshot closes the active run first. Evaluation logs include accuracy,
-precision, recall, and F1. The model README is generated from safe run metadata,
+snapshot closes the active run first. Short continuation jobs are named with
+the experiment, run ID, starting checkpoint, and OAR job ID. Evaluation logs
+include accuracy, precision, recall, and F1. The model README is generated from safe run metadata,
 evaluation metrics, and
 checkpoint progress at each checkpoint and final publication. Checkpoint Hub
 uploads are queued in order and completed before the final model publication;

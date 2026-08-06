@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -35,6 +36,8 @@ _WEIGHT_PATTERN = re.compile(
     r"(?:model|pytorch_model)(?:-\d{5}-of-\d{5})?\.(?:bin|safetensors)$"
 )
 _CHECKPOINT_NAME_PATTERN = re.compile(r"checkpoint-([1-9][0-9]*)$")
+_RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{8,64}")
+_MODEL_EXPERIMENT_ROOT = "experiments"
 _ALLOWED_ROOT_NAMES = frozenset(
     {
         "added_tokens.json",
@@ -137,6 +140,37 @@ def _safe_line(value: object, fallback: str) -> str:
     return fallback
 
 
+def _slug(value: object, fallback: str) -> str:
+    text = _safe_line(value, fallback)
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", text).strip("-._")
+    return slug[:80] or fallback
+
+
+def _publication_run_id(identity: Mapping[str, object]) -> str:
+    supplied = identity.get("run_id")
+    if isinstance(supplied, str) and _RUN_ID_PATTERN.fullmatch(supplied):
+        return supplied
+    canonical = json.dumps(
+        dict(identity),
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:20]
+
+
+def _model_artifact_prefix(identity: Mapping[str, object]) -> str:
+    training_config = identity.get("training_config")
+    run_name = (
+        training_config.get("run_name")
+        if isinstance(training_config, Mapping)
+        else None
+    )
+    experiment = _slug(run_name, "landuse")
+    return f"{_MODEL_EXPERIMENT_ROOT}/{experiment}/run-{_publication_run_id(identity)}"
+
+
 def render_model_card(
     *,
     identity: Mapping[str, object],
@@ -213,6 +247,58 @@ def render_model_card(
     )
 
 
+def render_repository_readme(
+    *,
+    identity: Mapping[str, object],
+    trackio_space_id: str | None = None,
+) -> str:
+    """Render the stable root guide for the organized model repository."""
+
+    prefix = _model_artifact_prefix(identity)
+    task_name = _safe_line(identity.get("task_name"), "landuse")
+    model_name = _safe_line(identity.get("model_name_or_path"), "not recorded")
+    model_revision = _safe_line(identity.get("model_revision"), "not pinned")
+    trackio_link = (
+        f"https://huggingface.co/spaces/{trackio_space_id.strip()}"
+        if isinstance(trackio_space_id, str)
+        and trackio_space_id.strip()
+        and "\n" not in trackio_space_id
+        and "\r" not in trackio_space_id
+        else None
+    )
+    tracking_line = (
+        f"- Trackio dashboard: [{trackio_space_id}]({trackio_link})\n"
+        if trackio_link is not None
+        else ""
+    )
+    return (
+        "---\n"
+        "library_name: transformers\n"
+        "pipeline_tag: text-classification\n"
+        "tags:\n"
+        "- landuse\n"
+        "- text-classification\n"
+        "---\n\n"
+        "# OSM Polygon Sentence Classifier\n\n"
+        "This public repository contains organized, immutable outputs for the "
+        "OSM polygon landuse sentence-classification task.\n\n"
+        "## Repository layout\n\n"
+        f"- Final model: `{prefix}/final/` (load with the Transformers "
+        f"`subfolder` argument).\n"
+        f"- Complete checkpoints: `{prefix}/checkpoints/step-N/`.\n"
+        "- Each run has its own experiment and run directory; no model files "
+        "are stored at the repository root.\n\n"
+        "## Training identity\n\n"
+        f"- Task: `{task_name}`\n"
+        f"- Base model: `{model_name}`\n"
+        f"- Base-model revision: `{model_revision}`\n"
+        f"- Run directory: `{prefix}`\n"
+        f"{tracking_line}\n"
+        "The generated model card inside the final directory contains the "
+        "recorded configuration and evaluation metrics."
+    )
+
+
 def ensure_model_repository(
     repository_id: object,
     *,
@@ -280,24 +366,44 @@ def publish_model_directory(
     directory: str | Path,
     repository_id: object,
     *,
+    identity: Mapping[str, object] | None = None,
+    repository_readme: str | None = None,
     hub_api: Any | None = None,
     operation_factory: OperationFactory | None = None,
 ) -> ModelPublicationResult:
-    """Validate and commit only the final top-level model files."""
+    """Validate and commit final artifacts under an immutable run directory."""
 
     repository = _require_non_blank(repository_id, "repository_id")
     output_directory = Path(directory)
     files = _final_model_files(output_directory)
     factory = operation_factory or _default_operation_factory()
     operations: list[Any] = []
+    published_paths: list[str] = []
+    artifact_prefix = _model_artifact_prefix(identity) if identity is not None else None
     try:
-        for path in files:
+        if repository_readme is not None:
+            if not isinstance(repository_readme, str) or not repository_readme.strip():
+                raise ModelPublicationError("repository README must be non-empty")
             operations.append(
                 factory(
-                    path_in_repo=path.name,
+                    path_in_repo="README.md",
+                    path_or_fileobj=repository_readme.encode("utf-8"),
+                )
+            )
+            published_paths.append("README.md")
+        for path in files:
+            path_in_repo = (
+                f"{artifact_prefix}/final/{path.name}"
+                if artifact_prefix is not None
+                else path.name
+            )
+            operations.append(
+                factory(
+                    path_in_repo=path_in_repo,
                     path_or_fileobj=str(path),
                 )
             )
+            published_paths.append(path_in_repo)
     except Exception as error:
         raise ModelPublicationError(
             "Hugging Face model operations could not be constructed"
@@ -319,7 +425,7 @@ def publish_model_directory(
         repository_id=repository,
         commit_id=commit_id,
         commit_url=commit_url,
-        files=tuple(path.name for path in files),
+        files=tuple(published_paths),
     )
 
 
@@ -357,11 +463,17 @@ def _complete_checkpoint_files(
     return files
 
 
-def _checkpoint_path_in_repo(path: Path, checkpoint: Path) -> str:
+def _checkpoint_path_in_repo(
+    path: Path,
+    checkpoint: Path,
+    *,
+    identity: Mapping[str, object],
+) -> str:
     match = _CHECKPOINT_NAME_PATTERN.fullmatch(checkpoint.name)
     if match is None:
         raise ModelPublicationError("checkpoint directory name is invalid")
-    return f"checkpoints/step-{match.group(1)}/{path.name}"
+    prefix = _model_artifact_prefix(identity)
+    return f"{prefix}/checkpoints/step-{match.group(1)}/{path.name}"
 
 
 def publish_checkpoint_directory(
@@ -383,7 +495,11 @@ def publish_checkpoint_directory(
         for path in files:
             operations.append(
                 factory(
-                    path_in_repo=_checkpoint_path_in_repo(path, checkpoint),
+                    path_in_repo=_checkpoint_path_in_repo(
+                        path,
+                        checkpoint,
+                        identity=identity,
+                    ),
                     path_or_fileobj=str(path),
                 )
             )
@@ -410,7 +526,10 @@ def publish_checkpoint_directory(
         repository_id=repository,
         commit_id=commit_id,
         commit_url=commit_url,
-        files=tuple(_checkpoint_path_in_repo(path, checkpoint) for path in files),
+        files=tuple(
+            _checkpoint_path_in_repo(path, checkpoint, identity=identity)
+            for path in files
+        ),
     )
 
 
@@ -421,4 +540,5 @@ __all__ = [
     "publish_checkpoint_directory",
     "publish_model_directory",
     "render_model_card",
+    "render_repository_readme",
 ]

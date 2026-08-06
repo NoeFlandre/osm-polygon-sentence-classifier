@@ -16,8 +16,8 @@ Face Trainer with local Trackio reporting, and saves model artifacts beneath
 the same root. It retains five complete, identity-bound checkpoints so an
 incomplete allocation can continue safely. An authorized Grid'5000 run may
 explicitly publish the completed model to the dedicated model repository,
-publish each complete checkpoint under its step-specific
-`checkpoints/step-N/` directory, and publish Trackio metric snapshots to the free static
+publish each complete checkpoint under its run-scoped
+`experiments/<experiment>/run-<run-id>/checkpoints/step-N/` directory, and publish Trackio metric snapshots to the free static
 [Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-trackio)
 and [metric Bucket](https://huggingface.co/buckets/NoeFlandre/osm-polygon-sentence-classifier-trackio-data).
 The static Space is read-only between snapshots and requires no paid HF
@@ -62,14 +62,17 @@ All local datasets, checkpoints, models, and experiment logs must be kept
 beneath the external data root. Quality commands do not download data or
 create training outputs. An authorized training call stores model caches,
 checkpoints, models, and Trackio state beneath that root. Remote publication is
-opt-in: the final model is published at the repository root, and every complete
-checkpoint is published beneath its permanent `checkpoints/step-N/` directory.
+opt-in: the repository root contains documentation only; final model files are
+published beneath `experiments/<experiment>/run-<run-id>/final/`, and every
+complete checkpoint is published beneath that run's permanent
+`checkpoints/step-N/` directory.
 The model repository and free static Trackio Space/Bucket are provisioned as
 public destinations. The checkpoint upload is queued in order and drained
 before final publication; older checkpoint snapshots remain available for
 inspection. On network-backed Grid'5000 storage, Trackio JSONL fragments are
 imported before each static snapshot so the public dashboard contains the
-recorded metrics.
+recorded metrics. Short Grid'5000 continuations receive names containing the
+experiment, immutable run ID, starting checkpoint, and OAR job ID.
 
 Run the audit only when the pinned dataset review is explicitly authorized:
 

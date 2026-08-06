@@ -30,6 +30,7 @@ from .publication import (
     publish_checkpoint_directory,
     publish_model_directory,
     render_model_card,
+    render_repository_readme,
 )
 from .tracking import (
     TrackingError,
@@ -850,13 +851,14 @@ def train_landuse_classifier(
         train_output = _run_trainer(trainer, resume_from_checkpoint)
         trainer.save_model(str(output_directory))
         tokenizer.save_pretrained(str(output_directory))
+        model_card_identity = _model_card_identity(
+            checkpoint_identity,
+            config=training_config,
+            contract=contract,
+        )
         _write_model_card(
             output_directory,
-            identity=_model_card_identity(
-                checkpoint_identity,
-                config=training_config,
-                contract=contract,
-            ),
+            identity=model_card_identity,
             training_metrics=_metrics_for_model_card(train_output, trainer),
             trackio_space_id=(
                 tracking.static_space_id if training_config.sync_trackio else None
@@ -867,6 +869,15 @@ def train_landuse_classifier(
             model_publication = publish_model_directory(
                 output_directory,
                 effective_project_config.target_model_repository_id,
+                identity=model_card_identity,
+                repository_readme=render_repository_readme(
+                    identity=model_card_identity,
+                    trackio_space_id=(
+                        tracking.static_space_id
+                        if training_config.sync_trackio
+                        else None
+                    ),
+                ),
             )
         if training_config.sync_trackio:
             _sync_static_trackio(

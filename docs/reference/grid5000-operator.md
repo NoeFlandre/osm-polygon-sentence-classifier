@@ -140,14 +140,18 @@ same site passes the storage/policy preflight again. The successor worker
 requires a valid checkpoint and passes the newest one to the Trainer; missing,
 partial, or identity-mismatched checkpoints stop the run. When requested, the
 worker queues each complete checkpoint to the dedicated Hugging Face model
-repository under a permanent `checkpoints/step-N/` directory. The Trainer
+repository under the run-scoped permanent
+`experiments/<experiment>/run-<run-id>/checkpoints/step-N/` directory. The Trainer
 records accuracy, precision, recall, and F1 locally through Trackio and syncs a static snapshot to the free
 Trackio Space and Bucket after each complete checkpoint and final publication,
 including continuations. Each checkpoint and the final model also receive a
 generated credential-free README containing pinned
 identity, safe configuration, progress, and scalar metrics. The ordered Hub
-queue is drained before the final top-level model publication; older remote
-checkpoint snapshots remain available.
+queue is drained before the final model publication; older remote checkpoint
+snapshots remain available. The repository root is documentation only; final
+model files live in the same run's `final/` directory. Trackio names each short
+allocation segment with the experiment, run ID, starting checkpoint, and OAR
+job ID so continuations are distinguishable in the public dashboard.
 
 After a successful terminal job, the controller validates the manifest
 identity, verifies the recorded model commit and Trackio Space through the Hub,

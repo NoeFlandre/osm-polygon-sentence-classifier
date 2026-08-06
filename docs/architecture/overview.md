@@ -32,14 +32,16 @@ The foundation keeps the first interfaces narrow and local:
   Model caches, five retained checkpoints, outputs, and Trackio state are
   directed beneath the managed root. Checkpoints carry the immutable run
   identity so a later Grid5000 worker can resume safely. Explicit flags publish
-  each complete checkpoint to its permanent `checkpoints/step-N/` directory and
+  each complete checkpoint to its permanent
+  `experiments/<experiment>/run-<run-id>/checkpoints/step-N/` directory and
   records accuracy, precision, recall, and F1 locally through Trackio. After
   each complete checkpoint and final publication it imports any network-safe
   Trackio JSONL fragments, then explicitly syncs a static snapshot to the public
   Space and Bucket; the final sync closes the active Trackio run first. It
   generates a credential-free model README
   with checkpoint progress and scalar evaluation metrics, then publishes
-  validated final top-level model files with the final README. Checkpoint
+  validated final model files beneath the same run directory and a
+  documentation-only root README. Checkpoint
   uploads are drained before final publication; older remote snapshots remain
   available. The module does not submit
   Grid5000 work.

@@ -788,7 +788,7 @@ def test_training_can_publish_the_final_model_and_sync_static_trackio(
     monkeypatch.setattr(
         training,
         "publish_model_directory",
-        lambda directory, repository_id: publication_calls.append(directory)
+        lambda directory, repository_id, **kwargs: publication_calls.append(directory)
         or training.ModelPublicationResult(
             repository_id=repository_id,
             commit_id="d" * 40,
