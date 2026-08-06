@@ -34,6 +34,26 @@ def test_state_store_round_trips_secure_state_and_events(tmp_path: Path) -> None
     assert (run_dir / "events.jsonl").stat().st_mode & 0o777 == 0o600
 
 
+def test_state_store_save_does_not_follow_a_temporary_symlink(
+    tmp_path: Path,
+) -> None:
+    store = AutonomousStateStore(tmp_path / "runs")
+    state = _state()
+    store.create(state)
+
+    run_dir = tmp_path / "runs" / state.run_id
+    outside = tmp_path / "outside.json"
+    outside.write_text("do not overwrite", encoding="utf-8")
+    temporary = run_dir / ".state.json.tmp"
+    temporary.symlink_to(outside)
+
+    store.save(state)
+
+    assert outside.read_text(encoding="utf-8") == "do not overwrite"
+    assert temporary.is_symlink()
+    assert store.load(state.run_id) == state
+
+
 def test_state_store_rejects_secret_facts(tmp_path: Path) -> None:
     store = AutonomousStateStore(tmp_path / "runs")
     store.create(_state())

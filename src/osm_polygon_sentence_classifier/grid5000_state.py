@@ -6,7 +6,9 @@ import json
 import os
 import re
 import shutil
+import tempfile
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -268,23 +270,47 @@ class AutonomousStateStore:
         return directory
 
     def _write_state(self, directory: Path, state: AutonomousRunState) -> None:
-        temporary = directory / ".state.json.tmp"
+        temporary_path: Path | None = None
+        descriptor: int | None = None
         try:
-            temporary.write_text(
+            payload = (
                 json.dumps(
                     state.to_dict(),
                     ensure_ascii=False,
                     sort_keys=True,
                     allow_nan=False,
                 )
-                + "\n",
-                encoding="utf-8",
+                + "\n"
             )
-            os.chmod(temporary, 0o600)
-            os.replace(temporary, directory / "state.json")
+            descriptor, temporary_name = tempfile.mkstemp(
+                dir=directory,
+                prefix=".state-",
+                suffix=".tmp",
+            )
+            temporary_path = Path(temporary_name)
+            os.fchmod(descriptor, 0o600)
+            handle = os.fdopen(descriptor, "w", encoding="utf-8")
+            descriptor = None
+            with handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, directory / "state.json")
+            temporary_path = None
+            directory_descriptor = os.open(directory, os.O_RDONLY)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
         except (OSError, TypeError, ValueError) as error:
-            temporary.unlink(missing_ok=True)
             raise StateError("state document cannot be written") from error
+        finally:
+            if descriptor is not None:
+                with suppress(OSError):
+                    os.close(descriptor)
+            if temporary_path is not None:
+                with suppress(OSError):
+                    temporary_path.unlink()
 
     def create(self, state: AutonomousRunState) -> None:
         """Create one new state document without overwriting an existing run."""
