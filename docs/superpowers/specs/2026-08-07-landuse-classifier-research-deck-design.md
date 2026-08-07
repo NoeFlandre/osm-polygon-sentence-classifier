@@ -42,6 +42,16 @@ shows, and why a held-out evaluation is still required.
 The slide titles are written as takeaway statements so the title-only sequence
 communicates the argument without speaker notes.
 
+## Copy standard
+
+Visible copy must be written for a public research audience in natural,
+human-authored language. Prefer short concrete sentences and familiar words
+such as “sentence,” “label,” “split,” and “held-out test.” Avoid generic AI
+phrases, inflated claims, empty transitions, dashboard jargon, and internal
+production vocabulary that does not help the audience understand the result.
+Every slide must sound like something the researcher could say aloud without
+editing.
+
 ## Visual direction
 
 Use the linked `NoeFlandre/slides-colloquium` repository as a read-only
@@ -81,6 +91,8 @@ results.
 - The final deck contains seven slides and is readable at 16:9 presentation
   size.
 - Every slide has one clear narrative job and a takeaway title.
+- Visible copy is concise, natural, public-facing, and free of generic AI
+  filler or internal planning language.
 - No title wraps unexpectedly; body text remains at or above the presentation
   skill's minimum sizes.
 - The ablation comparison uses the published values exactly, labels validation
