@@ -461,6 +461,7 @@ def test_repository_readme_documents_the_organized_public_layout() -> None:
     assert "experiments/baseline/run-aaaaaaaaaaaaaaaaaaaa/final/" in readme
     assert "experiments/baseline/run-aaaaaaaaaaaaaaaaaaaa/checkpoints/step-N/" in readme
     assert "no model files are stored at the repository root" in readme
+    assert "studies/landuse-v1/README.md" in readme
     assert "https://huggingface.co/spaces/owner/trackio" in readme
 
 

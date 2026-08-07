@@ -5,11 +5,12 @@ responsibility and should preserve the managed-data and remote-operation
 boundaries.
 
 The pinned dataset contract, lazy loader, review-only audit, typed training
-boundary, and autonomous Grid'5000 operator are explicit surfaces. Remote
-publication is limited to the configured final model and Trackio destinations;
-model evaluation policy remains deferred until its contract is reviewed. Do
-not introduce that deferred surface as an incidental helper in training, audit,
-or operator changes.
+boundary, reproducible `landuse-v1` study, and autonomous Grid'5000 operator
+are explicit surfaces. Remote publication is limited to the configured model
+repository and static Trackio destinations. The completed study's validation
+metrics and run registry are generated from durable state; future experiments
+must add a new study identity or an explicitly reviewed protocol rather than
+silently changing `landuse-v1`.
 
 ## RED -> GREEN -> REFACTOR
 

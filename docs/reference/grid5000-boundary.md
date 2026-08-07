@@ -69,3 +69,10 @@ State directories are mode `0700`; state and event files are mode `0600`.
 Legacy ambiguous state is never overwritten. It is archived only after
 read-only current-user OAR checks find no active jobs, otherwise execution
 stops for inspection.
+
+For the completed `landuse-v1` study, the public experiment identity is
+`landuse-v1|<ablation-id>|seed-<seed>` and the corresponding Hub directory is
+`studies/landuse-v1/<ablation-id>/run-<run-id>/`. The OAR job ID is a transient
+allocation-segment identifier; it must not be used to merge or compare study
+runs. The [public study registry](https://huggingface.co/NoeFlandre/osm-polygon-sentence-classifier/blob/main/studies/landuse-v1/README.md)
+maps each stable run name to its metrics and final artifact.

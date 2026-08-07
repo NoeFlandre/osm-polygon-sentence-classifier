@@ -5,9 +5,11 @@ Train a sentence classifier for OSM polygon descriptions, starting with the
 
 ## Status
 
-The repository contains a safe, testable project foundation, one explicit
-review command (`audit-landuse-dataset`), a typed training module, and an
-autonomous Grid'5000 operator.
+The first landuse experiment is complete: the reproducible `landuse-v1`
+ablation study finished all 13 planned runs, and the original single-run
+baseline remains available as a separate experiment. The repository contains
+the review command (`audit-landuse-dataset`), typed training boundary, and
+autonomous Grid'5000 operator used to produce those artifacts.
 The audit consumes the pinned dataset in streaming mode. Its loader may
 populate the approved Hugging Face cache; the explicit artifact writer creates
 only the JSON report and polygon split manifest beneath the approved external
@@ -53,16 +55,33 @@ over older multilingual encoders on classification and multilingual retrieval
 benchmarks; the held-out landuse evaluation remains the decision criterion for
 this project.
 
-The completed single-run baseline and the reproducible landuse ablation study
-share the public model repository and Trackio dashboard but use separate model
-namespaces and run names. The ablation study is run with:
+The completed single-run baseline and the completed landuse ablation study share
+the public model repository and Trackio dashboard but use separate namespaces
+and run names. The idempotent command that runs or resumes the ablation study is:
 
 ```bash
 uv run grid5000-landuse ablations --execute
 ```
 
 See the [ablation study guide](docs/guides/ablations.md) for the fixed matrix,
-selection rule, replication plan, and artifact layout.
+selection rule, completed run registry, and artifact layout. The public Hub
+repository contains the same registry under
+[`studies/landuse-v1/README.md`](https://huggingface.co/NoeFlandre/osm-polygon-sentence-classifier/blob/main/studies/landuse-v1/README.md).
+
+The best completed finalist family by mean validation positive-class F1 was
+`a06-last2-256` (seeds `42`, `43`, and `44`). This is a validation comparison,
+not a claim of held-out test performance; the study has no held-out test set.
+
+## How to read a run
+
+Public run names follow
+`landuse-v1|<ablation-id>|seed-<seed>`. The ablation ID identifies the one
+controlled change, and the seed identifies the screening run or replication.
+The separate `run-<run-id>` directory is the immutable controller identity;
+it is not an OAR job ID. A run's `checkpoints/step-N/` directories are complete
+resumable Trainer checkpoints, while its `final/` directory is the terminal
+model. The Hub study `results.json` contains the complete scalar metrics and
+`study.json` contains the pinned protocol and provenance.
 
 ## Data and model repositories
 
@@ -84,7 +103,9 @@ before final publication; older checkpoint snapshots remain available for
 inspection. On network-backed Grid'5000 storage, Trackio JSONL fragments are
 imported before each static snapshot so the public dashboard contains the
 recorded metrics. Short Grid'5000 continuations receive names containing the
-experiment, immutable run ID, starting checkpoint, and OAR job ID.
+experiment, immutable run ID, starting checkpoint, and OAR job ID. Those
+scheduler segment names are operational labels; the public study run name
+remains stable across continuations.
 
 Run the audit only when the pinned dataset review is explicitly authorized:
 

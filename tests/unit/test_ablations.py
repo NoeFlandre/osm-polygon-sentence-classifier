@@ -333,5 +333,10 @@ def test_study_documents_are_public_and_include_clear_run_names() -> None:
         "studies/landuse-v1/study.json",
     }
     assert "a01-head-128" in documents["studies/landuse-v1/README.md"]
+    assert (
+        "landuse-v1|a01-head-128|seed-42" in documents["studies/landuse-v1/README.md"]
+    )
+    assert "Validation metrics" in documents["studies/landuse-v1/README.md"]
+    assert "Maximum length" in documents["studies/landuse-v1/README.md"]
     assert "eval_f1" in documents["studies/landuse-v1/results.json"]
     assert "Grid'5000" in documents["studies/landuse-v1/README.md"]

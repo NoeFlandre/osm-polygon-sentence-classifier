@@ -89,6 +89,11 @@ ablation run names identify the variant and seed. Each Grid'5000 allocation
 restores the previous static Trackio snapshot before logging, so a new isolated
 allocation does not erase earlier runs from the public dashboard. The command
 is plan-only without `--execute` and is safe to repeat after interruption.
+The completed `landuse-v1` registry contains 13 runs; interpret the stable
+`landuse-v1|<ablation-id>|seed-<seed>` name and its `run-<run-id>` artifact
+directory in the [public study report](https://huggingface.co/NoeFlandre/osm-polygon-sentence-classifier/blob/main/studies/landuse-v1/README.md).
+An OAR job ID belongs only to one short allocation segment and is not the
+experiment identity.
 
 ## Site discovery and policy
 

@@ -1,6 +1,7 @@
 # Architecture overview
 
-The foundation keeps the first interfaces narrow and local:
+The implementation keeps the interfaces narrow and separates data validity,
+training, publication, tracking, and Grid'5000 orchestration:
 
 - `config.py` defines immutable project metadata, including the landuse task,
   the read-only source dataset identifier, the eventual model repository
@@ -67,12 +68,28 @@ The foundation keeps the first interfaces narrow and local:
   enabled, and bootstraps the locked uv environment and package cache in
   allocation-local scratch. Durable model/data/Trackio paths remain
   home-scoped, and it has no retry, scheduler, or CPU-fallback responsibility.
+- `ablation_study.py` owns the immutable `landuse-v1` matrix, screening and
+  replication order, durable study state, public run registry, and generated
+  `study.json`/`results.json` documents. It executes one ablation at a time
+  through the autonomous controller and never races multiple jobs.
 
 The audit command is the only local data-consuming command. The autonomous
 Grid'5000 worker consumes the pinned dataset only after the explicit
 `run --execute` gate. OAR submission, Hub provisioning, model publication,
 Trackio synchronization, and cleanup are each behind the same controller;
 plan mode remains side-effect free.
+
+## Public artifact identity
+
+The Hub repository is a catalogue of immutable run outputs rather than one
+unnamed “latest” model. A study run name has the form
+`landuse-v1|<ablation-id>|seed-<seed>`. The ablation ID maps to one controlled
+configuration, and the seed distinguishes the screening run from a
+replication. The corresponding `run-<run-id>` directory is the autonomous
+controller identity; an OAR job ID identifies only one short allocation
+segment. `checkpoints/step-N/` is resumable state and `final/` is the terminal
+model for that run. The public study report is the human-readable index, while
+`study.json` and `results.json` are the machine-readable source of truth.
 
 Audit readiness is based on sentence-only model inputs. Mixed labels within a
 polygon and duplicate hashes across polygons remain diagnostic metrics, while

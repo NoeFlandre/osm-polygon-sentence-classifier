@@ -548,6 +548,13 @@ def _format_metric(metrics: Mapping[str, object], name: str) -> str:
     return "—"
 
 
+def _format_count(metrics: Mapping[str, object], name: str) -> str:
+    value = metrics.get(name)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(int(value)) if float(value).is_integer() else f"{float(value):.1f}"
+    return "—"
+
+
 def _report_runs(state: Mapping[str, object]) -> list[dict[str, object]]:
     records = AblationStudyController._records(state)
     specification = state.get("specification", {})
@@ -597,21 +604,53 @@ def render_study_documents(state: Mapping[str, object]) -> dict[str, str]:
         raise AblationStudyError("ablation study state lacks its public specification")
     rows = _report_runs(state)
     status = str(state.get("phase", "running"))
+    study_status_label = "Completed" if status == "completed" else "In-progress"
     source_commit = specification.get("source_commit", "not recorded")
     model_revision = specification.get("model_revision", "not recorded")
     dataset_revision = specification.get("dataset_revision", "not recorded")
+    definition_rows = [
+        "| Ablation | Change | Maximum length | Learning rate | "
+        "Trainable layers | Class weighting |",
+        "|---|---|---:|---:|---|---|",
+    ]
+    raw_definitions = specification.get("definitions", [])
+    if isinstance(raw_definitions, list):
+        for raw_definition in raw_definitions:
+            if not isinstance(raw_definition, Mapping):
+                continue
+            definition_rows.append(
+                f"| `{raw_definition.get('ablation_id', '—')}` | "
+                f"{raw_definition.get('label', '—')} | "
+                f"`{raw_definition.get('max_length', '—')}` | "
+                f"`{raw_definition.get('learning_rate', '—')}` | "
+                f"`{raw_definition.get('trainable_layers', '—')}` | "
+                f"`{raw_definition.get('class_weight_mode', '—')}` |"
+            )
     table_rows = [
-        "| Ablation | Seed | Status | Positive F1 | Macro F1 | Model |",
-        "|---|---:|---|---:|---:|---|",
+        "| Run name | Ablation | Seed | Status | Accuracy | Precision | "
+        "Recall | Positive F1 | Macro F1 | Balanced accuracy | "
+        "Validation support (no / yes) | Final artifact |",
+        "|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in rows:
         metrics = cast(Mapping[str, object], row["metrics"])
         model_path = row.get("model_path")
         model_cell = f"`{model_path}`" if isinstance(model_path, str) else "—"
+        run_name = f"{ABLATION_STUDY_ID}|{row['ablation_id']}|seed-{row['seed']}"
+        support = (
+            f"{_format_count(metrics, 'eval_negative_support')} / "
+            f"{_format_count(metrics, 'eval_positive_support')}"
+        )
         table_rows.append(
-            f"| `{row['ablation_id']}` | {row['seed']} | {row['status']} | "
+            f"| `{run_name}` | `{row['ablation_id']}` | {row['seed']} | "
+            f"{row['status']} | "
+            f"{_format_metric(metrics, 'eval_accuracy')} | "
+            f"{_format_metric(metrics, 'eval_precision')} | "
+            f"{_format_metric(metrics, 'eval_recall')} | "
             f"{_format_metric(metrics, 'eval_f1')} | "
-            f"{_format_metric(metrics, 'eval_macro_f1')} | {model_cell} |"
+            f"{_format_metric(metrics, 'eval_macro_f1')} | "
+            f"{_format_metric(metrics, 'eval_balanced_accuracy')} | "
+            f"{support} | {model_cell} |"
         )
     results_payload = {
         "study_id": ABLATION_STUDY_ID,
@@ -624,6 +663,12 @@ def render_study_documents(state: Mapping[str, object]) -> dict[str, str]:
         not isinstance(item, str) for item in source_commit_history
     ):
         source_commit_history = []
+    source_history_note = (
+        "\n- Earlier source commits retained for historical run provenance: "
+        + ", ".join(f"`{item}`" for item in source_commit_history)
+        if source_commit_history
+        else ""
+    )
     study_payload = {
         **dict(specification),
         "fingerprint": fingerprint,
@@ -648,19 +693,52 @@ def render_study_documents(state: Mapping[str, object]) -> dict[str, str]:
         f"- Source commit: `{source_commit}`\n"
         f"- Study specification SHA-256: `{fingerprint}`\n"
         f"- Trackio: [public dashboard](https://huggingface.co/spaces/"
-        f"{TRACKIO_STATIC_SPACE_ID})\n\n"
-        f"## Status: `{status}`\n\n" + "\n".join(table_rows) + "\n\n"
+        f"{TRACKIO_STATIC_SPACE_ID}){source_history_note}\n\n"
+        "## How to read a run\n\n"
+        "- A public Trackio run name is `landuse-v1|<ablation-id>|seed-<seed>`; "
+        "it identifies the study variant and replication seed.\n"
+        "- `run-<run-id>` is the immutable controller run identity. It is not an "
+        "OAR job ID; short continuation jobs for one run keep this same ID.\n"
+        "- `checkpoints/step-N/` contains the complete checkpoint at Trainer step "
+        "`N`; `final/` contains that run's terminal model.\n"
+        "- `results.json` is the machine-readable source for all scalar metrics; "
+        "`study.json` is the immutable protocol and provenance record.\n\n"
+        "## Ablation definitions\n\n" + "\n".join(definition_rows) + "\n\n"
+        "## Validation metrics and run registry\n\n"
+        "The table below is the human-readable registry. `Positive F1` is "
+        "`eval_f1`; support is shown as `no / yes`. These are validation results, "
+        "not held-out test results.\n\n" + "\n".join(table_rows) + "\n\n"
         "Grid'5000 resources were used for the computation. Publications based on "
         "this study should include the official Grid’5000 acknowledgment.\n"
     )
     root_readme = (
+        "---\n"
+        "library_name: transformers\n"
+        "pipeline_tag: text-classification\n"
+        "tags:\n"
+        "- landuse\n"
+        "- text-classification\n"
+        "---\n\n"
         "# OSM Polygon Sentence Classifier\n\n"
-        "Public artifacts for the OSM polygon landuse sentence-classification task.\n\n"
-        "## Artifact families\n\n"
-        "- The completed single-run baseline is under `experiments/`.\n"
-        f"- The reproducible ablation study is documented in `studies/{ABLATION_STUDY_ID}/`.\n"
-        f"- Metrics are visible in the [Trackio dashboard](https://huggingface.co/spaces/"
-        f"{TRACKIO_STATIC_SPACE_ID}).\n"
+        "Public model artifacts and experiment registry for the OSM polygon "
+        "landuse sentence-classification task. The repository root is "
+        "documentation-only; model files live inside immutable experiment runs.\n\n"
+        "## Start here\n\n"
+        f"- {study_status_label} ablation study: [`studies/{ABLATION_STUDY_ID}/README.md`]"
+        f"(studies/{ABLATION_STUDY_ID}/README.md)\n"
+        f"- Machine-readable protocol: [`studies/{ABLATION_STUDY_ID}/study.json`]"
+        f"(studies/{ABLATION_STUDY_ID}/study.json)\n"
+        f"- Machine-readable metrics: [`studies/{ABLATION_STUDY_ID}/results.json`]"
+        f"(studies/{ABLATION_STUDY_ID}/results.json)\n"
+        f"- Static metrics: [Trackio dashboard](https://huggingface.co/spaces/"
+        f"{TRACKIO_STATIC_SPACE_ID})\n\n"
+        "## Artifact layout\n\n"
+        "- Single-run outputs: `experiments/<experiment>/run-<run-id>/`.\n"
+        f"- Ablation outputs: `studies/{ABLATION_STUDY_ID}/<ablation-id>/run-<run-id>/`.\n"
+        "- Final model: the run's `final/` directory.\n"
+        "- Resumable outputs: the same run's `checkpoints/step-N/` directories.\n\n"
+        "The run registry explains how the study name, seed, controller run ID, "
+        "checkpoint step, and final artifact path relate to one another.\n"
     )
     return {
         "README.md": root_readme,

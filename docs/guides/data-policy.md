@@ -27,7 +27,7 @@ and its dedicated Hugging Face Bucket. Training records locally first, then
 publishes a read-only snapshot after each complete checkpoint and final model
 publication; no paid Space compute is required.
 
-## Audit and foundation boundary
+## Audit and training boundary
 
 The audit is a review-only transformation. Its loader may populate the
 approved Hugging Face cache while streaming; the reducer validates and
@@ -87,3 +87,12 @@ incrementally as they arrive from each stream rather than materialized into a
 list, and no cleaned dataset is written. `uncertain` rows are never emitted and
 do not create conflicts. Rows without a usable hash keep the existing per-row
 behavior. Training code must consume the iterator's output directly.
+
+The completed `landuse-v1` study is a public derived artifact, not a copy of
+the source dataset. Its `study.json` records the dataset and model revisions,
+the fixed ablation definitions, the source-code commit, and the study
+fingerprint. Its `results.json` records one row per stable
+`landuse-v1|<ablation-id>|seed-<seed>` run, including the final artifact path
+and scalar evaluation metrics. Checkpoint and final model directories are
+organized under the matching `run-<run-id>` path; scheduler job IDs are
+operational evidence and are not used as the public run identity.

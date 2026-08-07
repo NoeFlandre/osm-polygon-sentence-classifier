@@ -12,6 +12,11 @@ autonomous operator because durable local run state belongs there. The quality
 commands below do not create project datasets, checkpoints, models, Trackio run
 state, or other project data.
 
+The initial `landuse-v1` study is already complete. Its 13 run records, pinned
+configuration, full scalar metrics, and final/checkpoint paths are catalogued
+in the [ablation study guide](ablations.md) and mirrored in the public
+[Hugging Face study report](https://huggingface.co/NoeFlandre/osm-polygon-sentence-classifier/blob/main/studies/landuse-v1/README.md).
+
 ## Local quality gates
 
 Install the locked development environment and run the complete local gate:
@@ -61,6 +66,21 @@ evaluation metrics, and
 checkpoint progress at each checkpoint and final publication. Checkpoint Hub
 uploads are queued in order and completed before the final model publication;
 older checkpoint snapshots remain available remotely.
+
+## Reading the completed study
+
+Use the public run name, not the scheduler job ID, when interpreting a result:
+
+```text
+landuse-v1|a06-last2-256|seed-43
+```
+
+The ablation ID names the controlled change, the seed identifies the screening
+run or replication, and the separate `run-<run-id>` artifact directory is the
+immutable controller identity. A `checkpoints/step-N/` directory is resumable
+state; `final/` is the terminal model. The static Trackio dashboard shows
+metrics snapshots for these stable runs, while `results.json` is the
+authoritative machine-readable metric registry.
 
 The autonomous `grid5000-landuse run` command requires a pinned model revision
 and uses the current clean source commit by default. Without `--execute` it
