@@ -380,11 +380,12 @@ class AblationStudyController:
         records = state.get("runs", {})
         if not isinstance(records, Mapping):
             raise AblationStudyError("ablation study run state is invalid")
-        return {
-            key: dict(cast(Mapping[str, object], value))
-            for key, value in records.items()
-            if isinstance(key, str) and isinstance(value, Mapping)
-        }
+        parsed: dict[str, dict[str, object]] = {}
+        for key, value in records.items():
+            if not isinstance(key, str) or not isinstance(value, Mapping):
+                raise AblationStudyError("ablation study run state is invalid")
+            parsed[key] = dict(cast(Mapping[str, object], value))
+        return parsed
 
     def _screening_results(
         self,

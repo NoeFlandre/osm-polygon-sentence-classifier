@@ -127,6 +127,24 @@ def test_study_state_store_rejects_a_symlinked_root(tmp_path: Path) -> None:
         AblationStudyStateStore(root).save({"phase": "running"})
 
 
+def test_ablation_plan_rejects_a_malformed_persisted_run_record(
+    tmp_path: Path,
+) -> None:
+    from osm_polygon_sentence_classifier.ablation_study import AblationStudyController
+
+    controller = AblationStudyController(
+        source_commit="b" * 40,
+        model_revision="a" * 40,
+        state_root=tmp_path,
+    )
+    state = controller._new_state()
+    state["runs"] = {"broken": []}
+    controller.state.save(state)
+
+    with pytest.raises(AblationStudyError, match="run state is invalid"):
+        controller.plan()
+
+
 def test_study_controller_runs_screening_then_replicates_finalists(
     tmp_path: Path,
 ) -> None:
