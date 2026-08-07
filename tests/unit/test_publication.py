@@ -107,6 +107,28 @@ def test_model_publication_commits_only_final_root_files(tmp_path: Path) -> None
     assert commits[0]["operations"] == operations
 
 
+def test_model_publication_rejects_a_symlinked_root_file_before_hub_call(
+    tmp_path: Path,
+) -> None:
+    directory = _model_directory(tmp_path)
+    target = tmp_path / "outside-model.safetensors"
+    target.write_bytes(b"weights")
+    (directory / "model.safetensors").unlink()
+    (directory / "model.safetensors").symlink_to(target)
+    hub_called = False
+
+    class FakeHub:
+        def create_commit(self, **kwargs: object) -> None:
+            del kwargs
+            nonlocal hub_called
+            hub_called = True
+
+    with pytest.raises(ModelPublicationError, match="symlink"):
+        publish_model_directory(directory, "owner/model", hub_api=FakeHub())
+
+    assert not hub_called
+
+
 def test_model_publication_groups_final_files_by_experiment_and_run(
     tmp_path: Path,
 ) -> None:

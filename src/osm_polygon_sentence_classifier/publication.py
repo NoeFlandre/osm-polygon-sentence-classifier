@@ -342,7 +342,13 @@ def ensure_model_repository(
 def _final_model_files(directory: Path) -> tuple[Path, ...]:
     if not directory.exists() or not directory.is_dir() or directory.is_symlink():
         raise ModelPublicationError("model output must be a real directory")
-    files = tuple(sorted(path for path in directory.iterdir() if path.is_file()))
+    try:
+        entries = tuple(directory.iterdir())
+    except OSError as error:
+        raise ModelPublicationError("model output cannot be read") from error
+    if any(path.is_symlink() for path in entries):
+        raise ModelPublicationError("model output cannot contain symlinks")
+    files = tuple(sorted(path for path in entries if path.is_file()))
     names = {path.name for path in files}
     if "config.json" not in names:
         raise ModelPublicationError("model output is missing config.json")

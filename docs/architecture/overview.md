@@ -47,9 +47,9 @@ training, publication, tracking, and Grid'5000 orchestration:
   available. The module does not submit
   Grid5000 work.
 - `publication.py` validates complete checkpoints and final model directories,
-  renders the safe model README, and performs add-only commits to the configured
-  Hugging Face model repository. It rejects incomplete output before any Hub
-  call.
+  rejects symlinked model output, renders the safe model README, and performs
+  add-only commits to the configured Hugging Face model repository. It rejects
+  incomplete or unsafe output before any Hub call.
 - `grid5000.py` keeps the immutable identity, policy-bounded allocation, fixed
   SSH/OAR argument construction, and compatibility submission boundary. Its
   worker command rejects non-x86_64 compute nodes before invoking the locked

@@ -7,7 +7,7 @@ import json
 import os
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -27,6 +27,7 @@ from .training import (
     ClassWeightMode,
     TrainableLayers,
     TrainingConfig,
+    _training_config_payload,
 )
 
 ABLATION_STUDY_ID = "landuse-v1"
@@ -182,25 +183,6 @@ def study_specification(
 
 def study_specification_fingerprint(specification: Mapping[str, object]) -> str:
     return hashlib.sha256(_canonical_json(specification).encode("utf-8")).hexdigest()
-
-
-def _training_config_payload(config: TrainingConfig) -> dict[str, object]:
-    payload: dict[str, object] = {}
-    for item in fields(config):
-        value = getattr(config, item.name)
-        if (
-            item.name
-            in {
-                "trainable_layers",
-                "class_weight_mode",
-                "tracking_project",
-                "artifact_namespace",
-            }
-            and value is None
-        ):
-            continue
-        payload[item.name] = str(value) if isinstance(value, Path) else value
-    return payload
 
 
 def _metric_mapping(value: object) -> dict[str, object]:

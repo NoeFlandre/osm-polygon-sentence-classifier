@@ -7,8 +7,6 @@ import json
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import fields
-from pathlib import Path
 from typing import Literal, cast
 
 from .ablation_study import (
@@ -37,7 +35,12 @@ from .grid5000_autonomous import (
 )
 from .grid5000_sites import DEFAULT_SITES, SiteRequirements
 from .grid5000_state import AutonomousStateStore
-from .training import DEFAULT_MODEL_NAME, TrainingConfig, TrainingError
+from .training import (
+    DEFAULT_MODEL_NAME,
+    TrainingConfig,
+    TrainingError,
+    _training_config_payload,
+)
 
 
 def _add_plan_arguments(parser: argparse.ArgumentParser) -> None:
@@ -208,25 +211,6 @@ def _add_ablation_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="cross the explicit gate and perform Grid'5000 and Hugging Face actions",
     )
-
-
-def _training_config_payload(config: TrainingConfig) -> dict[str, object]:
-    payload: dict[str, object] = {}
-    for item in fields(config):
-        value = getattr(config, item.name)
-        if (
-            item.name
-            in {
-                "trainable_layers",
-                "class_weight_mode",
-                "tracking_project",
-                "artifact_namespace",
-            }
-            and value is None
-        ):
-            continue
-        payload[item.name] = str(value) if isinstance(value, Path) else value
-    return payload
 
 
 def _build_plan(arguments: argparse.Namespace) -> Grid5000Plan:
