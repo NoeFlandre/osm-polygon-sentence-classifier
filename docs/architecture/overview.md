@@ -56,7 +56,8 @@ training, publication, tracking, and Grid'5000 orchestration:
   runtime. `grid5000_sites.py` probes all configured frontends from
   `oarnodes -J`, records CPU architecture, and includes `cpuarch='x86_64'` in
   generated GPU requests. `grid5000_remote.py` stages exact clean checkouts and
-  marker-owned data,
+  marker-owned data, and recognizes both single-file and sharded checkpoint
+  weights when verifying continuation evidence,
   `grid5000_oar.py` normalizes scheduler lifecycle facts,
   `grid5000_state.py` persists secure phases/events and recoverable legacy
   reconciliation, and `grid5000_autonomous.py` coordinates the one-command

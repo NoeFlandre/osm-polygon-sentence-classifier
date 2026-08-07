@@ -1,3 +1,6 @@
+import json
+import os
+import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -108,6 +111,69 @@ def test_checkpoint_probe_is_read_only_and_marker_bound() -> None:
     assert '"identity"' in command
     assert "rm -rf" not in command
     assert "a" * 20 in command
+
+
+def test_checkpoint_probe_recognizes_sharded_transformers_weights(
+    tmp_path: Path,
+) -> None:
+    run_id = "a" * 20
+    run_root = tmp_path / REMOTE_DATA_SUBDIRECTORY / "grid5000" / "runs" / run_id
+    output = run_root / "models" / "landuse"
+    checkpoint = output / "checkpoint-100"
+    checkpoint.mkdir(parents=True)
+    (run_root / ".operator-managed.json").write_text(
+        json.dumps(
+            {"schema_version": 1, "run_id": run_id, "status": "active"},
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+    for filename in (
+        "optimizer.pt",
+        "scheduler.pt",
+        "rng_state.pth",
+        "trainer_state.json",
+    ):
+        (checkpoint / filename).write_bytes(b"checkpoint")
+    (checkpoint / "checkpoint-manifest.json").write_text(
+        json.dumps(
+            {"global_step": 100, "identity": IDENTITY, "schema_version": 1},
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    (checkpoint / "model-00001-of-00002.safetensors").write_bytes(b"weights")
+
+    class LocalShellRunner:
+        def __call__(
+            self,
+            argv: Sequence[str],
+            *,
+            timeout: float,
+            input_text: str | None = None,
+        ) -> CommandResult:
+            result = subprocess.run(
+                ("bash", "-c", argv[-1]),
+                capture_output=True,
+                check=False,
+                env={**os.environ, "HOME": str(tmp_path)},
+                input=input_text,
+                text=True,
+                timeout=timeout,
+            )
+            return CommandResult(
+                returncode=result.returncode,
+                stdout=result.stdout,
+                stderr=result.stderr,
+            )
+
+    ready = Grid5000Remote("lille", runner=LocalShellRunner()).has_complete_checkpoint(
+        run_id,
+        output_subdirectory=Path("models/landuse"),
+        identity=IDENTITY,
+    )
+
+    assert ready is True
 
 
 def test_checkpoint_probe_can_read_a_failed_marker_for_explicit_resume() -> None:

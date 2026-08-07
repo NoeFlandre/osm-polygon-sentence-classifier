@@ -336,7 +336,19 @@ for checkpoint in "$output"/checkpoint-*; do
   [ -f "$checkpoint/optimizer.pt" ] && [ ! -L "$checkpoint/optimizer.pt" ] || continue
   [ -f "$checkpoint/scheduler.pt" ] && [ ! -L "$checkpoint/scheduler.pt" ] || continue
   [ -f "$checkpoint/rng_state.pth" ] && [ ! -L "$checkpoint/rng_state.pth" ] || continue
-  if [ -f "$checkpoint/model.safetensors" ] || [ -f "$checkpoint/pytorch_model.bin" ]; then
+  sharded_weight=false
+  for weight in \
+    "$checkpoint"/model-[0-9][0-9][0-9][0-9][0-9]-of-[0-9][0-9][0-9][0-9][0-9].safetensors \
+    "$checkpoint"/pytorch_model-[0-9][0-9][0-9][0-9][0-9]-of-[0-9][0-9][0-9][0-9][0-9].bin
+  do
+    if [ -f "$weight" ] && [ ! -L "$weight" ]; then
+      sharded_weight=true
+      break
+    fi
+  done
+  if {{ [ -f "$checkpoint/model.safetensors" ] && [ ! -L "$checkpoint/model.safetensors" ]; }} \
+    || {{ [ -f "$checkpoint/pytorch_model.bin" ] && [ ! -L "$checkpoint/pytorch_model.bin" ]; }} \
+    || "$sharded_weight"; then
     ready=true
     break
   fi
