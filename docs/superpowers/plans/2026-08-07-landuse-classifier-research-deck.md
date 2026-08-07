@@ -127,14 +127,15 @@ we need to recognize landuse language before using the polygon description.
 Slide 3 uses stacked rows:
 
 ~~~text
-Pass 1 — discover sentence-content hashes with contradictory labels
-Pass 2 — emit one clean representative per remaining usable hash
-Split assignment stays polygon-based; the cleaned dataset is never written
+First, find repeated sentences whose labels disagree
+Then, keep one representative of each remaining sentence
+Assign the split by polygon, not by sentence
 ~~~
 
 Include a “no polygon leakage” callout. State in plain language that a polygon
 can contain sentences with different labels, while the same sentence content
-with contradictory labels is excluded. Cite README.md and
+with contradictory labels is excluded. Mention sentence-content hashes only in
+speaker notes, not as visible jargon. Cite README.md and
 docs/guides/data-policy.md in notes.
 
 - [ ] **Step 3: Add the study design slide.**
@@ -151,10 +152,10 @@ Selection: positive-class F1
 Right-side visible factors:
 
 ~~~text
-Context: 128 / 256 / 512 tokens
-Learning rate: 1e-4 / 3e-4 / 1e-3
-Loss: standard / class-balanced
-Training depth: head / last two layers
+How much context: 128 / 256 / 512 tokens
+How fast to learn: 1e-4 / 3e-4 / 1e-3
+How to weight classes: equal / balanced
+How much of the model to train: head / last two layers
 ~~~
 
 Add jhu-clsp/mmBERT-small, frozen-encoder baseline, and binary head. Cite
@@ -191,7 +192,7 @@ Slide 7 closes with:
 ~~~text
 1. Freeze the protocol and publish a held-out evaluation split
 2. Compare threshold behavior, not only a single operating point
-3. Keep model, study registry, and Trackio artifacts linked by identity
+3. Keep each model, run record, and metric log tied to one experiment
 ~~~
 
 Include the public registry URL and pinned dataset/model/source identity as
