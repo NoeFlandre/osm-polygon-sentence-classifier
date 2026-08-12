@@ -8,6 +8,7 @@ from osm_polygon_sentence_classifier.grid5000_policy import (
     ReplacementCandidate,
     ReplacementOutcome,
     attempt_immediate_replacement,
+    decide_queued_replacement,
     policy_type_for,
     should_seek_replacement,
 )
@@ -49,6 +50,68 @@ def test_running_job_is_not_replaced() -> None:
 
     assert not should_seek_replacement(
         JobStatus(job_id=1, state=JobState.RUNNING), now=now
+    )
+
+
+def test_queued_replacement_decision_waits_for_an_imminent_job() -> None:
+    now = datetime(2026, 8, 5, 8, 0, tzinfo=UTC)
+
+    decision = decide_queued_replacement(
+        JobStatus(
+            job_id=1,
+            state=JobState.QUEUED,
+            scheduled_start="2026-08-05 10:05:00",
+        ),
+        site="grenoble",
+        job_id=1,
+        now=now,
+        attempt_count=0,
+        retry_due=True,
+        max_attempts=3,
+    )
+
+    assert decision.action == "wait"
+
+
+def test_queued_replacement_decision_starts_the_next_due_round() -> None:
+    now = datetime(2026, 8, 5, 10, 0, tzinfo=UTC)
+
+    decision = decide_queued_replacement(
+        JobStatus(job_id=1, state=JobState.QUEUED),
+        site="grenoble",
+        job_id=1,
+        now=now,
+        attempt_count=1,
+        retry_due=True,
+        max_attempts=3,
+    )
+
+    assert decision.action == "replace"
+    assert decision.attempt_count == 2
+    assert decision.attempt_timestamp == now.isoformat()
+
+
+def test_queued_replacement_decision_fails_after_the_bounded_rounds() -> None:
+    now = datetime(2026, 8, 5, 19, 0, tzinfo=UTC)
+
+    decision = decide_queued_replacement(
+        JobStatus(
+            job_id=1,
+            state=JobState.QUEUED,
+            scheduled_start="2026-08-06 08:02:02",
+        ),
+        site="grenoble",
+        job_id=1,
+        now=now,
+        attempt_count=3,
+        retry_due=False,
+        max_attempts=3,
+    )
+
+    assert decision.action == "fail"
+    assert decision.message == (
+        "grenoble job 1 remained queued with scheduled start 2026-08-06 08:02:02 "
+        "after 3 replacement rounds"
     )
 
 

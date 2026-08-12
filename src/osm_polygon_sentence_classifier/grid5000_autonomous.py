@@ -33,6 +33,7 @@ from .grid5000_policy import (
     SHORT_TRIAL_WALLTIME_SECONDS,
     ReplacementCandidate,
     attempt_immediate_replacement,
+    decide_queued_replacement,
     policy_type_for,
     should_seek_replacement,
 )
@@ -552,20 +553,22 @@ class AutonomousRunController:
         now = _now()
         facts = dict(current.facts or {})
         attempt_count = _replacement_attempt_count_for_job(facts, job_id=job_id)
-        if attempt_count >= MAX_REPLACEMENT_ATTEMPTS:
-            if not should_seek_replacement(status, now=now):
-                return current, site, job_id, remote
-            if status.scheduled_start is None:
-                message = (
-                    f"{site} job {job_id} remained queued with no start-time "
-                    f"prediction after {MAX_REPLACEMENT_ATTEMPTS} replacement rounds"
-                )
-            else:
-                message = (
-                    f"{site} job {job_id} remained queued with scheduled start "
-                    f"{status.scheduled_start} after "
-                    f"{MAX_REPLACEMENT_ATTEMPTS} replacement rounds"
-                )
+        retry_due = False
+        if attempt_count < MAX_REPLACEMENT_ATTEMPTS and should_seek_replacement(
+            status, now=now
+        ):
+            retry_due = _replacement_retry_due_for_job(facts, job_id=job_id, now=now)
+        decision = decide_queued_replacement(
+            status,
+            site=site,
+            job_id=job_id,
+            now=now,
+            attempt_count=attempt_count,
+            retry_due=retry_due,
+            max_attempts=MAX_REPLACEMENT_ATTEMPTS,
+        )
+        if decision.action == "fail":
+            message = cast(str, decision.message)
             self.emit(f"{message}; canceling stale fallback")
             OarClient(remote).cancel(job_id)
             return self._fail_terminal(
@@ -575,12 +578,10 @@ class AutonomousRunController:
                 remote=remote,
                 message=message,
             )
-        if not should_seek_replacement(
-            status, now=now
-        ) or not _replacement_retry_due_for_job(facts, job_id=job_id, now=now):
+        if decision.action == "wait":
             return current, site, job_id, remote
-        attempt_count += 1
-        attempt_timestamp = now.isoformat()
+        attempt_count = cast(int, decision.attempt_count)
+        attempt_timestamp = cast(str, decision.attempt_timestamp)
         self.emit(
             f"{site} job {job_id}: replacement round "
             f"{attempt_count}/{MAX_REPLACEMENT_ATTEMPTS}"

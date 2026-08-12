@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Literal
 
 from .grid5000_oar import GRID5000_TIMEZONE, JobState, JobStatus
 
@@ -69,6 +70,51 @@ def should_seek_replacement(
     if forecast is None:
         return True
     return forecast > now.astimezone(GRID5000_TIMEZONE) + immediate_start_limit
+
+
+@dataclass(frozen=True, slots=True)
+class QueuedReplacementDecision:
+    """Pure action selected for a queued fallback allocation."""
+
+    action: Literal["wait", "replace", "fail"]
+    attempt_count: int | None = None
+    attempt_timestamp: str | None = None
+    message: str | None = None
+
+
+def decide_queued_replacement(
+    status: JobStatus,
+    *,
+    site: str,
+    job_id: int,
+    now: datetime,
+    attempt_count: int,
+    retry_due: bool,
+    max_attempts: int,
+) -> QueuedReplacementDecision:
+    """Choose the next bounded action for a queued fallback job."""
+
+    if not should_seek_replacement(status, now=now):
+        return QueuedReplacementDecision(action="wait")
+    if attempt_count >= max_attempts:
+        if status.scheduled_start is None:
+            message = (
+                f"{site} job {job_id} remained queued with no start-time "
+                f"prediction after {max_attempts} replacement rounds"
+            )
+        else:
+            message = (
+                f"{site} job {job_id} remained queued with scheduled start "
+                f"{status.scheduled_start} after {max_attempts} replacement rounds"
+            )
+        return QueuedReplacementDecision(action="fail", message=message)
+    if not retry_due:
+        return QueuedReplacementDecision(action="wait")
+    return QueuedReplacementDecision(
+        action="replace",
+        attempt_count=attempt_count + 1,
+        attempt_timestamp=now.isoformat(),
+    )
 
 
 def forecast_exceeds_immediate_window(
@@ -172,10 +218,12 @@ __all__ = [
     "IMMEDIATE_START_LIMIT",
     "ReplacementCandidate",
     "ReplacementOutcome",
+    "QueuedReplacementDecision",
     "SHORT_TRIAL_WALLTIME_SECONDS",
     "TRIAL_POLL_SECONDS",
     "TRIAL_TIMEOUT_SECONDS",
     "attempt_immediate_replacement",
+    "decide_queued_replacement",
     "forecast_exceeds_immediate_window",
     "policy_type_for",
     "should_seek_replacement",
