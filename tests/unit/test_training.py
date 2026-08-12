@@ -6,6 +6,7 @@ from typing import Any, cast
 
 import pytest
 
+from osm_polygon_sentence_classifier import training_runtime
 from osm_polygon_sentence_classifier.checkpointing import (
     find_latest_complete_checkpoint,
     write_checkpoint_manifest,
@@ -326,9 +327,7 @@ def test_head_training_freezes_encoder_and_enables_classifier_heads() -> None:
 
 
 def test_balanced_class_weights_use_the_pinned_training_label_counts() -> None:
-    from osm_polygon_sentence_classifier import training
-
-    assert training._balanced_class_weights() == pytest.approx(
+    assert training_runtime.balanced_class_weights() == pytest.approx(
         (44208 / (2 * 35560), 44208 / (2 * 8648))
     )
 
@@ -394,7 +393,7 @@ def test_training_wires_managed_streams_tokenizer_trainer_and_tracking(
     _FakeTrainer.train_calls.clear()
     _FakeTrainer.environment_during_train.clear()
 
-    dependencies = training._TrainingDependencies(
+    dependencies = training_runtime.TrainingDependencies(
         iterable_dataset=_FakeDataset,
         auto_tokenizer=_FakeTokenizer,
         auto_model_for_sequence_classification=_FakeModel,
@@ -402,7 +401,9 @@ def test_training_wires_managed_streams_tokenizer_trainer_and_tracking(
         training_arguments=_FakeTrainingArguments,
         trainer=_FakeTrainer,
     )
-    monkeypatch.setattr(training, "_load_training_dependencies", lambda: dependencies)
+    monkeypatch.setattr(
+        training_runtime, "load_training_dependencies", lambda: dependencies
+    )
     monkeypatch.setattr(training, "_write_model_card", lambda *args, **kwargs: None)
 
     result = train_landuse_classifier(
@@ -475,7 +476,7 @@ def test_training_uses_the_ablation_trackio_project_and_artifact_namespace(
 ) -> None:
     from osm_polygon_sentence_classifier import training
 
-    dependencies = training._TrainingDependencies(
+    dependencies = training_runtime.TrainingDependencies(
         iterable_dataset=_FakeDataset,
         auto_tokenizer=_FakeTokenizer,
         auto_model_for_sequence_classification=_FakeModel,
@@ -483,7 +484,9 @@ def test_training_uses_the_ablation_trackio_project_and_artifact_namespace(
         training_arguments=_FakeTrainingArguments,
         trainer=_FakeTrainer,
     )
-    monkeypatch.setattr(training, "_load_training_dependencies", lambda: dependencies)
+    monkeypatch.setattr(
+        training_runtime, "load_training_dependencies", lambda: dependencies
+    )
     monkeypatch.setattr(training, "_write_model_card", lambda *args, **kwargs: None)
     _FakeTrainingArguments.calls.clear()
 
@@ -507,9 +510,7 @@ def test_training_uses_the_ablation_trackio_project_and_artifact_namespace(
 
 
 def test_weighted_trainer_is_used_for_balanced_loss() -> None:
-    from osm_polygon_sentence_classifier import training
-
-    dependencies = training._TrainingDependencies(
+    dependencies = training_runtime.TrainingDependencies(
         iterable_dataset=_FakeDataset,
         auto_tokenizer=_FakeTokenizer,
         auto_model_for_sequence_classification=_FakeModel,
@@ -518,7 +519,7 @@ def test_weighted_trainer_is_used_for_balanced_loss() -> None:
         trainer=_FakeTrainer,
     )
 
-    trainer = training._build_trainer(
+    trainer = training_runtime.build_trainer(
         dependencies,
         model=object(),
         training_arguments=object(),
@@ -539,7 +540,7 @@ def test_training_resumes_from_a_checkpoint_and_registers_identity_callback(
 ) -> None:
     from osm_polygon_sentence_classifier import training
 
-    dependencies = training._TrainingDependencies(
+    dependencies = training_runtime.TrainingDependencies(
         iterable_dataset=_FakeDataset,
         auto_tokenizer=_FakeTokenizer,
         auto_model_for_sequence_classification=_FakeModel,
@@ -547,7 +548,9 @@ def test_training_resumes_from_a_checkpoint_and_registers_identity_callback(
         training_arguments=_FakeTrainingArguments,
         trainer=_FakeTrainer,
     )
-    monkeypatch.setattr(training, "_load_training_dependencies", lambda: dependencies)
+    monkeypatch.setattr(
+        training_runtime, "load_training_dependencies", lambda: dependencies
+    )
     monkeypatch.setattr(training, "_write_model_card", lambda *args, **kwargs: None)
     _FakeTrainer.init_calls.clear()
     _FakeTrainer.train_calls.clear()
@@ -795,9 +798,7 @@ def test_checkpoint_callback_supports_trainer_initialization_event() -> None:
 
 
 def test_checkpoint_callback_uses_the_trainer_callback_base() -> None:
-    from osm_polygon_sentence_classifier import training
-
-    dependencies = training._TrainingDependencies(
+    dependencies = training_runtime.TrainingDependencies(
         iterable_dataset=_FakeDataset,
         auto_tokenizer=_FakeTokenizer,
         auto_model_for_sequence_classification=_FakeModel,
@@ -808,7 +809,7 @@ def test_checkpoint_callback_uses_the_trainer_callback_base() -> None:
     )
     _FakeTrainer.init_calls.clear()
 
-    training._build_trainer(
+    training_runtime.build_trainer(
         dependencies,
         model=object(),
         training_arguments=object(),
@@ -832,15 +833,13 @@ def test_checkpoint_callback_uses_the_trainer_callback_base() -> None:
 def test_training_reports_missing_optional_dependencies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from osm_polygon_sentence_classifier import training
-
     def missing_dependency(module_name: str) -> Any:
         raise ModuleNotFoundError(name=module_name)
 
-    monkeypatch.setattr(training, "import_module", missing_dependency)
+    monkeypatch.setattr(training_runtime, "import_module", missing_dependency)
 
     with pytest.raises(TrainingError, match="optional 'training' dependencies"):
-        training._load_training_dependencies()
+        training_runtime.load_training_dependencies()
 
 
 def test_training_passes_a_pinned_model_revision_to_both_loaders(
@@ -858,7 +857,7 @@ def test_training_passes_a_pinned_model_revision_to_both_loaders(
     _FakeTrainer.init_calls.clear()
     _FakeTrainer.save_model_calls.clear()
 
-    dependencies = training._TrainingDependencies(
+    dependencies = training_runtime.TrainingDependencies(
         iterable_dataset=_FakeDataset,
         auto_tokenizer=_FakeTokenizer,
         auto_model_for_sequence_classification=_FakeModel,
@@ -866,7 +865,9 @@ def test_training_passes_a_pinned_model_revision_to_both_loaders(
         training_arguments=_FakeTrainingArguments,
         trainer=_FakeTrainer,
     )
-    monkeypatch.setattr(training, "_load_training_dependencies", lambda: dependencies)
+    monkeypatch.setattr(
+        training_runtime, "load_training_dependencies", lambda: dependencies
+    )
     monkeypatch.setattr(training, "_write_model_card", lambda *args, **kwargs: None)
     revision = "d" * 40
 
@@ -898,7 +899,7 @@ def test_training_can_publish_the_final_model_and_sync_static_trackio(
     _FakeTrainer.init_calls.clear()
     _FakeTrainer.save_model_calls.clear()
 
-    dependencies = training._TrainingDependencies(
+    dependencies = training_runtime.TrainingDependencies(
         iterable_dataset=_FakeDataset,
         auto_tokenizer=_FakeTokenizer,
         auto_model_for_sequence_classification=_FakeModel,
@@ -906,10 +907,14 @@ def test_training_can_publish_the_final_model_and_sync_static_trackio(
         training_arguments=_FakeTrainingArguments,
         trainer=_FakeTrainer,
     )
-    monkeypatch.setattr(training, "_load_training_dependencies", lambda: dependencies)
+    monkeypatch.setattr(
+        training_runtime, "load_training_dependencies", lambda: dependencies
+    )
     checkpoint_hub_api = object()
     monkeypatch.setattr(
-        training, "_load_checkpoint_publication_api", lambda: checkpoint_hub_api
+        training_runtime,
+        "load_checkpoint_publication_api",
+        lambda: checkpoint_hub_api,
     )
     publication_calls: list[Path] = []
     monkeypatch.setattr(

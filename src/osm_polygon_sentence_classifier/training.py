@@ -6,11 +6,11 @@ import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, fields
-from importlib import import_module
 from pathlib import Path
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, Literal, TypedDict
 
 from . import training_metrics as _training_metrics
+from . import training_runtime as _training_runtime
 from .checkpointing import CheckpointError, find_latest_complete_checkpoint
 from .config import ProjectConfig
 from .dataset_contract import LANDUSE_DATASET_CONTRACT, DatasetContract
@@ -38,13 +38,10 @@ from .training_freezing import (
     TrainingError,
     configure_trainable_layers,
 )
-from .training_publication import (
-    make_checkpoint_manifest_callback as _make_checkpoint_manifest_callback,
-)
 from .training_publication import write_model_card as _write_model_card
+from .training_runtime import ClassWeightMode
 
 LabelId = Literal[0, 1]
-ClassWeightMode = Literal["none", "balanced"]
 
 LABEL_TO_ID: dict[TrainingLabel, LabelId] = {"no": 0, "yes": 1}
 ID_TO_LABEL: dict[int, str] = {0: "no", 1: "yes"}
@@ -194,25 +191,6 @@ class TrainingResult:
     metrics: Mapping[str, object] | None = None
 
 
-def _classification_metrics(eval_prediction: Any) -> dict[str, float]:
-    try:
-        return _training_metrics.classification_metrics(eval_prediction)
-    except _training_metrics.MetricsInputError as error:
-        raise TrainingError(str(error)) from error
-
-
-def _balanced_class_weights() -> tuple[float, float]:
-    """Return normalized inverse-frequency weights from the pinned train split."""
-
-    negative_count = 35_560
-    positive_count = 8_648
-    total = negative_count + positive_count
-    return (
-        total / (2 * negative_count),
-        total / (2 * positive_count),
-    )
-
-
 def _training_config_payload(config: TrainingConfig) -> dict[str, object]:
     payload: dict[str, object] = {}
     for item in fields(config):
@@ -260,19 +238,6 @@ def _sync_static_trackio(
         raise TrainingError(failure_message) from error
 
 
-@dataclass(frozen=True, slots=True)
-class _TrainingDependencies:
-    """Lazily imported Hugging Face classes, kept injectable for unit tests."""
-
-    iterable_dataset: Any
-    auto_tokenizer: Any
-    auto_model_for_sequence_classification: Any
-    data_collator_with_padding: Any
-    training_arguments: Any
-    trainer: Any
-    trainer_callback: Any | None = None
-
-
 def _prepare_checkpoint_resume(
     output_directory: Path,
     *,
@@ -296,123 +261,6 @@ def _prepare_checkpoint_resume(
     if selected is None or selected.path != resume_from_checkpoint:
         raise TrainingError("requested checkpoint is not a complete identity match")
     return resume_from_checkpoint, identity
-
-
-def _weighted_trainer_type(trainer_type: Any) -> Any:
-    """Bind the fixed training-split class weights to a Trainer subclass."""
-
-    class WeightedTrainer(trainer_type):
-        def compute_loss(
-            self,
-            model: Any,
-            inputs: dict[str, Any],
-            return_outputs: bool = False,
-            num_items_in_batch: Any = None,
-        ) -> Any:
-            del num_items_in_batch
-            try:
-                torch = import_module("torch")
-            except ModuleNotFoundError as error:
-                raise TrainingError(
-                    "balanced loss requires the torch training dependency"
-                ) from error
-            labels = inputs.pop("labels")
-            outputs = model(**inputs)
-            logits = getattr(outputs, "logits", None)
-            if logits is None and isinstance(outputs, Mapping):
-                logits = outputs.get("logits")
-            if logits is None:
-                raise TrainingError(
-                    "model output does not expose classification logits"
-                )
-            weights = torch.tensor(
-                _balanced_class_weights(),
-                dtype=logits.dtype,
-                device=logits.device,
-            )
-            loss = torch.nn.functional.cross_entropy(logits, labels, weight=weights)
-            return (loss, outputs) if return_outputs else loss
-
-    return WeightedTrainer
-
-
-def _build_trainer(
-    dependencies: _TrainingDependencies,
-    *,
-    model: Any,
-    training_arguments: Any,
-    train_dataset: Any,
-    validation_dataset: Any,
-    data_collator: Any,
-    checkpoint_identity: Mapping[str, object] | None,
-    model_repository_id: str | None = None,
-    trackio_space_id: str | None = None,
-    tracking_settings: TrackioSettings | None = None,
-    hub_api: Any | None = None,
-    class_weight_mode: ClassWeightMode | None = None,
-) -> Any:
-    trainer_values: dict[str, object] = {
-        "model": model,
-        "args": training_arguments,
-        "train_dataset": train_dataset,
-        "eval_dataset": validation_dataset,
-        "data_collator": data_collator,
-        "compute_metrics": _classification_metrics,
-    }
-    if checkpoint_identity is not None:
-        trainer_values["callbacks"] = [
-            _make_checkpoint_manifest_callback(
-                checkpoint_identity,
-                dependencies.trainer_callback,
-                model_repository_id=model_repository_id,
-                trackio_space_id=trackio_space_id,
-                tracking_settings=tracking_settings,
-                hub_api=hub_api,
-            )
-        ]
-    trainer_type = dependencies.trainer
-    if class_weight_mode == "balanced":
-        trainer_type = _weighted_trainer_type(trainer_type)
-    return trainer_type(**trainer_values)
-
-
-def _run_trainer(trainer: Any, resume_from_checkpoint: Path | None) -> object:
-    if resume_from_checkpoint is None:
-        return trainer.train()
-    return trainer.train(resume_from_checkpoint=str(resume_from_checkpoint))
-
-
-def _load_training_dependencies() -> _TrainingDependencies:
-    try:
-        datasets_module = cast(Any, import_module("datasets"))
-        transformers_module = cast(Any, import_module("transformers"))
-    except ModuleNotFoundError as error:
-        if error.name not in {"datasets", "transformers", "torch", "accelerate"}:
-            raise
-        raise TrainingError(
-            "optional 'training' dependencies are required; install the training extra"
-        ) from error
-    return _TrainingDependencies(
-        iterable_dataset=datasets_module.IterableDataset,
-        auto_tokenizer=transformers_module.AutoTokenizer,
-        auto_model_for_sequence_classification=(
-            transformers_module.AutoModelForSequenceClassification
-        ),
-        data_collator_with_padding=transformers_module.DataCollatorWithPadding,
-        training_arguments=transformers_module.TrainingArguments,
-        trainer=transformers_module.Trainer,
-        trainer_callback=transformers_module.TrainerCallback,
-    )
-
-
-def _load_checkpoint_publication_api() -> Any:
-    try:
-        hub = cast(Any, import_module("huggingface_hub"))
-        return hub.HfApi()
-    except Exception as error:
-        raise TrainingError(
-            "Hugging Face checkpoint publication requires the training dependencies"
-        ) from error
 
 
 def iter_split_training_records(
@@ -439,7 +287,7 @@ def iter_split_training_records(
 
 
 def _make_tokenized_dataset(
-    dependencies: _TrainingDependencies,
+    dependencies: _training_runtime.TrainingDependencies,
     rows_factory: Callable[[], Iterable[Mapping[str, object]]],
     *,
     split: DatasetSplit,
@@ -588,7 +436,7 @@ def train_landuse_classifier(
             and training_config.tracking_project is not None
         ):
             restore_static_project_snapshot(tracking)
-        dependencies = _load_training_dependencies()
+        dependencies = _training_runtime.load_training_dependencies()
         tokenizer_kwargs: dict[str, object] = {
             "cache_dir": str(model_cache_directory),
             "use_fast": True,
@@ -641,8 +489,8 @@ def train_landuse_classifier(
         data_collator = dependencies.data_collator_with_padding(tokenizer=tokenizer)
         checkpoint_hub_api = None
         if checkpoint_identity is not None and training_config.publish_to_hub:
-            checkpoint_hub_api = _load_checkpoint_publication_api()
-        trainer = _build_trainer(
+            checkpoint_hub_api = _training_runtime.load_checkpoint_publication_api()
+        trainer = _training_runtime.build_trainer(
             dependencies,
             model=model,
             training_arguments=training_arguments,
@@ -662,7 +510,7 @@ def train_landuse_classifier(
             hub_api=checkpoint_hub_api,
             class_weight_mode=training_config.class_weight_mode,
         )
-        train_output = _run_trainer(trainer, resume_from_checkpoint)
+        train_output = _training_runtime.run_trainer(trainer, resume_from_checkpoint)
         trainer.save_model(str(output_directory))
         tokenizer.save_pretrained(str(output_directory))
         final_metrics = _training_metrics.metrics_for_model_card(train_output, trainer)

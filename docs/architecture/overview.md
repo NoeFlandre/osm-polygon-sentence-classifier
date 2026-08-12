@@ -35,6 +35,8 @@ training, publication, tracking, and Grid'5000 orchestration:
   frozen; only the binary classification head is trained, following the
   FineWeb-Edu pattern. `training_publication.py` owns checkpoint manifests,
   checkpoint model cards, Hub publication, and static Trackio updates.
+  `training_runtime.py` owns lazy optional-dependency loading, Trainer
+  construction, balanced-loss wiring, and resume invocation.
   Model caches, five retained checkpoints, outputs, and Trackio state are
   directed beneath the managed root. Checkpoints carry the immutable run
   identity so a later Grid5000 worker can resume safely. Explicit flags publish
