@@ -17,10 +17,15 @@ from .grid5000 import (
     MINIMUM_HOME_HEADROOM_BYTES,
     CommandRunner,
     Grid5000Allocation,
-    Grid5000ExecutionError,
     Grid5000Plan,
     Grid5000RunIdentity,
     parse_quota_output,
+)
+from .grid5000_checkpointing import (
+    CHECKPOINT_PROBE_ATTEMPTS,
+    CHECKPOINT_PROBE_RETRY_SECONDS,
+    CheckpointProbeError,
+    probe_complete_checkpoint,
 )
 from .grid5000_oar import (
     JobState,
@@ -62,8 +67,6 @@ _UNSET = object()
 DEFAULT_AUTONOMOUS_WALLTIME_SECONDS = SHORT_TRIAL_WALLTIME_SECONDS
 MAX_REPLACEMENT_ATTEMPTS = 3
 REPLACEMENT_RETRY_INTERVAL = timedelta(minutes=10)
-CHECKPOINT_PROBE_ATTEMPTS = 3
-CHECKPOINT_PROBE_RETRY_SECONDS = 5.0
 _SOURCE_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
 
 
@@ -669,40 +672,25 @@ class AutonomousRunController:
         allow_failed_status: bool,
     ) -> bool:
         """Probe checkpoint evidence with bounded retries for SSH outages."""
-
-        last_error: Grid5000ExecutionError | None = None
-        for attempt in range(1, CHECKPOINT_PROBE_ATTEMPTS + 1):
-            try:
-                return bool(
-                    remote.has_complete_checkpoint(
-                        self.config.identity.run_id,
-                        output_subdirectory=self.config.training_config.output_subdirectory,
-                        identity=self.config.identity.canonical_payload,
-                        allow_failed_status=allow_failed_status,
-                    )
-                )
-            except Grid5000ExecutionError as error:
-                last_error = error
-                if attempt == CHECKPOINT_PROBE_ATTEMPTS:
-                    break
-                delay = min(self.poll_seconds, CHECKPOINT_PROBE_RETRY_SECONDS)
-                self.emit(
-                    f"{site} job {job_id}: checkpoint probe failed "
-                    f"(attempt {attempt}/{CHECKPOINT_PROBE_ATTEMPTS}); "
-                    f"retrying in {delay:g}s"
-                )
-                self.sleeper(delay)
-            except Exception as error:
-                detail = str(error).strip()
-                suffix = f": {detail[:240]}" if detail else ""
-                raise AutonomousRunError(
-                    f"checkpoint availability could not be verified{suffix}"
-                ) from error
-        detail = str(last_error).strip() if last_error is not None else ""
-        suffix = f": {detail[:240]}" if detail else ""
-        raise AutonomousRunError(
-            f"checkpoint availability could not be verified{suffix}"
-        ) from last_error
+        try:
+            return probe_complete_checkpoint(
+                remote,
+                run_id=self.config.identity.run_id,
+                output_subdirectory=self.config.training_config.output_subdirectory,
+                identity=self.config.identity.canonical_payload,
+                allow_failed_status=allow_failed_status,
+                site=site,
+                job_id=job_id,
+                poll_seconds=self.poll_seconds,
+                emit=self.emit,
+                sleep=self.sleeper,
+                attempts=CHECKPOINT_PROBE_ATTEMPTS,
+                retry_seconds=CHECKPOINT_PROBE_RETRY_SECONDS,
+            )
+        except CheckpointProbeError as error:
+            if error.__cause__ is not None:
+                raise AutonomousRunError(str(error)) from error.__cause__
+            raise AutonomousRunError(str(error)) from error
 
     def _continue_after_incomplete(
         self,
