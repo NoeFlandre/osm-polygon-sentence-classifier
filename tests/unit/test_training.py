@@ -275,11 +275,11 @@ class _FakeClassifier:
 
 
 def test_last2_training_unfreezes_only_the_last_two_encoder_layers() -> None:
-    from osm_polygon_sentence_classifier import training
+    from osm_polygon_sentence_classifier import training_freezing
 
     model = _FakeLayeredModel()
 
-    training._configure_trainable_layers(model, "last2")
+    training_freezing.configure_trainable_layers(model, "last2")
 
     assert all(
         not parameter.requires_grad
@@ -294,13 +294,13 @@ def test_last2_training_unfreezes_only_the_last_two_encoder_layers() -> None:
 
 
 def test_last2_training_accepts_module_list_like_encoder_layers() -> None:
-    from osm_polygon_sentence_classifier import training
+    from osm_polygon_sentence_classifier import training_freezing
 
     model = _FakeLayeredModel()
     ordered_layers = _FakeOrderedLayers(_FakeLayer() for _ in range(4))
     model.base_model.layers = ordered_layers
 
-    training._configure_trainable_layers(model, "last2")
+    training_freezing.configure_trainable_layers(model, "last2")
 
     assert all(
         not parameter.requires_grad
@@ -311,6 +311,18 @@ def test_last2_training_accepts_module_list_like_encoder_layers() -> None:
         for layer in ordered_layers.layers[-2:]
         for parameter in layer.parameters()
     )
+
+
+def test_head_training_freezes_encoder_and_enables_classifier_heads() -> None:
+    from osm_polygon_sentence_classifier import training_freezing
+
+    model = _FakeModel()
+
+    training_freezing.configure_trainable_layers(model, "head")
+
+    assert all(not parameter.requires_grad for parameter in model.encoder_parameters)
+    assert all(parameter.requires_grad for parameter in model.head.parameters())
+    assert all(parameter.requires_grad for parameter in model.classifier.parameters())
 
 
 def test_balanced_class_weights_use_the_pinned_training_label_counts() -> None:

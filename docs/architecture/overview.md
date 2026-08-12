@@ -29,9 +29,11 @@ training, publication, tracking, and Grid'5000 orchestration:
 - `training.py` adapts the clean iterator to lazy split-specific Trainer
   records and wires a Hugging Face sequence-classification Trainer. The pure
   evaluation and model-card metric helpers live in `training_metrics.py`, so
-  the orchestration module does not also own metric calculation. Its
-  default `jhu-clsp/mmBERT-small` encoder is multilingual and frozen; only the
-  binary classification head is trained, following the FineWeb-Edu pattern.
+  the orchestration module does not also own metric calculation.
+  `training_freezing.py` owns the frozen-head and last-two-layer parameter
+  policies. Its default `jhu-clsp/mmBERT-small` encoder is multilingual and
+  frozen; only the binary classification head is trained, following the
+  FineWeb-Edu pattern.
   Model caches, five retained checkpoints, outputs, and Trackio state are
   directed beneath the managed root. Checkpoints carry the immutable run
   identity so a later Grid5000 worker can resume safely. Explicit flags publish
