@@ -589,7 +589,7 @@ def test_training_resumes_from_a_checkpoint_and_registers_identity_callback(
 
 
 def test_checkpoint_callback_writes_identity_after_a_save(tmp_path: Path) -> None:
-    from osm_polygon_sentence_classifier import training
+    from osm_polygon_sentence_classifier import training_publication
 
     checkpoint = tmp_path / "checkpoint-7"
     checkpoint.mkdir()
@@ -605,7 +605,7 @@ def test_checkpoint_callback_writes_identity_after_a_save(tmp_path: Path) -> Non
     )
     identity = {"run_id": "a" * 20, "model_revision": "b" * 40}
 
-    training._CheckpointManifestCallback(identity).on_save(
+    training_publication.CheckpointManifestCallback(identity).on_save(
         args=SimpleNamespace(output_dir=str(tmp_path)),
         state=SimpleNamespace(global_step=7),
         control=object(),
@@ -620,7 +620,7 @@ def test_checkpoint_callback_writes_model_card_before_publication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from osm_polygon_sentence_classifier import training
+    from osm_polygon_sentence_classifier import training_publication
 
     checkpoint = tmp_path / "checkpoint-7"
     checkpoint.mkdir()
@@ -657,15 +657,15 @@ def test_checkpoint_callback_writes_model_card_before_publication(
         publication_calls.append((directory, repository_id, identity))
         return object()
 
-    monkeypatch.setattr(training, "publish_checkpoint_directory", publish)
+    monkeypatch.setattr(training_publication, "publish_checkpoint_directory", publish)
     monkeypatch.setattr(
-        training,
+        training_publication,
         "sync_project_to_static_space",
         lambda settings, **kwargs: sync_calls.append((settings, kwargs))
         or TRACKIO_STATIC_SPACE_ID,
     )
 
-    training._CheckpointManifestCallback(
+    training_publication.CheckpointManifestCallback(
         identity,
         model_repository_id="owner/model",
         tracking_settings=cast(Any, object()),
@@ -683,7 +683,7 @@ def test_checkpoint_callback_writes_model_card_before_publication(
 def test_checkpoint_callback_queues_hub_publication_until_training_end(
     tmp_path: Path,
 ) -> None:
-    from osm_polygon_sentence_classifier import training
+    from osm_polygon_sentence_classifier import training_publication
 
     checkpoint = tmp_path / "checkpoint-7"
     checkpoint.mkdir()
@@ -712,7 +712,7 @@ def test_checkpoint_callback_queues_hub_publication_until_training_end(
             events.append("queue")
             return Future()
 
-    callback = training._CheckpointManifestCallback(
+    callback = training_publication.CheckpointManifestCallback(
         {"run_id": "a" * 20, "model_revision": "b" * 40},
         model_repository_id="owner/model",
         hub_api=Hub(),
@@ -736,7 +736,7 @@ def test_checkpoint_callback_queues_hub_publication_until_training_end(
 def test_checkpoint_callback_waits_before_retained_checkpoint_rotation(
     tmp_path: Path,
 ) -> None:
-    from osm_polygon_sentence_classifier import training
+    from osm_polygon_sentence_classifier import training_publication
 
     events: list[str] = []
 
@@ -753,7 +753,7 @@ def test_checkpoint_callback_waits_before_retained_checkpoint_rotation(
             events.append("queue")
             return Future()
 
-    callback = training._CheckpointManifestCallback(
+    callback = training_publication.CheckpointManifestCallback(
         {"run_id": "a" * 20, "model_revision": "b" * 40},
         model_repository_id="owner/model",
         hub_api=Hub(),
@@ -781,11 +781,11 @@ def test_checkpoint_callback_waits_before_retained_checkpoint_rotation(
 
 
 def test_checkpoint_callback_supports_trainer_initialization_event() -> None:
-    from osm_polygon_sentence_classifier import training
+    from osm_polygon_sentence_classifier import training_publication
 
     control = object()
 
-    result = training._CheckpointManifestCallback({}).on_init_end(
+    result = training_publication.CheckpointManifestCallback({}).on_init_end(
         args=SimpleNamespace(),
         state=SimpleNamespace(),
         control=control,

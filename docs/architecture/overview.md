@@ -33,7 +33,8 @@ training, publication, tracking, and Grid'5000 orchestration:
   `training_freezing.py` owns the frozen-head and last-two-layer parameter
   policies. Its default `jhu-clsp/mmBERT-small` encoder is multilingual and
   frozen; only the binary classification head is trained, following the
-  FineWeb-Edu pattern.
+  FineWeb-Edu pattern. `training_publication.py` owns checkpoint manifests,
+  checkpoint model cards, Hub publication, and static Trackio updates.
   Model caches, five retained checkpoints, outputs, and Trackio state are
   directed beneath the managed root. Checkpoints carry the immutable run
   identity so a later Grid5000 worker can resume safely. Explicit flags publish
