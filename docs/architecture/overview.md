@@ -74,10 +74,12 @@ training, publication, tracking, and Grid'5000 orchestration:
   allocation-local scratch. Durable model/data/Trackio paths remain
   home-scoped, and it has no retry, scheduler, or CPU-fallback responsibility.
 - `ablation_study.py` owns the immutable `landuse-v1` matrix, screening and
-  replication order, durable study state, public run registry, and generated
-  `study.json`/`results.json` documents. It executes one ablation at a time
-  through the autonomous controller and never races multiple jobs. Malformed
-  persisted run records are rejected rather than silently ignored.
+  replication order, durable study state, and public run-row preparation.
+  `ablation_reporting.py` renders the public README and generated
+  `study.json`/`results.json` documents from those prepared rows. The study
+  executes one ablation at a time through the autonomous controller and never
+  races multiple jobs. Malformed persisted run records are rejected rather
+  than silently ignored.
 
 The audit command is the only local data-consuming command. The autonomous
 Grid'5000 worker consumes the pinned dataset only after the explicit
