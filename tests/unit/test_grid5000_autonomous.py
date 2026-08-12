@@ -326,6 +326,38 @@ def _config() -> AutonomousRunConfig:
     )
 
 
+def test_continuation_helper_does_not_require_unused_status(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _config()
+    controller = AutonomousRunController(config, state_root=tmp_path / "runs")
+    current = AutonomousRunState(
+        run_id=config.identity.run_id,
+        phase="queued",
+        identity=config.identity.canonical_payload,
+        site="grenoble",
+        job_id=99,
+        facts={"continuation_count": config.max_continuations},
+    )
+    sentinel = object()
+    monkeypatch.setattr(
+        controller,
+        "_fail_terminal",
+        lambda *_args, **_kwargs: sentinel,
+    )
+
+    result = controller._continue_after_incomplete(
+        current,
+        site="grenoble",
+        job_id=99,
+        remote=object(),
+        reason="test continuation",
+    )
+
+    assert result is sentinel
+
+
 def test_legacy_replacement_state_is_upgraded_for_the_current_job() -> None:
     assert (
         _replacement_attempt_count_for_job(

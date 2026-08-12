@@ -708,7 +708,6 @@ class AutonomousRunController:
         self,
         current: AutonomousRunState,
         *,
-        status: JobStatus,
         site: str,
         job_id: int,
         remote: Any,
@@ -815,7 +814,6 @@ class AutonomousRunController:
         if status.state is not JobState.TERMINATED or status.exit_code not in {None, 0}:
             return self._continue_after_incomplete(
                 current,
-                status=status,
                 site=site,
                 job_id=job_id,
                 remote=remote,
@@ -836,7 +834,6 @@ class AutonomousRunController:
         except Exception as error:
             return self._continue_after_incomplete(
                 current,
-                status=status,
                 site=site,
                 job_id=job_id,
                 remote=remote,
@@ -899,7 +896,6 @@ class AutonomousRunController:
         )
         return self._continue_after_incomplete(
             current,
-            status=status,
             site=current.site,
             job_id=current.job_id,
             remote=remote,
