@@ -27,7 +27,9 @@ training, publication, tracking, and Grid'5000 orchestration:
   Bucket settings. It provisions the free static Space and does not deploy a
   Gradio service; normal configuration does not import or start Trackio.
 - `training.py` adapts the clean iterator to lazy split-specific Trainer
-  records and wires a Hugging Face sequence-classification Trainer. Its
+  records and wires a Hugging Face sequence-classification Trainer. The pure
+  evaluation and model-card metric helpers live in `training_metrics.py`, so
+  the orchestration module does not also own metric calculation. Its
   default `jhu-clsp/mmBERT-small` encoder is multilingual and frozen; only the
   binary classification head is trained, following the FineWeb-Edu pattern.
   Model caches, five retained checkpoints, outputs, and Trackio state are

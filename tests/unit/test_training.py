@@ -110,26 +110,6 @@ def test_training_config_rejects_non_positive_integer_settings(
         cast(Any, TrainingConfig)(**{field: value})
 
 
-def test_classification_metrics_report_accuracy_precision_recall_and_f1() -> None:
-    from osm_polygon_sentence_classifier import training
-
-    metrics = training._classification_metrics(
-        SimpleNamespace(
-            predictions=[[3.0, 1.0], [1.0, 4.0], [2.0, 1.0], [0.0, 5.0]],
-            label_ids=[0, 1, 1, 1],
-        )
-    )
-
-    assert metrics["accuracy"] == pytest.approx(0.75)
-    assert metrics["precision"] == pytest.approx(1.0)
-    assert metrics["recall"] == pytest.approx(2 / 3)
-    assert metrics["f1"] == pytest.approx(0.8)
-    assert metrics["macro_f1"] == pytest.approx(0.7333333333333334)
-    assert metrics["balanced_accuracy"] == pytest.approx(5 / 6)
-    assert metrics["positive_support"] == pytest.approx(3)
-    assert metrics["negative_support"] == pytest.approx(1)
-
-
 def test_training_config_supports_ablation_controls() -> None:
     config = TrainingConfig(
         trainable_layers="last2",
@@ -786,29 +766,6 @@ def test_checkpoint_callback_waits_before_retained_checkpoint_rotation(
         )
 
     assert events == ["queue", "queue", "wait"]
-
-
-def test_model_card_metrics_include_the_latest_evaluation_metrics() -> None:
-    from osm_polygon_sentence_classifier import training
-
-    metrics = training._metrics_for_model_card(
-        SimpleNamespace(metrics={"train_loss": 0.4}),
-        SimpleNamespace(
-            state=SimpleNamespace(
-                log_history=[
-                    {"eval_loss": 0.3, "eval_accuracy": 0.8, "eval_f1": 0.7},
-                    {"loss": 0.2},
-                ]
-            )
-        ),
-    )
-
-    assert metrics == {
-        "train_loss": 0.4,
-        "eval_accuracy": 0.8,
-        "eval_f1": 0.7,
-        "eval_loss": 0.3,
-    }
 
 
 def test_checkpoint_callback_supports_trainer_initialization_event() -> None:
