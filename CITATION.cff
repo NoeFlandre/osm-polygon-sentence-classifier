@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as follows."
+type: software
+title: "OSM Polygon Sentence Classifier"
+abstract: >-
+  Train a sentence classifier for OpenStreetMap polygon descriptions,
+  starting with the landuse task.
+authors:
+  - family-names: Flandre
+    given-names: Noe
+version: 0.1.0
+date-released: 2026-08-12
+repository-code: "https://github.com/NoeFlandre/osm-polygon-sentence-classifier"
+url: "https://github.com/NoeFlandre/osm-polygon-sentence-classifier"
+license: Apache-2.0
+keywords:
+  - OpenStreetMap
+  - sentence classification
+  - landuse
+  - machine learning

@@ -212,3 +212,13 @@ run root. The legacy `submit` command remains available as a lower-level,
 single-site compatibility boundary.
 See [`docs/reference/grid5000-operator.md`](docs/reference/grid5000-operator.md)
 for the complete contract.
+
+## Citation
+
+If you use this software, please cite:
+
+> Flandre, Noe. (2026). *OSM Polygon Sentence Classifier* (version 0.1.0).
+> https://github.com/NoeFlandre/osm-polygon-sentence-classifier
+
+The repository also includes [`CITATION.cff`](CITATION.cff), which GitHub uses
+to generate the “Cite this repository” entry.
