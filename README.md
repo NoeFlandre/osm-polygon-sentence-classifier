@@ -3,6 +3,9 @@
 Train a sentence classifier for OSM polygon descriptions, starting with the
 `landuse` task.
 
+The public [MkDocs documentation](https://noeflandre.github.io/osm-polygon-sentence-classifier/)
+contains the guides, architecture notes, and operational reference.
+
 ## Status
 
 The first landuse experiment is complete: the reproducible `landuse-v1`
@@ -87,7 +90,7 @@ model. The Hub study `results.json` contains the complete scalar metrics and
 
 - Training source: [NoeFlandre/osm-polygon-wikidata-sentence-relevance](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance)
 - Dedicated model repository: [NoeFlandre/osm-polygon-sentence-classifier](https://huggingface.co/NoeFlandre/osm-polygon-sentence-classifier)
-- Local project-data root: `/Volumes/Seagate M3/projects/osm-polygon-sentence-classifier`
+- Maintainer-only local project-data root (not a repository directory): `/Volumes/Seagate M3/projects/osm-polygon-sentence-classifier`
 
 All local datasets, checkpoints, models, and experiment logs must be kept
 beneath the external data root. Quality commands do not download data or
@@ -110,7 +113,7 @@ remains stable across continuations.
 Run the audit only when the pinned dataset review is explicitly authorized:
 
 ```bash
-audit-landuse-dataset
+uv run audit-landuse-dataset
 ```
 
 The command writes `audit_report.json` and `split_manifest.json` beneath
@@ -146,8 +149,8 @@ selects a factually compatible x86_64 GPU (including CUDA capability `>= 7.5`),
 derives the correct OAR queue/resource type from `oarnodes`, stages the exact
 checkout, submits one short job, and monitors it. The worker rechecks the
 assigned GPU before training and retains five complete, identity-bound
-checkpoints. If a
-job ends before producing a verified model, the controller continues only from
+checkpoints. If a job ends before producing a verified model, the controller
+continues only from
 the newest complete checkpoint, on the same site, with a bounded successor
 job; it never restarts from scratch. The default limit is three continuation
 jobs and can be changed with `--max-continuations`. If OAR forecasts the
@@ -175,12 +178,14 @@ previous recorded Grid'5000 job is still active. With `--execute`, it requires
 a clean checkout and uses that checkout's pinned commit for resumed worker code
 while preserving the original run identity and checkpoint contract.
 
-Run the complete lifecycle with a pinned source/model pair:
+Run the complete lifecycle with a pinned source/model pair. This example uses
+the current committed source revision and the model revision used by the
+completed study:
 
 ```bash
 uv run grid5000-landuse run \
-  --source-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-  --model-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+  --source-commit "$(git rev-parse HEAD)" \
+  --model-revision abc32620dd4f6ab06f5fbe905dc25f310618e09f \
   --publish \
   --sync-trackio \
   --execute
@@ -201,8 +206,8 @@ For a side-effect-free autonomous plan, omit `--execute`:
 ```bash
 uv run grid5000-landuse plan \
   --site nancy \
-  --source-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-  --model-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  --source-commit "$(git rev-parse HEAD)" \
+  --model-revision abc32620dd4f6ab06f5fbe905dc25f310618e09f
 ```
 
 The `run --execute` gate is the only path that performs SSH, policy, quota,

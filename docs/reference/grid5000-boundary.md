@@ -62,7 +62,8 @@ starts a continuation from scratch. The completion manifest contains no token
 or raw scheduler output. ARM/aarch64 nodes remain ineligible because the
 image and locked `uv` paths are both x86_64.
 
-The local state root is the approved external data volume:
+On the maintainer's local volume, the state root is the approved external data
+volume:
 
 ```text
 /Volumes/Seagate M3/projects/osm-polygon-sentence-classifier/grid5000/runs

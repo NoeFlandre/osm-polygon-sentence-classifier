@@ -23,7 +23,13 @@ following the efficient frozen-encoder approach used by
 
 Start with the [getting-started guide](guides/getting-started.md), use the
 [completed ablation registry](guides/ablations.md), then read the
-[data policy](guides/data-policy.md) and
-[Grid'5000 boundary](reference/grid5000-boundary.md) and the
+[data policy](guides/data-policy.md), the
+[Grid'5000 boundary](reference/grid5000-boundary.md), and the
 [operator reference](reference/grid5000-operator.md) before proposing a new
 training workflow.
+
+## Citation
+
+The repository's [CITATION.cff](https://github.com/NoeFlandre/osm-polygon-sentence-classifier/blob/main/CITATION.cff)
+contains the machine-readable citation metadata. The same citation is shown
+in the repository [README](https://github.com/NoeFlandre/osm-polygon-sentence-classifier#citation).

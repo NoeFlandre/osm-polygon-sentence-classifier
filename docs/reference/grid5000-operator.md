@@ -5,8 +5,8 @@ training run from remote preparation through verified publication:
 
 ```bash
 uv run grid5000-landuse run \
-  --source-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-  --model-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+  --source-commit "$(git rev-parse HEAD)" \
+  --model-revision abc32620dd4f6ab06f5fbe905dc25f310618e09f \
   --publish \
   --sync-trackio \
   --execute
@@ -26,8 +26,8 @@ SSH, scheduler, Hub, dataset, or local-state mutation:
 
 ```bash
 uv run grid5000-landuse run \
-  --source-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-  --model-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  --source-commit "$(git rev-parse HEAD)" \
+  --model-revision abc32620dd4f6ab06f5fbe905dc25f310618e09f
 ```
 
 The autonomous command defaults to all configured frontends, a 20-minute
@@ -186,7 +186,7 @@ diagnosis; an interrupted local monitor leaves scheduler work untouched for
 
 ## Local state and credentials
 
-Durable local state is stored only beneath:
+On the maintainer's local volume, durable state is stored only beneath:
 
 ```text
 /Volumes/Seagate M3/projects/osm-polygon-sentence-classifier/grid5000/runs/<run-id>/

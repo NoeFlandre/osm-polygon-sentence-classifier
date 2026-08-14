@@ -7,10 +7,10 @@
 - Git
 - just
 
-The Seagate volume is required when running the explicit audit command or the
-autonomous operator because durable local run state belongs there. The quality
-commands below do not create project datasets, checkpoints, models, Trackio run
-state, or other project data.
+The maintainer's Seagate volume is required when running the explicit audit
+command or the autonomous operator because durable local run state belongs in
+the fixed external data root. The quality commands below do not create project
+datasets, checkpoints, models, Trackio run state, or other project data.
 
 The initial `landuse-v1` study is already complete. Its 13 run records, pinned
 configuration, full scalar metrics, and final/checkpoint paths are catalogued
@@ -65,11 +65,11 @@ publication. On network-backed Grid'5000 storage, append-only Trackio fragments
 are imported into the project database before each snapshot, and the final
 snapshot closes the active run first. Short continuation jobs are named with
 the experiment, run ID, starting checkpoint, and OAR job ID. Evaluation logs
-include accuracy, precision, recall, and F1. The model README is generated from safe run metadata,
-evaluation metrics, and
-checkpoint progress at each checkpoint and final publication. Checkpoint Hub
-uploads are queued in order and completed before the final model publication;
-older checkpoint snapshots remain available remotely.
+include accuracy, precision, recall, and F1. The model README is generated from
+safe run metadata, evaluation metrics, and checkpoint progress at each
+checkpoint and final publication. Checkpoint Hub uploads are queued in order
+and completed before the final model publication; older checkpoint snapshots
+remain available remotely.
 
 ## Reading the completed study
 
@@ -92,8 +92,8 @@ prints a deterministic, side-effect-free plan:
 
 ```bash
 uv run grid5000-landuse run \
-  --source-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-  --model-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+  --source-commit "$(git rev-parse HEAD)" \
+  --model-revision abc32620dd4f6ab06f5fbe905dc25f310618e09f \
   --publish \
   --sync-trackio
 ```
@@ -127,8 +127,13 @@ To run the local hooks against the repository, use:
 uv run pre-commit run --all-files
 ```
 
-The explicit `audit-landuse-dataset` command is the local review command that
-streams the training dataset; it writes only its approved cache, report, and
+Run the explicit audit only after the pinned dataset review is authorized:
+
+```bash
+uv run audit-landuse-dataset
+```
+
+It streams the training dataset and writes only its approved cache, report, and
 split manifest beneath the Seagate root. The authorized Grid'5000 worker also
 streams the pinned dataset during training. The audit command itself does not
 authenticate, train, or submit a Grid'5000 job. Dependency installation may

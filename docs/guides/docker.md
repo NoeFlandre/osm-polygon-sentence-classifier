@@ -25,12 +25,15 @@ at build time, so retain the built image digest as the deployment artifact.
 
 ## Local data contract
 
-The application keeps its existing external data-root boundary. Mount that
-root at the same absolute path inside the container:
+The application keeps its existing external data-root boundary. The fixed
+local contract is described in the [data policy](data-policy.md); it is outside
+the checkout and must be mounted at the same absolute path inside the
+container. Set `DATA_ROOT` in the shell before running the example so the
+machine-specific path is not hidden in the Docker invocation:
 
 ```bash
 IMAGE=osm-polygon-sentence-classifier:local
-DATA_ROOT="/Volumes/Seagate M3/projects/osm-polygon-sentence-classifier"
+: "${DATA_ROOT:?Set DATA_ROOT to the approved external project-data root}"
 
 docker run --rm --platform linux/amd64 \
   --mount "type=bind,src=$DATA_ROOT,dst=$DATA_ROOT" \
@@ -69,13 +72,16 @@ publication verification, and exact-root cleanup. The container performs only
 the already-selected compute worker.
 
 Provide an immutable, worker-local image reference and choose the runtime
-explicitly when possible:
+explicitly when possible. The shell guard keeps the required registry-specific
+digest as an input rather than presenting a non-existent example image:
 
 ```bash
+: "${CONTAINER_IMAGE:?Set CONTAINER_IMAGE to a preloaded image@sha256:<64-hex-digest>}"
+
 uv run grid5000-landuse run \
-  --source-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-  --model-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
-  --container-image registry.example/osm-polygon-sentence-classifier@sha256:... \
+  --source-commit "$(git rev-parse HEAD)" \
+  --model-revision abc32620dd4f6ab06f5fbe905dc25f310618e09f \
+  --container-image "$CONTAINER_IMAGE" \
   --container-runtime docker \
   --execute
 ```

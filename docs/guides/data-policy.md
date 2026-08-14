@@ -6,13 +6,18 @@ The only approved local project-data root is:
 
 `/Volumes/Seagate M3/projects/osm-polygon-sentence-classifier`
 
+This is the maintainer's fixed external storage contract, not a directory in
+the checkout. On Grid'5000, the worker uses a separate per-run root beneath the
+remote user's home; it does not write to this local path.
+
 Future datasets, checkpoints, models, Trackio logs, and run state must live
 beneath that root. The repository contains no project data. Runtime path
 resolution rejects absolute paths, traversal outside the root, and symlink
-escapes. The explicit `audit-landuse-dataset` command is the only current
-data-consuming command: it reads the pinned source in streaming mode and
-writes its Hugging Face cache plus derived `audit/landuse/audit_report.json`
-and `audit/landuse/split_manifest.json` beneath this root.
+escapes. The explicit `audit-landuse-dataset` command is the current
+audit/data-inspection command: it reads the pinned source in streaming mode
+and writes its Hugging Face cache plus derived
+`audit/landuse/audit_report.json` and `audit/landuse/split_manifest.json`
+beneath this root. Training is a separate explicit operation described below.
 
 The source for the training stage is the
 [NoeFlandre/osm-polygon-wikidata-sentence-relevance dataset](https://huggingface.co/datasets/NoeFlandre/osm-polygon-wikidata-sentence-relevance).
@@ -23,7 +28,8 @@ Its root is documentation-only: each run stores final artifacts under
 the matching `checkpoints/step-N/` directories.
 Metrics use the free public static
 [Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-trackio)
-and its dedicated Hugging Face Bucket. Training records locally first, then
+and its [dedicated Hugging Face Bucket](https://huggingface.co/buckets/NoeFlandre/osm-polygon-sentence-classifier-trackio-data).
+Training records locally first, then
 publishes a read-only snapshot after each complete checkpoint and final model
 publication; no paid Space compute is required.
 
@@ -37,18 +43,19 @@ Grid'5000 work. The training module is a separate explicit call: it consumes
 only the clean iterator and directs model caches, checkpoints, outputs, and
 Trackio state beneath the approved root. Publication and static Trackio
 synchronization are separate opt-in flags. When enabled, the Trainer records
-  metrics locally during every job segment and syncs the static Space and Bucket
-  after each complete checkpoint and after the final model is saved, while the
-  model repository receives a generated README at each complete checkpoint and
-  after final publication. Evaluation metrics include accuracy, precision,
-  recall, and F1. Each checkpoint is stored beneath its permanent remote
-  `checkpoints/step-N/` directory. The generated README contains no
-  credentials, sentence rows, or raw dataset text.
+metrics locally during every job segment and syncs the static Space and Bucket
+after each complete checkpoint and after the final model is saved, while the
+model repository receives a generated README at each complete checkpoint and
+after final publication. Evaluation metrics include accuracy, precision,
+recall, and F1. Each checkpoint is stored beneath its permanent remote
+`checkpoints/step-N/` directory. The generated README contains no credentials,
+sentence rows, or raw dataset text.
 
 Credentials are used only by an explicitly authorized external CLI or runtime
 authentication flow. They must never be committed to the repository or placed
-in its documentation, commands, or durable Grid'5000 run state. A publishing
-worker must find an existing Grid'5000 login or `HF_TOKEN` before training.
+in its documentation, commands, or durable Grid'5000 run state. A worker must
+find an existing Grid'5000 login or `HF_TOKEN` before a run with publication or
+Trackio synchronization enabled.
 
 These two derived artifacts are the only ones the writer produces:
 `audit_report.json` contains aggregate and readiness information only and no
