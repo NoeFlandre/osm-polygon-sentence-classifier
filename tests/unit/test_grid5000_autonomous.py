@@ -887,6 +887,36 @@ def test_explicit_worker_checkout_revision_is_used_for_continuations(
     assert plan.checkout_commit == checkout_commit
 
 
+def test_resume_rejects_changed_container_settings(
+    tmp_path: Path,
+) -> None:
+    image = "registry.example/osm-polygon-sentence-classifier@sha256:" + "a" * 64
+    changed_image = (
+        "registry.example/osm-polygon-sentence-classifier@sha256:" + "b" * 64
+    )
+    config = replace(_config(), container_image=image, container_runtime="docker")
+    store = AutonomousStateStore(tmp_path / "runs")
+    state = AutonomousRunState(
+        run_id=config.identity.run_id,
+        phase="failed",
+        identity=config.identity.canonical_payload,
+        site="grenoble",
+        job_id=99,
+        facts={
+            "container_image": image,
+            "container_runtime": "docker",
+        },
+    )
+    store.create(state)
+    controller = AutonomousRunController(
+        replace(config, container_image=changed_image),
+        state_root=tmp_path / "runs",
+    )
+
+    with pytest.raises(AutonomousRunError, match="differ from the persisted run"):
+        controller.run()
+
+
 def test_completion_verification_rejects_a_model_repository_mismatch(
     tmp_path: Path,
     monkeypatch,

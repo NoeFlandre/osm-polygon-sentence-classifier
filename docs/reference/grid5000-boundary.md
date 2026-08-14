@@ -46,18 +46,21 @@ durable state.
 The compute worker validates Linux, OAR identity, exact checkout revision and
 cleanliness, an x86_64 compute-node architecture, exactly one visible CUDA GPU,
 and CUDA capability `>= 7.5` before entering the existing training module. The
-site probe applies the same architecture and capability floor, while the worker
-rechecks the actual assigned device and the executability of `uv`. The locked
-`training` dependency extra runs with the uv
-environment and package cache in allocation-local `/tmp`. Durable model,
+site probe applies the same architecture and capability floor. By default the
+worker rechecks the assigned device and the executability of `uv`, using the
+locked `training` extra and allocation-local `/tmp` environment/cache. When
+`--container-image` is explicit, the host-side controller instead checks the
+requested Docker/Podman runtime and image on the node, then mounts the clean
+checkout read-only and the managed run root read-write into the non-root image.
+The container path has no privileged or Docker-in-Docker fallback; an
+unavailable runtime or image fails the worker before training. Durable model,
 checkpoint, dataset-cache, and Trackio paths remain below the managed remote
 run root. Each complete checkpoint carries the immutable run identity. A
 successor worker must find the newest complete identity-matching checkpoint and
 passes it to `Trainer.train(resume_from_checkpoint=...)`; it never silently
 starts a continuation from scratch. The completion manifest contains no token
-or raw scheduler output. ARM/aarch64 nodes are deliberately ineligible until
-an architecture-specific locked runtime is provided; this prevents an x86_64
-uv binary from reaching an incompatible compute node.
+or raw scheduler output. ARM/aarch64 nodes remain ineligible because the
+image and locked `uv` paths are both x86_64.
 
 The local state root is the approved external data volume:
 

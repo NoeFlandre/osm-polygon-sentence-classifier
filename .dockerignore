@@ -1,0 +1,27 @@
+.git/
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.ty_cache/
+.mypy_cache/
+site/
+build/
+dist/
+*.egg-info/
+
+# Project data, caches, and generated artifacts never enter the build context.
+data/
+models/
+checkpoints/
+runs/
+outputs/
+tracking/
+*.parquet
+*.sqlite
+*.sqlite3
+*.jsonl
+
+# Credentials and unrelated local artifacts never enter the build context.
+.env*
+*.pptx

@@ -39,6 +39,7 @@ nav:
   - Guides:
       - Getting started: guides/getting-started.md
       - Development: guides/development.md
+      - Docker runtime: guides/docker.md
       - Data policy: guides/data-policy.md
       - Landuse ablation study: guides/ablations.md
   - Architecture:

@@ -19,6 +19,7 @@ from .dataset_contract import LANDUSE_DATASET_CONTRACT
 from .grid5000 import (
     DEFAULT_DAY_WALLTIME_SECONDS,
     MAX_WALLTIME_SECONDS,
+    ContainerRuntime,
     Grid5000Allocation,
     Grid5000ConfigurationError,
     Grid5000ExecutionError,
@@ -71,6 +72,17 @@ def _add_plan_arguments(parser: argparse.ArgumentParser) -> None:
         "--sync-trackio",
         action="store_true",
         help="publish static Trackio metric snapshots after checkpoints",
+    )
+    parser.add_argument(
+        "--container-image",
+        default=None,
+        help="run the worker in this preloaded Docker/Podman image",
+    )
+    parser.add_argument(
+        "--container-runtime",
+        choices=("auto", "docker", "podman"),
+        default="auto",
+        help="container runtime to use when --container-image is supplied",
     )
 
 
@@ -159,6 +171,17 @@ def _add_autonomous_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--publish", action="store_true")
     parser.add_argument("--sync-trackio", action="store_true")
     parser.add_argument(
+        "--container-image",
+        default=None,
+        help="run each worker in this preloaded Docker/Podman image",
+    )
+    parser.add_argument(
+        "--container-runtime",
+        choices=("auto", "docker", "podman"),
+        default="auto",
+        help="container runtime to use when --container-image is supplied",
+    )
+    parser.add_argument(
         "--keep-remote",
         action="store_true",
         help="retain the managed per-run remote data after successful verification",
@@ -202,6 +225,17 @@ def _add_ablation_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-workers", type=int, default=4)
     parser.add_argument("--max-continuations", type=int, default=6)
     parser.add_argument(
+        "--container-image",
+        default=None,
+        help="run each worker in this preloaded Docker/Podman image",
+    )
+    parser.add_argument(
+        "--container-runtime",
+        choices=("auto", "docker", "podman"),
+        default="auto",
+        help="container runtime to use when --container-image is supplied",
+    )
+    parser.add_argument(
         "--keep-remote",
         action="store_true",
         help="retain exact managed remote study run roots after completion",
@@ -241,6 +275,8 @@ def _build_plan(arguments: argparse.Namespace) -> Grid5000Plan:
             walltime_seconds=walltime_seconds,
             policy_type=arguments.policy_type,
         ),
+        container_image=arguments.container_image,
+        container_runtime=cast(ContainerRuntime, arguments.container_runtime),
     )
 
 
@@ -305,6 +341,8 @@ def _build_autonomous_config(arguments: argparse.Namespace) -> AutonomousRunConf
         policy_type=arguments.policy_type,
         max_workers=arguments.max_workers,
         max_continuations=arguments.max_continuations,
+        container_image=arguments.container_image,
+        container_runtime=cast(ContainerRuntime, arguments.container_runtime),
         cleanup=not arguments.keep_remote,
     )
 
@@ -323,6 +361,8 @@ def _build_ablation_controller(
         policy_type=arguments.policy_type,
         max_workers=arguments.max_workers,
         max_continuations=arguments.max_continuations,
+        container_image=arguments.container_image,
+        container_runtime=cast(ContainerRuntime, arguments.container_runtime),
         cleanup=not arguments.keep_remote,
         allow_source_commit_update=arguments.allow_source_commit_update,
         publish_report=publish_study_report,
@@ -341,6 +381,8 @@ def _autonomous_plan_payload(config: AutonomousRunConfig) -> dict[str, object]:
         "publish": config.training_config.publish_to_hub,
         "sync_trackio": config.training_config.sync_trackio,
         "max_continuations": config.max_continuations,
+        "container_image": config.container_image,
+        "container_runtime": config.container_runtime,
         "cleanup": config.cleanup,
     }
 
@@ -397,6 +439,24 @@ def _state_continuation_settings(
     return max_continuations, worker_source_commit_override or worker_source_commit
 
 
+def _state_container_settings(
+    facts: Mapping[str, object],
+) -> tuple[str | None, ContainerRuntime]:
+    image = facts.get("container_image")
+    if image is not None and not isinstance(image, str):
+        raise Grid5000StateError("autonomous container image is invalid")
+    runtime = facts.get("container_runtime", "auto")
+    if runtime not in {"auto", "docker", "podman"}:
+        raise Grid5000StateError("autonomous container runtime is invalid")
+    try:
+        from .grid5000 import _validate_container_settings
+
+        _validate_container_settings(image, cast(ContainerRuntime, runtime))
+    except Grid5000ConfigurationError as error:
+        raise Grid5000StateError("autonomous container settings are invalid") from error
+    return image, cast(ContainerRuntime, runtime)
+
+
 def _state_sites(facts: Mapping[str, object]) -> tuple[str, ...]:
     sites = facts.get("sites", DEFAULT_SITES)
     if not isinstance(sites, Sequence) or isinstance(sites, (str, bytes)):
@@ -444,6 +504,7 @@ def _config_from_state(
         max_continuations_override=max_continuations_override,
         worker_source_commit_override=worker_source_commit_override,
     )
+    container_image, container_runtime = _state_container_settings(facts)
     return AutonomousRunConfig(
         identity=identity,
         training_config=training_config,
@@ -461,6 +522,8 @@ def _config_from_state(
         ),
         max_continuations=max_continuations,
         worker_source_commit=worker_source_commit,
+        container_image=container_image,
+        container_runtime=container_runtime,
         cleanup=cleanup if isinstance(cleanup, bool) else True,
     )
 

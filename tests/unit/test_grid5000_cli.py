@@ -165,6 +165,29 @@ def test_autonomous_plan_persists_a_bounded_continuation_limit(capsys) -> None:
     assert payload["max_continuations"] == 2
 
 
+def test_autonomous_plan_records_the_explicit_container_runtime(capsys) -> None:
+    image = "registry.example/osm-polygon-sentence-classifier@sha256:" + "d" * 64
+
+    exit_code = grid5000_cli.main(
+        [
+            "run",
+            "--source-commit",
+            SOURCE_COMMIT,
+            "--model-revision",
+            MODEL_REVISION,
+            "--container-image",
+            image,
+            "--container-runtime",
+            "docker",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["container_image"] == image
+    assert payload["container_runtime"] == "docker"
+
+
 def test_resume_can_explicitly_extend_a_failed_run_continuation_limit(
     monkeypatch,
     capsys,

@@ -16,9 +16,12 @@ from .config import ProjectConfig
 from .grid5000 import (
     MINIMUM_HOME_HEADROOM_BYTES,
     CommandRunner,
+    ContainerRuntime,
     Grid5000Allocation,
+    Grid5000ConfigurationError,
     Grid5000Plan,
     Grid5000RunIdentity,
+    _validate_container_settings,
     parse_quota_output,
 )
 from .grid5000_checkpointing import (
@@ -87,6 +90,8 @@ class AutonomousRunConfig:
     max_workers: int = DEFAULT_MAX_WORKERS
     max_continuations: int = 3
     worker_source_commit: str | None = None
+    container_image: str | None = None
+    container_runtime: ContainerRuntime = "auto"
     cleanup: bool = True
 
     def __post_init__(self) -> None:
@@ -109,6 +114,10 @@ class AutonomousRunConfig:
             and _SOURCE_COMMIT_PATTERN.fullmatch(self.worker_source_commit) is None
         ):
             raise AutonomousRunError("worker_source_commit must be a pinned revision")
+        try:
+            _validate_container_settings(self.container_image, self.container_runtime)
+        except Grid5000ConfigurationError as error:
+            raise AutonomousRunError(str(error)) from error
         if self.training_config.model_name_or_path != self.identity.model_name_or_path:
             raise AutonomousRunError("training model does not match run identity")
         if self.training_config.model_revision != self.identity.model_revision:
@@ -313,6 +322,8 @@ class AutonomousRunController:
             allocation=allocation,
             resume_from_checkpoint=resume_from_checkpoint,
             checkout_commit=self.config.worker_source_commit,
+            container_image=self.config.container_image,
+            container_runtime=self.config.container_runtime,
         )
 
     def _preflight(self, remote: Any, plan: Grid5000Plan) -> None:
@@ -962,6 +973,8 @@ class AutonomousRunController:
                 "cleanup": self.config.cleanup,
                 "max_continuations": self.config.max_continuations,
                 "worker_source_commit": self.config.worker_source_commit,
+                "container_image": self.config.container_image,
+                "container_runtime": self.config.container_runtime,
                 "sites": list(self.config.sites),
                 "requirements": {
                     "gpu_memory_mb": self.config.requirements.gpu_memory_mb,
@@ -1041,6 +1054,8 @@ class AutonomousRunController:
     def _run_loaded(self, current: AutonomousRunState | None) -> AutonomousRunState:
         if current is None:
             return self._fresh_run()
+        if current.phase is not RunPhase.COMPLETED:
+            self._validate_persisted_container_settings(current)
         if current.phase is RunPhase.COMPLETED:
             return current
         if current.phase is RunPhase.SUBMITTING:
@@ -1060,6 +1075,25 @@ class AutonomousRunController:
         raise AutonomousRunError(
             f"run is not resumable from phase {RunPhase(current.phase).value}"
         )
+
+    def _validate_persisted_container_settings(
+        self, current: AutonomousRunState
+    ) -> None:
+        facts = dict(current.facts or {})
+        persisted_image = facts.get("container_image")
+        persisted_runtime = facts.get("container_runtime", "auto")
+        if persisted_image is not None and not isinstance(persisted_image, str):
+            raise AutonomousRunError("persisted container image is invalid")
+        if persisted_runtime not in {"auto", "docker", "podman"}:
+            raise AutonomousRunError("persisted container runtime is invalid")
+        if (
+            persisted_image != self.config.container_image
+            or persisted_runtime != self.config.container_runtime
+        ):
+            raise AutonomousRunError(
+                "container settings differ from the persisted run; "
+                "start a new run instead"
+            )
 
     def _record_unexpected_failure(self, error: Exception) -> None:
         current = self.state.load(self.config.identity.run_id)

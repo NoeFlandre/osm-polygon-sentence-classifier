@@ -218,6 +218,59 @@ def test_worker_command_leaves_remote_home_path_for_shell_expansion() -> None:
     assert expected_root in command
 
 
+def test_container_worker_command_uses_explicit_mounts_and_fails_closed() -> None:
+    image = "registry.example/osm-polygon-sentence-classifier@sha256:" + "c" * 64
+    plan = Grid5000Plan(
+        identity=_identity(),
+        allocation=Grid5000Allocation(site="nancy", walltime_seconds=3_600),
+        container_image=image,
+        container_runtime="docker",
+    )
+
+    command = plan.worker_command
+
+    assert "container_runtime=docker" in command
+    assert '"$container_runtime" image inspect ' + image in command
+    assert '"$container_runtime" run --rm' in command
+    assert 'gpu_args=(--gpus "device=$cuda_visible_devices")' in command
+    assert "nvidia.com/gpu=all" not in command
+    assert "--env CUDA_VISIBLE_DEVICES=0" in command
+    assert "--env HF_HOME=/home/app/data/cache/huggingface" in command
+    assert "dst=/home/app/data/cache/huggingface/token,readonly" in command
+    assert "HF_HOME=/run/secrets" not in command
+    assert '--user "$(id -u):$(id -g)"' in command
+    assert (
+        '--mount "type=bind,src=$checkout,dst=/home/app/checkout,readonly"' in command
+    )
+    assert '--mount "type=bind,src=$data_root,dst=/home/app/data"' in command
+    assert (
+        f'data_root="$HOME/osm-polygon-sentence-classifier-data/grid5000/runs/'
+        f'{plan.identity.run_id}"' in command
+    )
+    assert "--env PYTHONPATH=/home/app/checkout/src" in command
+    assert "--remote-data-root /home/app/data" in command
+    assert "exit 78" in command
+    assert "--privileged" not in command
+    assert "oarsub" not in command
+    assert 'exec "$uv_bin"' not in command
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        "registry.example/osm-polygon-sentence-classifier:latest",
+        "registry.example/osm-polygon-sentence-classifier",
+    ],
+)
+def test_container_worker_rejects_mutable_image_references(image: str) -> None:
+    with pytest.raises(Grid5000ConfigurationError, match="immutable sha256 digest"):
+        Grid5000Plan(
+            identity=_identity(),
+            allocation=Grid5000Allocation(site="nancy", walltime_seconds=3_600),
+            container_image=image,
+        )
+
+
 def test_resume_plan_requires_a_valid_checkpoint_on_the_worker() -> None:
     plan = Grid5000Plan(
         identity=_identity(),

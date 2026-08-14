@@ -33,6 +33,9 @@ REMOTE_CHECKOUT_SUBDIRECTORY = "osm-polygon-sentence-classifier"
 REMOTE_DATA_SUBDIRECTORY = "osm-polygon-sentence-classifier-data"
 REMOTE_RUNS_SUBDIRECTORY = "grid5000/runs"
 WORKER_MODULE = "osm_polygon_sentence_classifier.grid5000_worker"
+CONTAINER_HOME = "/home/app"
+CONTAINER_CHECKOUT = f"{CONTAINER_HOME}/checkout"
+CONTAINER_DATA_ROOT = f"{CONTAINER_HOME}/data"
 
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
 _SITE_PATTERN = re.compile(r"[a-z][a-z0-9-]*")
@@ -45,6 +48,16 @@ _RESOURCE_PROPERTY_PATTERN = re.compile(
 )
 _RUN_ID_PATTERN = re.compile(r"[0-9a-f]{20}")
 _JOB_ID_PATTERN = re.compile(r"(?:OAR_JOB_ID=|^)([1-9][0-9]*)$", re.MULTILINE)
+_CONTAINER_IMAGE_PATTERN = re.compile(r"^\S+@sha256:[0-9a-f]{64}$")
+_CONTAINER_PREFLIGHT_CODE = (
+    "import pathlib, torch; "
+    "checkout = pathlib.Path('/home/app/checkout'); "
+    "data = pathlib.Path('/home/app/data'); "
+    "assert (checkout / '.git').is_dir(); "
+    "assert data.is_dir(); "
+    "assert torch.cuda.is_available() and torch.cuda.device_count() == 1; "
+    "probe = data / '.container-preflight'; probe.touch(); probe.unlink()"
+)
 _QUOTA_ROW_PATTERN = re.compile(
     r"^\s*(?P<used>[0-9]+)\*?\s+"
     r"(?P<soft>[0-9]+)\s+"
@@ -57,6 +70,7 @@ _HOME_QUOTA_COMMAND = (
 )
 
 Grid5000Phase = Literal["submitting", "submitted"]
+ContainerRuntime = Literal["auto", "docker", "podman"]
 
 
 class Grid5000ConfigurationError(ValueError):
@@ -162,6 +176,31 @@ def _require_non_empty(name: str, value: object) -> str:
             f"{name} must be a non-empty single-line string"
         )
     return value
+
+
+def _validate_container_settings(
+    container_image: str | None,
+    container_runtime: ContainerRuntime,
+) -> None:
+    if not isinstance(container_runtime, str) or container_runtime not in {
+        "auto",
+        "docker",
+        "podman",
+    }:
+        raise Grid5000ConfigurationError(
+            "container_runtime must be auto, docker, or podman"
+        )
+    if container_image is None:
+        if container_runtime != "auto":
+            raise Grid5000ConfigurationError(
+                "container_runtime requires an explicit container_image"
+            )
+        return
+    image = _require_non_empty("container_image", container_image)
+    if not _CONTAINER_IMAGE_PATTERN.fullmatch(image):
+        raise Grid5000ConfigurationError(
+            "container_image must include an immutable sha256 digest"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -373,10 +412,13 @@ class Grid5000Plan:
     allocation: Grid5000Allocation
     resume_from_checkpoint: bool = False
     checkout_commit: str | None = None
+    container_image: str | None = None
+    container_runtime: ContainerRuntime = "auto"
 
     def __post_init__(self) -> None:
         if self.checkout_commit is not None:
             _require_revision("checkout_commit", self.checkout_commit)
+        _validate_container_settings(self.container_image, self.container_runtime)
 
     @property
     def worker_command(self) -> str:
@@ -388,6 +430,12 @@ class Grid5000Plan:
         worker's managed persistent data root.
         """
 
+        if self.container_image is not None:
+            return self._container_worker_command()
+
+        return self._uv_worker_command()
+
+    def _uv_worker_command(self) -> str:
         checkout_args: tuple[str, ...] = ()
         if self.checkout_commit is not None:
             checkout_args = ("--checkout-commit", self.checkout_commit)
@@ -439,6 +487,106 @@ class Grid5000Plan:
             '"$uv_bin" --version >/dev/null 2>&1 || '
             '{ echo "uv is not executable on compute-node architecture $cpu_architecture" >&2; exit 78; }; '
             'exec "$uv_bin" ' + worker_command
+        )
+
+    def _container_worker_command(self) -> str:
+        if self.container_image is None:
+            raise Grid5000ConfigurationError(
+                "container worker command requires a container image"
+            )
+        worker_args = (
+            "python",
+            "-m",
+            WORKER_MODULE,
+            "--run-id",
+            self.identity.run_id,
+            "--source-commit",
+            self.identity.source_commit,
+            "--dataset-revision",
+            self.identity.dataset_revision,
+            "--model-revision",
+            self.identity.model_revision,
+            "--training-config-json",
+            self.identity.training_config_json,
+            "--checkout",
+            CONTAINER_CHECKOUT,
+            "--remote-data-root",
+            CONTAINER_DATA_ROOT,
+        )
+        worker_command = shlex.join(worker_args)
+        if self.resume_from_checkpoint:
+            worker_command += " --require-checkpoint"
+
+        image = shlex.quote(self.container_image)
+        checkout = f'"$HOME/{REMOTE_CHECKOUT_SUBDIRECTORY}"'
+        data_root = (
+            f'"$HOME/{REMOTE_DATA_SUBDIRECTORY}/{REMOTE_RUNS_SUBDIRECTORY}/'
+            f'{self.identity.run_id}"'
+        )
+        if self.container_runtime == "auto":
+            runtime_selection = (
+                'container_runtime=""; '
+                "if command -v docker >/dev/null 2>&1 "
+                "&& docker info >/dev/null 2>&1; then "
+                'container_runtime="docker"; '
+                "elif command -v podman >/dev/null 2>&1 "
+                "&& podman info >/dev/null 2>&1; then "
+                'container_runtime="podman"; '
+                "else "
+                'echo "an accessible Docker or Podman runtime is unavailable on the compute node" >&2; '
+                "exit 78; fi; "
+            )
+        else:
+            runtime = shlex.quote(self.container_runtime)
+            runtime_selection = (
+                f"container_runtime={runtime}; "
+                'command -v "$container_runtime" >/dev/null 2>&1 || '
+                ' { echo "requested container runtime is unavailable on the compute node" >&2; exit 78; }; '
+            )
+        return (
+            "set -euo pipefail; umask 077; "
+            f"checkout={checkout}; data_root={data_root}; "
+            '[ -d "$checkout/.git" ] || '
+            '{ echo "container checkout mount is unavailable" >&2; exit 78; }; '
+            '[ -d "$data_root" ] || '
+            '{ echo "container data mount is unavailable" >&2; exit 78; }; '
+            + runtime_selection
+            + '"$container_runtime" info >/dev/null 2>&1 || '
+            + '{ echo "container runtime is unavailable or inaccessible on the compute node" >&2; exit 78; }; '
+            + f'"$container_runtime" image inspect {image} >/dev/null 2>&1 || '
+            + '{ echo "pinned container image is unavailable on the compute node" >&2; exit 78; }; '
+            + 'cuda_visible_devices="${CUDA_VISIBLE_DEVICES:-}"; '
+            + 'case "$cuda_visible_devices" in '
+            + '""|*,*|*[[:space:]]*) '
+            + '{ echo "exactly one OAR-assigned CUDA_VISIBLE_DEVICES value is required" >&2; exit 78; } ;; '
+            + "esac; "
+            + 'if [ "$container_runtime" = "docker" ]; then '
+            + 'gpu_args=(--gpus "device=$cuda_visible_devices"); '
+            + 'else gpu_args=(--device "nvidia.com/gpu=$cuda_visible_devices"); fi; '
+            + '"$container_runtime" run --rm --network none --read-only --tmpfs /tmp:rw,noexec,nosuid '
+            + '--user "$(id -u):$(id -g)" "${gpu_args[@]}" '
+            + "--env HOME=/home/app --env CUDA_VISIBLE_DEVICES=0 "
+            + '--mount "type=bind,src=$checkout,dst=/home/app/checkout,readonly" '
+            + '--mount "type=bind,src=$data_root,dst=/home/app/data" '
+            + f"{image} python -c {shlex.quote(_CONTAINER_PREFLIGHT_CODE)} >/dev/null 2>&1 || "
+            + '{ echo "container preflight failed: image, mounts, writable data, or one-GPU CUDA access is unavailable" >&2; exit 78; }; '
+            + "token_args=(); "
+            + 'if [ -f "$HOME/.cache/huggingface/token" ]; then '
+            + 'test ! -L "$data_root/cache" && '
+            + 'test ! -L "$data_root/cache/huggingface"; '
+            + 'mkdir -p -m 700 "$data_root/cache/huggingface"; '
+            + 'token_args=(--mount "type=bind,src=$HOME/.cache/huggingface/token,'
+            + 'dst=/home/app/data/cache/huggingface/token,readonly"); '
+            + "fi; "
+            + 'exec "$container_runtime" run --rm --read-only '
+            + "--tmpfs /tmp:rw,noexec,nosuid "
+            + '--user "$(id -u):$(id -g)" '
+            + "--env HOME=/home/app --env HF_HOME=/home/app/data/cache/huggingface --env OAR_JOB_ID "
+            + "--env CUDA_VISIBLE_DEVICES=0 --env PYTHONPATH=/home/app/checkout/src "
+            + '--mount "type=bind,src=$checkout,dst=/home/app/checkout,readonly" '
+            + '--mount "type=bind,src=$data_root,dst=/home/app/data" '
+            + '"${gpu_args[@]}" "${token_args[@]}" '
+            f"{image} {worker_command}"
         )
 
     @property
@@ -506,6 +654,8 @@ class Grid5000Plan:
                 "walltime_seconds": self.allocation.walltime_seconds,
             },
             "identity": self.identity.canonical_payload,
+            "container_image": self.container_image,
+            "container_runtime": self.container_runtime,
             "resume_from_checkpoint": self.resume_from_checkpoint,
             "remote_checkout_command": shlex.join(self.remote_checkout_command),
             "run_id": self.identity.run_id,
@@ -899,6 +1049,10 @@ class Grid5000Operator:
 
 __all__ = [
     "COMMAND_TIMEOUT_SECONDS",
+    "CONTAINER_CHECKOUT",
+    "CONTAINER_DATA_ROOT",
+    "CONTAINER_HOME",
+    "ContainerRuntime",
     "DEFAULT_DAY_WALLTIME_SECONDS",
     "GRID5000_DATASET_REVISION",
     "MAX_DAY_WALLTIME_SECONDS",

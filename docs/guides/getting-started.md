@@ -37,6 +37,10 @@ uv run ty check
 uv run mkdocs build --strict --site-dir site
 ```
 
+For a no-data Docker build and smoke test, see the
+[Docker runtime guide](docker.md). It also documents the explicit external
+data-root mount, token handling, and optional containerized Grid'5000 worker.
+
 ## Training boundary
 
 The package exposes `train_landuse_classifier` and `TrainingConfig` in

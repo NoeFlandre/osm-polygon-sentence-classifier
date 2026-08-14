@@ -103,7 +103,7 @@ home quota/free space, and a queue-depth diagnostic. Queue depth is never
 interpreted as an ETA. A site is eligible only when it is reachable, has a
 compatible x86_64 GPU and enough persistent headroom, and its observed GPU facts
 support the request. ARM/aarch64 resources are excluded because the locked
-remote `uv` runtime is currently x86_64.
+remote `uv` runtime and the reproducible container image target x86_64.
 
 The OAR queue, `standard`/`exotic` resource type, and a property combining
 `gpu_mem`, `production`, `cpuarch='x86_64'`, and the observed compatible
@@ -142,16 +142,19 @@ The selected frontend receives a bounded SSH sequence that:
 3. creates the exact per-run data root with a mode-600 ownership marker;
 4. installs the local Hugging Face token through SSH stdin, never a command;
 5. rechecks policy, quota, and the exact checkout before OAR submission; and
-6. submits the locked worker with the `training` extra and allocation-local
-   `/tmp` environment/cache paths.
+6. submits either the default locked `uv` worker with the `training` extra and
+   allocation-local `/tmp` environment/cache paths, or the explicitly selected
+   preloaded Docker/Podman image with the clean checkout and per-run data root
+   mounted into it.
 
 The worker requires Linux, its numeric OAR job identity, the exact source
 commit, a clean checkout, an x86_64 compute node, exactly one visible CUDA GPU,
 and CUDA compute capability at least `7.5`, matching the locked training wheel.
 The controller uses the same architecture and capability floor during site
-selection, and the worker checks the actual assigned device and locked `uv`
-executable again before training so an incompatible allocation fails before
-consuming the training budget. It streams the pinned dataset
+selection, and the worker checks the actual assigned device and either the
+locked `uv` executable or the selected container runtime/image again before
+training so an incompatible allocation fails before consuming the training
+budget. It streams the pinned dataset
 through the clean training iterator, saves five retained
 identity-bound checkpoints, and writes the final model and Trackio data beneath
 the marked run root. A successor job is submitted only after the previous job

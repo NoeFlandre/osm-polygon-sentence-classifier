@@ -135,6 +135,9 @@ uv run mkdocs build --strict --site-dir site
 
 The equivalent Just recipes are documented in
 [`docs/guides/getting-started.md`](docs/guides/getting-started.md).
+The reproducible Docker runtime, explicit mount contract, and optional
+Grid'5000 worker mode are documented in
+[`docs/guides/docker.md`](docs/guides/docker.md).
 
 ## Grid'5000
 

@@ -14,7 +14,12 @@ from typing import Any, Literal, cast
 from .ablation_reporting import render_public_documents
 from .config import PROJECT_NAME, TARGET_MODEL_REPOSITORY_ID
 from .dataset_contract import LANDUSE_DATASET_CONTRACT
-from .grid5000 import Grid5000RunIdentity
+from .grid5000 import (
+    ContainerRuntime,
+    Grid5000ConfigurationError,
+    Grid5000RunIdentity,
+    _validate_container_settings,
+)
 from .grid5000_autonomous import (
     DEFAULT_AUTONOMOUS_WALLTIME_SECONDS,
     AutonomousRunConfig,
@@ -213,6 +218,8 @@ class AblationStudyController:
         policy_type: PolicyType = "auto",
         max_workers: int = 4,
         max_continuations: int = 6,
+        container_image: str | None = None,
+        container_runtime: ContainerRuntime = "auto",
         cleanup: bool = True,
         allow_source_commit_update: bool = False,
         state_root: Path | None = None,
@@ -236,6 +243,10 @@ class AblationStudyController:
             )
         if policy_type not in {"auto", "day", "night"}:
             raise AblationStudyError("policy_type must be auto, day, or night")
+        try:
+            _validate_container_settings(container_image, container_runtime)
+        except Grid5000ConfigurationError as error:
+            raise AblationStudyError(str(error)) from error
         self.source_commit = source_commit
         self.model_revision = model_revision
         self.model_name_or_path = model_name_or_path
@@ -245,6 +256,8 @@ class AblationStudyController:
         self.policy_type = policy_type
         self.max_workers = max_workers
         self.max_continuations = max_continuations
+        self.container_image = container_image
+        self.container_runtime = container_runtime
         self.cleanup = cleanup
         self.allow_source_commit_update = allow_source_commit_update
         self.state = AblationStudyStateStore(state_root)
@@ -438,6 +451,8 @@ class AblationStudyController:
             policy_type=self.policy_type,
             max_workers=self.max_workers,
             max_continuations=self.max_continuations,
+            container_image=self.container_image,
+            container_runtime=self.container_runtime,
             cleanup=self.cleanup,
         )
 

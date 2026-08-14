@@ -25,6 +25,47 @@ def test_justfile_exposes_the_documented_quality_recipes() -> None:
         assert f"{recipe}:" in content
 
 
+def test_justfile_exposes_safe_docker_build_and_smoke_recipes() -> None:
+    content = _text("justfile")
+
+    assert "docker-build" in content
+    assert "docker-smoke" in content
+    assert "--platform linux/amd64" in content
+
+
+def test_dockerfile_uses_the_locked_training_runtime_as_a_non_root_user() -> None:
+    content = _text("Dockerfile")
+
+    assert (
+        "FROM python:3.12.11-slim-bookworm@sha256:c00fc7b44d844b6da22861ec24af43968a5200eac4ec607b4725d585165d6b49"
+        in content
+    )
+    assert "ARG UV_VERSION=0.11.16" in content
+    assert "uv==${UV_VERSION}" in content
+    assert "uv sync --locked --no-dev --extra training" in content
+    assert "USER app" in content
+    assert (
+        'CMD ["python", "-m", '
+        '"osm_polygon_sentence_classifier.grid5000_worker", "--help"]' in content
+    )
+
+
+def test_dockerignore_excludes_project_data_credentials_and_unrelated_slides() -> None:
+    content = _text(".dockerignore")
+
+    for entry in (
+        "data/",
+        "models/",
+        "checkpoints/",
+        "runs/",
+        "outputs/",
+        "tracking/",
+        ".env*",
+        "*.pptx",
+    ):
+        assert entry in content
+
+
 def test_pre_commit_runs_the_locked_project_tools() -> None:
     content = _text(".pre-commit-config.yaml")
     assert "uv run ruff format --check ." in content

@@ -59,8 +59,12 @@ training, publication, tracking, and Grid'5000 orchestration:
   incomplete or unsafe output before any Hub call.
 - `grid5000.py` keeps the immutable identity, policy-bounded allocation, fixed
   SSH/OAR argument construction, and compatibility submission boundary. Its
-  worker command rejects non-x86_64 compute nodes before invoking the locked
-  runtime. `grid5000_sites.py` probes all configured frontends from
+  default worker command rejects non-x86_64 compute nodes before invoking the
+  locked `uv` runtime. When an image is explicitly selected, the same
+  host-side controller instead mounts the clean checkout and per-run data root
+  into a non-root Docker/Podman worker after a runtime, image, and GPU
+  preflight; it never moves SSH, OAR, policy, quota, Hub, or cleanup into the
+  container. `grid5000_sites.py` probes all configured frontends from
   `oarnodes -J`, records CPU architecture, and includes `cpuarch='x86_64'` in
   generated GPU requests. `grid5000_remote.py` stages exact clean checkouts and
   marker-owned data, and recognizes both single-file and sharded checkpoint
@@ -76,9 +80,9 @@ training, publication, tracking, and Grid'5000 orchestration:
   exact clean checkout, and one visible CUDA GPU before invoking the existing
   training boundary. It uses a home-scoped remote project root, requires
   existing Hugging Face authentication when publication or Trackio sync is
-  enabled, and bootstraps the locked uv environment and package cache in
-  allocation-local scratch. Durable model/data/Trackio paths remain
-  home-scoped, and it has no retry, scheduler, or CPU-fallback responsibility.
+  enabled, and has no retry, scheduler, or CPU-fallback responsibility. The
+  optional container path supplies the same training dependencies from the
+  image and keeps the durable model/data/Trackio paths home-scoped.
 - `ablation_study.py` owns the immutable `landuse-v1` matrix, screening and
   replication order, durable study state, and public run-row preparation.
   `ablation_reporting.py` renders the public README and generated
