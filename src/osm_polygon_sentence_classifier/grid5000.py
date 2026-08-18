@@ -430,10 +430,11 @@ class Grid5000Plan:
     def worker_command(self) -> str:
         """Return the fixed compute-node command for the training worker.
 
-        The locked Python environment lives in the managed run-scoped data
-        root. Its project-scoped UV wheel cache is shared beneath ``$HOME`` so
-        later short jobs reuse downloads; model caches, outputs, checkpoints,
-        and Trackio state remain in the run root and are cleaned on completion.
+        The locked Python environment lives in node-local scratch so importing
+        CUDA libraries does not traverse the shared home filesystem. Its
+        project-scoped UV wheel cache is shared beneath ``$HOME`` so later
+        short jobs reuse downloads; model caches, outputs, checkpoints, and
+        Trackio state remain in the managed run root.
         """
 
         if self.container_image is not None:
@@ -485,7 +486,9 @@ class Grid5000Plan:
             f'cd "$HOME/{REMOTE_CHECKOUT_SUBDIRECTORY}" && '
             "umask 077 && set -eu && "
             f"remote_run_root={remote_run_root} && "
-            'export UV_PROJECT_ENVIRONMENT="$remote_run_root/.venv" && '
+            f'worker_env_root="${{TMPDIR:-/tmp}}/osm-polygon-sentence-classifier/{self.identity.run_id}" && '
+            'export UV_PROJECT_ENVIRONMENT="$worker_env_root/.venv" && '
+            "trap 'rm -rf -- \"$worker_env_root\"' EXIT && "
             'export UV_CACHE_DIR="$HOME/.cache/osm-polygon-sentence-classifier/uv" && '
             'cpu_architecture="$(uname -m)"; '
             '[ "$cpu_architecture" = "x86_64" ] || '

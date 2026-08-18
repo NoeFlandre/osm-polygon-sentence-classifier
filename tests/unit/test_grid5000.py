@@ -242,7 +242,11 @@ def test_worker_command_reuses_a_shared_locked_uv_cache() -> None:
         'remote_run_root="$HOME/osm-polygon-sentence-classifier-data/grid5000/runs/'
         in command
     )
-    assert 'export UV_PROJECT_ENVIRONMENT="$remote_run_root/.venv"' in command
+    assert (
+        'worker_env_root="${TMPDIR:-/tmp}/osm-polygon-sentence-classifier/' in command
+    )
+    assert 'export UV_PROJECT_ENVIRONMENT="$worker_env_root/.venv"' in command
+    assert "trap 'rm -rf -- \"$worker_env_root\"' EXIT" in command
     assert (
         'export UV_CACHE_DIR="$HOME/.cache/osm-polygon-sentence-classifier/uv"'
         in command
