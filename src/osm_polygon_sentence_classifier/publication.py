@@ -159,6 +159,17 @@ def _slug(value: object, fallback: str) -> str:
     return slug[:80] or fallback
 
 
+def _task_metadata(identity: Mapping[str, object]) -> tuple[str, str, str]:
+    """Return the safe task name, display label, and Hub tag for one run."""
+
+    task_name = _safe_line(identity.get("task_name"), "landuse")
+    if task_name == "place-relevance-v2":
+        return task_name, "place relevance", "place-relevance"
+    if task_name == "landuse":
+        return task_name, "landuse", "landuse"
+    return task_name, task_name.replace("-", " "), _slug(task_name, "task")
+
+
 def _publication_run_id(identity: Mapping[str, object]) -> str:
     supplied = identity.get("run_id")
     if isinstance(supplied, str) and _RUN_ID_PATTERN.fullmatch(supplied):
@@ -202,7 +213,7 @@ def render_model_card(
 ) -> str:
     """Render a deterministic, credential-free model card from run facts."""
 
-    task_name = _safe_line(identity.get("task_name"), "landuse")
+    task_name, task_label, task_tag = _task_metadata(identity)
     model_name = _safe_line(identity.get("model_name_or_path"), "not recorded")
     model_revision = _safe_line(identity.get("model_revision"), "not pinned")
     dataset_revision = _safe_line(identity.get("dataset_revision"), "not recorded")
@@ -238,11 +249,11 @@ def render_model_card(
         "library_name: transformers\n"
         "pipeline_tag: text-classification\n"
         "tags:\n"
-        "- landuse\n"
+        f"- {task_tag}\n"
         "- text-classification\n"
         "---\n\n"
-        "# OSM Polygon Landuse Sentence Classifier\n\n"
-        f"This model classifies whether a sentence is relevant to landuse. "
+        f"# OSM Polygon {task_label.title()} Sentence Classifier\n\n"
+        f"This model classifies whether a sentence is relevant to {task_label}. "
         f"The recorded training status is **{progress}**.\n\n"
         "## Training data\n\n"
         f"- Dataset: [{SOURCE_DATASET_ID}]"
@@ -277,7 +288,7 @@ def render_repository_readme(
     """Render the stable root guide for the organized model repository."""
 
     prefix = _model_artifact_prefix(identity)
-    task_name = _safe_line(identity.get("task_name"), "landuse")
+    task_name, task_label, task_tag = _task_metadata(identity)
     model_name = _safe_line(identity.get("model_name_or_path"), "not recorded")
     model_revision = _safe_line(identity.get("model_revision"), "not pinned")
     trackio_link = (
@@ -298,12 +309,12 @@ def render_repository_readme(
         "library_name: transformers\n"
         "pipeline_tag: text-classification\n"
         "tags:\n"
-        "- landuse\n"
+        f"- {task_tag}\n"
         "- text-classification\n"
         "---\n\n"
         "# OSM Polygon Sentence Classifier\n\n"
         "This public repository contains organized, immutable outputs for the "
-        "OSM polygon landuse sentence-classification task.\n\n"
+        "OSM polygon sentence-classification studies.\n\n"
         "## Repository layout\n\n"
         f"- Final model: `{prefix}/final/` (load with the Transformers "
         f"`subfolder` argument).\n"
@@ -317,8 +328,15 @@ def render_repository_readme(
         "(studies/landuse-v1/study.json).\n"
         "- Results: [`studies/landuse-v1/results.json`]"
         "(studies/landuse-v1/results.json).\n\n"
+        "- Worldwide V2 baseline: [`studies/place-relevance-v2/README.md`]"
+        "(studies/place-relevance-v2/README.md).\n"
+        "- Protocol: [`studies/place-relevance-v2/study.json`]"
+        "(studies/place-relevance-v2/study.json).\n"
+        "- Results: [`studies/place-relevance-v2/results.json`]"
+        "(studies/place-relevance-v2/results.json).\n\n"
         "## Training identity\n\n"
         f"- Task: `{task_name}`\n"
+        f"- Task description: {task_label}\n"
         f"- Base model: `{model_name}`\n"
         f"- Base-model revision: `{model_revision}`\n"
         f"- Run directory: `{prefix}`\n"
@@ -477,7 +495,7 @@ def publish_model_directory(
         api=api,
         repository=repository,
         operations=operations,
-        commit_message="Publish completed landuse classifier",
+        commit_message="Publish completed classifier model",
         published_paths=published_paths,
         failure_message="Hugging Face model publication failed",
     )
@@ -532,7 +550,7 @@ def publish_study_documents(
         api=api,
         repository=repository,
         operations=operations,
-        commit_message="Update landuse ablation study report",
+        commit_message="Update classifier study report",
         published_paths=published_paths,
         failure_message="study documentation publication failed",
     )

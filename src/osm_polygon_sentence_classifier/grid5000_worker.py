@@ -13,9 +13,17 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, cast
 
-from .checkpointing import CheckpointError, find_latest_complete_checkpoint
+from .checkpointing import (
+    CheckpointError,
+    CheckpointInfo,
+    find_latest_complete_checkpoint,
+)
 from .config import ConfigurationError, ProjectConfig
-from .dataset_contract import LANDUSE_DATASET_CONTRACT
+from .dataset_contract import (
+    LANDUSE_DATASET_CONTRACT,
+    WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT,
+    DatasetContract,
+)
 from .grid5000 import (
     COMMAND_TIMEOUT_SECONDS,
     MINIMUM_CUDA_CAPABILITY,
@@ -31,6 +39,7 @@ from .training import (
     TrainingError,
     TrainingResult,
     train_landuse_classifier,
+    train_place_relevance_classifier,
 )
 
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
@@ -53,11 +62,15 @@ class WorkerFacts:
 def _trackio_segment_run_name(
     base_name: str,
     *,
+    task_name: str,
     run_id: str,
     starting_step: int,
     job_id: int,
 ) -> str:
-    """Name one allocation segment so continuations are legible in Trackio."""
+    """Name one allocation segment while preserving the V2 logical run."""
+
+    if task_name == "place-relevance-v2":
+        return base_name
 
     return (
         f"{base_name} | run-{run_id[:8]} | "
@@ -185,26 +198,16 @@ def validate_compute_node(
     )
 
 
-def run_landuse_training_worker(
+def _validated_worker_config(
     identity: Grid5000RunIdentity,
     *,
-    checkout: Path,
-    checkout_source_commit: str | None = None,
-    training_config: TrainingConfig | None = None,
-    remote_data_root: Path | None = None,
-    environ: Mapping[str, str] | None = None,
-    platform_name: str | None = None,
-    git_runner: CommandRunner | None = None,
-    cuda_probe: CudaProbe | None = None,
-    train: Callable[..., TrainingResult] = train_landuse_classifier,
-    require_checkpoint: bool = False,
-) -> TrainingResult:
-    """Preflight one compute node, then call the existing training boundary."""
-
-    if (
-        identity.dataset_revision
-        != LANDUSE_DATASET_CONTRACT.provenance.repository_revision
-    ):
+    expected_task_name: str,
+    contract: DatasetContract,
+    training_config: TrainingConfig | None,
+) -> TrainingConfig:
+    if identity.task_name != expected_task_name:
+        raise WorkerError("worker task name does not match its training boundary")
+    if identity.dataset_revision != contract.provenance.repository_revision:
         raise WorkerError("worker dataset revision does not match the pinned contract")
     config_values: dict[str, Any] = dict(identity.training_config)
     try:
@@ -218,13 +221,65 @@ def run_landuse_training_worker(
         raise WorkerError("worker model identity does not match training configuration")
     if effective_config.model_revision != identity.model_revision:
         raise WorkerError("worker model revision does not match training configuration")
-    effective_environment = os.environ if environ is None else environ
-    if (
-        effective_config.publish_to_hub or effective_config.sync_trackio
-    ) and not _has_hugging_face_auth(effective_environment):
+    return effective_config
+
+
+def _require_worker_hugging_face_auth(
+    config: TrainingConfig,
+    environ: Mapping[str, str],
+) -> None:
+    if (config.publish_to_hub or config.sync_trackio) and not _has_hugging_face_auth(
+        environ
+    ):
         raise WorkerError(
             "worker Hugging Face authentication is unavailable for publication"
         )
+
+
+def _latest_worker_checkpoint(
+    output_directory: Path,
+    *,
+    identity: Grid5000RunIdentity,
+    require_checkpoint: bool,
+) -> CheckpointInfo | None:
+    try:
+        checkpoint = find_latest_complete_checkpoint(
+            output_directory,
+            identity=identity.canonical_payload,
+        )
+    except CheckpointError as error:
+        raise WorkerError("checkpoint evidence is invalid") from error
+    if require_checkpoint and checkpoint is None:
+        raise WorkerError("no complete checkpoint is available for continuation")
+    return checkpoint
+
+
+def _run_training_worker(
+    identity: Grid5000RunIdentity,
+    *,
+    expected_task_name: str,
+    contract: DatasetContract,
+    checkout: Path,
+    checkout_source_commit: str | None = None,
+    training_config: TrainingConfig | None = None,
+    remote_data_root: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+    platform_name: str | None = None,
+    git_runner: CommandRunner | None = None,
+    cuda_probe: CudaProbe | None = None,
+    train: Callable[..., TrainingResult],
+    require_checkpoint: bool = False,
+) -> TrainingResult:
+    """Preflight one compute node, then call one task-specific trainer."""
+
+    effective_config = _validated_worker_config(
+        identity,
+        expected_task_name=expected_task_name,
+        contract=contract,
+        training_config=training_config,
+    )
+    effective_environment = os.environ if environ is None else environ
+    _require_worker_hugging_face_auth(effective_config, effective_environment)
     worker_facts = validate_compute_node(
         expected_source_commit=checkout_source_commit or identity.source_commit,
         checkout=checkout,
@@ -239,19 +294,16 @@ def run_landuse_training_worker(
     except (ConfigurationError, Grid5000ConfigurationError) as error:
         raise WorkerError("remote worker data root is unsafe") from error
     output_directory = project_config.data_root / effective_config.output_subdirectory
-    try:
-        checkpoint = find_latest_complete_checkpoint(
-            output_directory,
-            identity=identity.canonical_payload,
-        )
-    except CheckpointError as error:
-        raise WorkerError("checkpoint evidence is invalid") from error
-    if require_checkpoint and checkpoint is None:
-        raise WorkerError("no complete checkpoint is available for continuation")
+    checkpoint = _latest_worker_checkpoint(
+        output_directory,
+        identity=identity,
+        require_checkpoint=require_checkpoint,
+    )
     trackio_config = replace(
         effective_config,
         run_name=_trackio_segment_run_name(
             effective_config.run_name,
+            task_name=identity.task_name,
             run_id=identity.run_id,
             starting_step=checkpoint.global_step if checkpoint is not None else 0,
             job_id=worker_facts.job_id,
@@ -262,6 +314,72 @@ def run_landuse_training_worker(
         project_config=project_config,
         resume_from_checkpoint=checkpoint.path if checkpoint is not None else None,
         checkpoint_identity=identity.canonical_payload,
+    )
+
+
+def run_landuse_training_worker(
+    identity: Grid5000RunIdentity,
+    *,
+    checkout: Path,
+    checkout_source_commit: str | None = None,
+    training_config: TrainingConfig | None = None,
+    remote_data_root: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+    platform_name: str | None = None,
+    git_runner: CommandRunner | None = None,
+    cuda_probe: CudaProbe | None = None,
+    train: Callable[..., TrainingResult] = train_landuse_classifier,
+    require_checkpoint: bool = False,
+) -> TrainingResult:
+    """Run the existing Afghanistan landuse training worker."""
+
+    return _run_training_worker(
+        identity,
+        expected_task_name="landuse",
+        contract=LANDUSE_DATASET_CONTRACT,
+        checkout=checkout,
+        checkout_source_commit=checkout_source_commit,
+        training_config=training_config,
+        remote_data_root=remote_data_root,
+        environ=environ,
+        platform_name=platform_name,
+        git_runner=git_runner,
+        cuda_probe=cuda_probe,
+        train=train,
+        require_checkpoint=require_checkpoint,
+    )
+
+
+def run_place_relevance_training_worker(
+    identity: Grid5000RunIdentity,
+    *,
+    checkout: Path,
+    checkout_source_commit: str | None = None,
+    training_config: TrainingConfig | None = None,
+    remote_data_root: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+    platform_name: str | None = None,
+    git_runner: CommandRunner | None = None,
+    cuda_probe: CudaProbe | None = None,
+    train: Callable[..., TrainingResult] = train_place_relevance_classifier,
+    require_checkpoint: bool = False,
+) -> TrainingResult:
+    """Run the worldwide V2 place-relevance training worker."""
+
+    return _run_training_worker(
+        identity,
+        expected_task_name="place-relevance-v2",
+        contract=WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT,
+        checkout=checkout,
+        checkout_source_commit=checkout_source_commit,
+        training_config=training_config,
+        remote_data_root=remote_data_root,
+        environ=environ,
+        platform_name=platform_name,
+        git_runner=git_runner,
+        cuda_probe=cuda_probe,
+        train=train,
+        require_checkpoint=require_checkpoint,
     )
 
 
@@ -355,6 +473,7 @@ def _contains_symlink(path: Path) -> bool:
 
 def _identity_from_arguments(
     *,
+    task_name: str,
     run_id: str,
     source_commit: str,
     dataset_revision: str,
@@ -373,6 +492,7 @@ def _identity_from_arguments(
             dataset_revision=dataset_revision,
             model_name_or_path=training_config["model_name_or_path"],  # type: ignore[arg-type]
             model_revision=model_revision,
+            task_name=task_name,
             training_config=training_config,
         )
     except (KeyError, Grid5000ConfigurationError) as error:
@@ -388,6 +508,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--task-name",
+        choices=("landuse", "place-relevance-v2"),
+        default="landuse",
+        help="task-specific training boundary (default: landuse)",
+    )
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument(
@@ -412,13 +538,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         identity = _identity_from_arguments(
+            task_name=args.task_name,
             run_id=args.run_id,
             source_commit=args.source_commit,
             dataset_revision=args.dataset_revision,
             model_revision=args.model_revision,
             training_config_json=args.training_config_json,
         )
-        result = run_landuse_training_worker(
+        worker = (
+            run_landuse_training_worker
+            if identity.task_name == "landuse"
+            else run_place_relevance_training_worker
+        )
+        result = worker(
             identity,
             checkout=args.checkout,
             checkout_source_commit=args.checkout_commit,
@@ -445,6 +577,7 @@ __all__ = [
     "WorkerFacts",
     "main",
     "run_landuse_training_worker",
+    "run_place_relevance_training_worker",
     "validate_compute_node",
     "write_completion_manifest",
 ]

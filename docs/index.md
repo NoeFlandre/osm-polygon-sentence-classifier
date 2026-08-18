@@ -1,8 +1,8 @@
 # OSM Polygon Sentence Classifier
 
-This project trains a sentence classifier for OSM polygon descriptions,
-starting with the landuse task. It keeps data, compute, evaluation, and
-publication gates explicit and reproducible.
+This project trains sentence classifiers for OSM polygon descriptions. It
+keeps data, compute, evaluation, and publication gates explicit and
+reproducible.
 
 ## Current status
 
@@ -29,8 +29,9 @@ Start with the [getting-started guide](guides/getting-started.md), use the
 [operator reference](reference/grid5000-operator.md) before proposing a new
 training workflow.
 
-The next planned experiment lane uses the worldwide V2 input release. No V2
-training or evaluation result is included in this release.
+The worldwide V2 lane is implemented but has no claimed training result until
+its guarded Grid'5000 run completes. Its protocol and exact input audit are
+fixed before execution; see the [operator reference](reference/grid5000-operator.md).
 
 ## Citation
 

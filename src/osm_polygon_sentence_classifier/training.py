@@ -1,4 +1,4 @@
-"""Managed, streaming training orchestration for the landuse classifier."""
+"""Managed, streaming training orchestration for binary classifiers."""
 
 import math
 import os
@@ -13,7 +13,11 @@ from . import training_metrics as _training_metrics
 from . import training_runtime as _training_runtime
 from .checkpointing import CheckpointError, find_latest_complete_checkpoint
 from .config import ProjectConfig
-from .dataset_contract import LANDUSE_DATASET_CONTRACT, DatasetContract
+from .dataset_contract import (
+    LANDUSE_DATASET_CONTRACT,
+    WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT,
+    DatasetContract,
+)
 from .dataset_loader import (
     DatasetSplit,
     TrainingLabel,
@@ -21,9 +25,12 @@ from .dataset_loader import (
     load_streaming_rows,
 )
 from .paths import ManagedPaths
+from .place_relevance_reporting import render_place_relevance_study_documents
 from .publication import (
+    ModelPublicationError,
     ModelPublicationResult,
     publish_model_directory,
+    publish_study_documents,
     render_repository_readme,
 )
 from .tracking import (
@@ -46,6 +53,11 @@ LabelId = Literal[0, 1]
 LABEL_TO_ID: dict[TrainingLabel, LabelId] = {"no": 0, "yes": 1}
 ID_TO_LABEL: dict[int, str] = {0: "no", 1: "yes"}
 DEFAULT_MODEL_NAME = "jhu-clsp/mmBERT-small"
+# One logical streamed epoch over the pinned, audited clean training split:
+# ceil(141,283 train representatives / batch size 8).
+PLACE_RELEVANCE_V2_DEFAULT_MAX_STEPS = 17_661
+PLACE_RELEVANCE_V2_OUTPUT = Path("studies/place-relevance-v2/baseline/models")
+PLACE_RELEVANCE_V2_RUN_NAME = "place-relevance-v2|baseline|seed-42"
 
 
 class TrainingRecord(TypedDict):
@@ -57,11 +69,12 @@ class TrainingRecord(TypedDict):
 
 @dataclass(frozen=True, slots=True)
 class TrainingConfig:
-    """Small, explicit configuration for one landuse training run."""
+    """Small, explicit configuration for one binary training run."""
 
     model_name_or_path: str = DEFAULT_MODEL_NAME
     output_subdirectory: Path = Path("models/landuse")
     validation_fraction: float = 0.2
+    test_fraction: float = 0.0
     seed: int = 42
     max_length: int = 256
     max_steps: int = 1_000
@@ -70,6 +83,7 @@ class TrainingConfig:
     learning_rate: float = 3e-4
     logging_steps: int = 10
     eval_steps: int = 100
+    eval_strategy: Literal["steps", "epoch"] = "steps"
     save_steps: int = 100
     save_total_limit: int = 5
     run_name: str = "landuse-mmbert-small-frozen-head"
@@ -86,6 +100,33 @@ class TrainingConfig:
         _validate_boolean_settings(self)
         _normalize_training_paths(self)
         _validate_numeric_settings(self)
+
+
+def place_relevance_v2_training_config(
+    *,
+    model_name_or_path: str = DEFAULT_MODEL_NAME,
+    model_revision: str | None = None,
+    max_steps: int = PLACE_RELEVANCE_V2_DEFAULT_MAX_STEPS,
+    publish_to_hub: bool = False,
+    sync_trackio: bool = False,
+) -> TrainingConfig:
+    """Return the pinned baseline configuration for the worldwide V2 task."""
+
+    return TrainingConfig(
+        model_name_or_path=model_name_or_path,
+        model_revision=model_revision,
+        output_subdirectory=PLACE_RELEVANCE_V2_OUTPUT,
+        validation_fraction=0.1,
+        test_fraction=0.1,
+        eval_strategy="epoch",
+        max_steps=max_steps,
+        trainable_layers="head",
+        run_name=PLACE_RELEVANCE_V2_RUN_NAME,
+        tracking_project="place-relevance-v2",
+        artifact_namespace="studies/place-relevance-v2/baseline",
+        publish_to_hub=publish_to_hub,
+        sync_trackio=sync_trackio,
+    )
 
 
 def _validate_boolean_settings(config: TrainingConfig) -> None:
@@ -113,6 +154,8 @@ def _validate_training_identity(config: TrainingConfig) -> None:
         raise TrainingError("trainable_layers must be head or last2")
     if config.class_weight_mode not in {None, "none", "balanced"}:
         raise TrainingError("class_weight_mode must be none or balanced")
+    if config.eval_strategy not in {"steps", "epoch"}:
+        raise TrainingError("eval_strategy must be steps or epoch")
     for name in ("tracking_project", "artifact_namespace"):
         value = getattr(config, name)
         if value is not None and (
@@ -157,6 +200,17 @@ def _validate_numeric_settings(config: TrainingConfig) -> None:
     ):
         raise TrainingError(
             "validation_fraction must be a finite number between 0 and 1"
+        )
+    if (
+        isinstance(config.test_fraction, bool)
+        or not isinstance(config.test_fraction, (int, float))
+        or not math.isfinite(config.test_fraction)
+        or not 0 <= config.test_fraction <= 1
+        or config.validation_fraction + config.test_fraction > 1
+    ):
+        raise TrainingError(
+            "validation and test fractions must be finite, non-negative, "
+            "and sum to at most 1"
         )
     for name in (
         "max_length",
@@ -217,7 +271,12 @@ def _model_card_identity(
     contract: DatasetContract,
 ) -> dict[str, object]:
     payload = dict(identity or {})
-    payload.setdefault("task_name", "landuse")
+    payload.setdefault(
+        "task_name",
+        "place-relevance-v2"
+        if contract is WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT
+        else "landuse",
+    )
     payload.setdefault("dataset_revision", contract.provenance.repository_revision)
     payload.setdefault("model_name_or_path", config.model_name_or_path)
     payload.setdefault("model_revision", config.model_revision)
@@ -268,16 +327,18 @@ def iter_split_training_records(
     *,
     split: DatasetSplit,
     validation_fraction: float = 0.2,
+    test_fraction: float = 0.0,
     seed: int = 42,
     contract: DatasetContract = LANDUSE_DATASET_CONTRACT,
 ) -> Iterator[TrainingRecord]:
-    """Lazily adapt clean landuse examples to Trainer record dictionaries."""
+    """Lazily adapt clean examples to Trainer record dictionaries."""
 
-    if split not in ("train", "validation"):
+    if split not in ("train", "validation", "test"):
         raise TrainingError(f"unsupported dataset split: {split!r}")
     for example in iter_clean_training_examples(
         rows_factory,
         validation_fraction=validation_fraction,
+        test_fraction=test_fraction,
         seed=seed,
         contract=contract,
     ):
@@ -300,6 +361,7 @@ def _make_tokenized_dataset(
             rows_factory,
             split=split,
             validation_fraction=config.validation_fraction,
+            test_fraction=config.test_fraction,
             seed=config.seed,
             contract=contract,
         )
@@ -332,7 +394,7 @@ def _training_argument_values(
         "max_steps": config.max_steps,
         "seed": config.seed,
         "logging_steps": config.logging_steps,
-        "eval_strategy": "steps",
+        "eval_strategy": config.eval_strategy,
         "eval_steps": config.eval_steps,
         "save_strategy": "steps",
         "save_steps": config.save_steps,
@@ -382,7 +444,76 @@ def _managed_training_environment(
                 os.environ[name] = value
 
 
-def train_landuse_classifier(
+def _evaluate_test_dataset(trainer: Any, test_dataset: Any) -> dict[str, object]:
+    """Evaluate the held-out dataset once, after training has finished."""
+
+    if test_dataset is None:
+        return {}
+    evaluate = getattr(trainer, "evaluate", None)
+    if not callable(evaluate):
+        raise TrainingError("Trainer does not expose held-out test evaluation")
+    try:
+        raw_metrics = evaluate(test_dataset, metric_key_prefix="test")
+    except Exception as error:
+        raise TrainingError("held-out test evaluation failed") from error
+    if not isinstance(raw_metrics, Mapping):
+        raise TrainingError("held-out test metrics are invalid")
+    return dict(raw_metrics)
+
+
+def _publish_completed_model(
+    output_directory: Path,
+    *,
+    project_config: ProjectConfig,
+    config: TrainingConfig,
+    contract: DatasetContract,
+    identity: Mapping[str, object],
+    metrics: Mapping[str, object],
+    tracking: TrackioSettings,
+    checkpoint_hub_api: Any,
+) -> ModelPublicationResult | None:
+    """Publish one validated final model and any V2 study documents."""
+
+    if not config.publish_to_hub:
+        return None
+    repository_readme = (
+        render_repository_readme(
+            identity=identity,
+            trackio_space_id=(
+                tracking.static_space_id if config.sync_trackio else None
+            ),
+        )
+        if config.artifact_namespace is None
+        or contract is WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT
+        else None
+    )
+    publication = publish_model_directory(
+        output_directory,
+        project_config.target_model_repository_id,
+        identity=identity,
+        repository_readme=repository_readme,
+    )
+    if contract is WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT:
+        try:
+            publish_study_documents(
+                project_config.target_model_repository_id,
+                render_place_relevance_study_documents(
+                    identity=identity,
+                    metrics=metrics,
+                    trackio_space_id=(
+                        tracking.static_space_id if config.sync_trackio else None
+                    ),
+                ),
+                hub_api=checkpoint_hub_api,
+            )
+        except ModelPublicationError as error:
+            raise TrainingError(
+                "worldwide V2 study documentation publication failed"
+            ) from error
+    return publication
+
+
+def _train_classifier(
     rows_factory: Callable[[], Iterable[Mapping[str, object]]] | None = None,
     *,
     config: TrainingConfig | None = None,
@@ -391,7 +522,7 @@ def train_landuse_classifier(
     resume_from_checkpoint: Path | None = None,
     checkpoint_identity: Mapping[str, object] | None = None,
 ) -> TrainingResult:
-    """Train and save a landuse classifier using only the clean stream boundary.
+    """Train and save a binary classifier using the clean stream boundary.
 
     The optional dependency group is imported only when this function is called.
     Datasets, model caches, checkpoints, and Trackio state are directed beneath
@@ -463,6 +594,16 @@ def train_landuse_classifier(
             contract=contract,
             tokenizer=tokenizer,
         )
+        test_dataset = None
+        if training_config.test_fraction > 0:
+            test_dataset = _make_tokenized_dataset(
+                dependencies,
+                effective_rows_factory,
+                split="test",
+                config=training_config,
+                contract=contract,
+                tokenizer=tokenizer,
+            )
         model_kwargs: dict[str, object] = {
             "cache_dir": str(model_cache_directory),
             "classifier_dropout": 0.0,
@@ -511,9 +652,11 @@ def train_landuse_classifier(
             class_weight_mode=training_config.class_weight_mode,
         )
         train_output = _training_runtime.run_trainer(trainer, resume_from_checkpoint)
+        test_metrics = _evaluate_test_dataset(trainer, test_dataset)
         trainer.save_model(str(output_directory))
         tokenizer.save_pretrained(str(output_directory))
         final_metrics = _training_metrics.metrics_for_model_card(train_output, trainer)
+        final_metrics.update(test_metrics)
         model_card_identity = _model_card_identity(
             checkpoint_identity,
             config=training_config,
@@ -527,25 +670,16 @@ def train_landuse_classifier(
                 tracking.static_space_id if training_config.sync_trackio else None
             ),
         )
-        model_publication = None
-        if training_config.publish_to_hub:
-            model_publication = publish_model_directory(
-                output_directory,
-                effective_project_config.target_model_repository_id,
-                identity=model_card_identity,
-                repository_readme=(
-                    render_repository_readme(
-                        identity=model_card_identity,
-                        trackio_space_id=(
-                            tracking.static_space_id
-                            if training_config.sync_trackio
-                            else None
-                        ),
-                    )
-                    if training_config.artifact_namespace is None
-                    else None
-                ),
-            )
+        model_publication = _publish_completed_model(
+            output_directory,
+            project_config=effective_project_config,
+            config=training_config,
+            contract=contract,
+            identity=model_card_identity,
+            metrics=final_metrics,
+            tracking=tracking,
+            checkpoint_hub_api=checkpoint_hub_api,
+        )
         if training_config.sync_trackio:
             _sync_static_trackio(
                 tracking,
@@ -565,14 +699,61 @@ def train_landuse_classifier(
     )
 
 
+def train_landuse_classifier(
+    rows_factory: Callable[[], Iterable[Mapping[str, object]]] | None = None,
+    *,
+    config: TrainingConfig | None = None,
+    project_config: ProjectConfig | None = None,
+    contract: DatasetContract = LANDUSE_DATASET_CONTRACT,
+    resume_from_checkpoint: Path | None = None,
+    checkpoint_identity: Mapping[str, object] | None = None,
+) -> TrainingResult:
+    """Train the existing Afghanistan landuse classifier."""
+
+    return _train_classifier(
+        rows_factory,
+        config=config,
+        project_config=project_config,
+        contract=contract,
+        resume_from_checkpoint=resume_from_checkpoint,
+        checkpoint_identity=checkpoint_identity,
+    )
+
+
+def train_place_relevance_classifier(
+    rows_factory: Callable[[], Iterable[Mapping[str, object]]] | None = None,
+    *,
+    config: TrainingConfig | None = None,
+    project_config: ProjectConfig | None = None,
+    resume_from_checkpoint: Path | None = None,
+    checkpoint_identity: Mapping[str, object] | None = None,
+) -> TrainingResult:
+    """Train the worldwide V2 place-relevance classifier."""
+
+    training_config = config or place_relevance_v2_training_config()
+    return _train_classifier(
+        rows_factory,
+        config=training_config,
+        project_config=project_config,
+        contract=WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT,
+        resume_from_checkpoint=resume_from_checkpoint,
+        checkpoint_identity=checkpoint_identity,
+    )
+
+
 __all__ = [
     "DEFAULT_MODEL_NAME",
     "ID_TO_LABEL",
     "LABEL_TO_ID",
+    "PLACE_RELEVANCE_V2_DEFAULT_MAX_STEPS",
+    "PLACE_RELEVANCE_V2_OUTPUT",
+    "PLACE_RELEVANCE_V2_RUN_NAME",
     "TrainingConfig",
     "TrainingError",
     "TrainingRecord",
     "TrainingResult",
     "iter_split_training_records",
     "train_landuse_classifier",
+    "train_place_relevance_classifier",
+    "place_relevance_v2_training_config",
 ]

@@ -304,7 +304,10 @@ class AutonomousRunController:
         if self.config.training_config.sync_trackio:
             self.emit("provisioning the Trackio Space and bucket")
             ensure_trackio_resources(
-                settings_for(ProjectConfig()),
+                settings_for(
+                    ProjectConfig(),
+                    project=self.config.training_config.tracking_project,
+                ),
                 hub_api=self._hub(),
             )
 
@@ -415,7 +418,10 @@ class AutonomousRunController:
             api.model_info(repo_id=repository, revision=commit_id)
         if training.sync_trackio:
             tracking_space = manifest.get("tracking_space_id")
-            settings = settings_for(ProjectConfig())
+            settings = settings_for(
+                ProjectConfig(),
+                project=training.tracking_project,
+            )
             if tracking_space != settings.static_space_id:
                 raise AutonomousRunError(
                     "completed worker reported the wrong Trackio Space"

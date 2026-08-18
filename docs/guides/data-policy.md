@@ -13,9 +13,10 @@ remote user's home; it does not write to this local path.
 Future datasets, checkpoints, models, Trackio logs, and run state must live
 beneath that root. The repository contains no project data. Runtime path
 resolution rejects absolute paths, traversal outside the root, and symlink
-escapes. The explicit `audit-landuse-dataset` command is the current
-audit/data-inspection command: it reads the pinned source in streaming mode
-and writes its Hugging Face cache plus derived
+escapes. The explicit `audit-landuse-dataset` command audits the original
+landuse lane. The worldwide V2 lane uses the separately recorded audit in its
+public study documents. Both lanes read their pinned source in streaming mode
+and write their Hugging Face cache plus derived
 `audit/landuse/audit_report.json` and `audit/landuse/split_manifest.json`
 beneath this root. Training is a separate explicit operation described below.
 
@@ -94,6 +95,11 @@ incrementally as they arrive from each stream rather than materialized into a
 list, and no cleaned dataset is written. `uncertain` rows are never emitted and
 do not create conflicts. Rows without a usable hash keep the existing per-row
 behavior. Training code must consume the iterator's output directly.
+
+The V2 public study additionally publishes `data-audit.json` beside
+`study.json` and `results.json`. It records aggregate counts from the pinned
+200,000-row artifact: 175,458 clean representatives split into 141,283 train,
+17,619 validation, and 16,556 test rows. It contains no sentence text.
 
 The completed `landuse-v1` study is a public derived artifact, not a copy of
 the source dataset. Its `study.json` records the dataset and model revisions,

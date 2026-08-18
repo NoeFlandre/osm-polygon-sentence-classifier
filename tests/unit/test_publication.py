@@ -512,6 +512,22 @@ def test_model_card_contains_only_safe_training_metadata() -> None:
     assert "must-not-appear" not in card
 
 
+def test_worldwide_v2_model_card_describes_place_relevance_not_landuse() -> None:
+    card = render_model_card(
+        identity={
+            "task_name": "place-relevance-v2",
+            "dataset_revision": "b" * 40,
+            "model_name_or_path": "jhu-clsp/mmBERT-small",
+            "model_revision": "c" * 40,
+            "training_config": {"trainable_layers": "head"},
+        }
+    )
+
+    assert "place relevance" in card
+    assert "- place-relevance" in card
+    assert "landuse" not in card
+
+
 def test_repository_readme_documents_the_organized_public_layout() -> None:
     readme = render_repository_readme(
         identity={
@@ -529,6 +545,24 @@ def test_repository_readme_documents_the_organized_public_layout() -> None:
     assert "no model files are stored at the repository root" in readme
     assert "studies/landuse-v1/README.md" in readme
     assert "https://huggingface.co/spaces/owner/trackio" in readme
+
+
+def test_repository_readme_registers_the_worldwide_v2_study() -> None:
+    readme = render_repository_readme(
+        identity={
+            "task_name": "place-relevance-v2",
+            "run_id": "a" * 20,
+            "model_name_or_path": "jhu-clsp/mmBERT-small",
+            "model_revision": "b" * 40,
+            "training_config": {
+                "run_name": "place-relevance-v2|baseline|seed-42",
+                "artifact_namespace": "studies/place-relevance-v2/baseline",
+            },
+        }
+    )
+
+    assert "studies/place-relevance-v2/README.md" in readme
+    assert "place-relevance-v2" in readme
 
 
 def test_checkpoint_publication_rejects_an_incomplete_snapshot_before_hub_call(

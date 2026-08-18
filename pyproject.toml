@@ -1,7 +1,7 @@
 [project]
 name = "osm-polygon-sentence-classifier"
 version = "0.1.1"
-description = "A sentence classifier for OSM polygon descriptions, starting with landuse."
+description = "Reproducible sentence classifiers for OSM polygon descriptions."
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [
@@ -12,6 +12,7 @@ keywords = [
     "wikidata",
     "sentence-classification",
     "landuse",
+    "place-relevance",
     "machine-learning",
 ]
 classifiers = [
@@ -34,6 +35,7 @@ Documentation = "https://noeflandre.github.io/osm-polygon-sentence-classifier/"
 [project.scripts]
 audit-landuse-dataset = "osm_polygon_sentence_classifier.audit_cli:main"
 grid5000-landuse = "osm_polygon_sentence_classifier.grid5000_cli:main"
+grid5000-place-relevance-v2 = "osm_polygon_sentence_classifier.grid5000_place_relevance_cli:main"
 
 [project.optional-dependencies]
 training = [

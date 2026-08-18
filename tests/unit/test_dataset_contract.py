@@ -4,6 +4,7 @@ import pytest
 
 from osm_polygon_sentence_classifier.dataset_contract import (
     LANDUSE_DATASET_CONTRACT,
+    WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT,
     DatasetContract,
     DatasetContractError,
     DatasetProvenance,
@@ -54,6 +55,54 @@ REQUIRED_COLUMNS = (
 EXPECTED_REPOSITORY_REVISION = "07e421a3020127ced2c19304645a6f63e6735966"
 EXPECTED_PARQUET_SHA256 = (
     "4e9f3300a3f93d5485ada9f950ed77f05b448f9ffba09500ca25b33930b15eb0"
+)
+WORLDWIDE_REQUIRED_COLUMNS = (
+    "sentence_id",
+    "polygon_id",
+    "wikidata",
+    "document_id",
+    "article_id",
+    "source",
+    "language",
+    "site",
+    "page_title",
+    "section_id",
+    "section_index",
+    "section_path",
+    "sentence_index",
+    "sentence_text_raw",
+    "sentence_text_normalized",
+    "previous_sentence",
+    "next_sentence",
+    "url",
+    "page_id",
+    "revision_id",
+    "revision_timestamp",
+    "document_content_hash",
+    "section_content_hash",
+    "sentence_content_hash",
+    "duplicate_occurrence_count",
+    "duplicate_sources",
+    "polygon_name",
+    "osm_primary_tag",
+    "osm_tags",
+    "region",
+    "lat",
+    "lon",
+    "input_dataset_revision",
+    "pipeline_version",
+    "area_km2",
+    "area_bucket",
+    "place_relevance",
+    "yes_logprob",
+    "no_logprob",
+    "logit_margin",
+    "two_class_probability",
+    "geometry",
+)
+WORLDWIDE_DATASET_REVISION = "4d0d2b5d53630c24acfb280e9d8159bf6ed0d3fa"
+WORLDWIDE_PARQUET_SHA256 = (
+    "0f76f64f9d2a13081ad26cacb27b18f48c204d9150a494dafb340375e82eb270"
 )
 REORDERED_COLUMNS = (
     REQUIRED_COLUMNS[:2]
@@ -207,3 +256,46 @@ def test_validate_row_rejects_values_outside_the_contract(
 
     with pytest.raises(DatasetContractError, match=expected_message):
         LANDUSE_DATASET_CONTRACT.validate_row(row)
+
+
+def test_worldwide_v2_contract_identifies_a_separate_binary_task() -> None:
+    contract = WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT
+
+    assert contract.dataset_id == LANDUSE_DATASET_CONTRACT.dataset_id
+    assert contract.config == "v2-worldwide"
+    assert contract.split == "train"
+    assert contract.region is None
+    assert contract.label_column == "place_relevance"
+    assert contract.supported_label_values == ("no", "yes")
+    assert contract.training_label_values == ("no", "yes")
+    assert contract.model_input_columns == ("sentence_text_normalized",)
+    assert {
+        "place_relevance",
+        "yes_logprob",
+        "no_logprob",
+        "logit_margin",
+        "two_class_probability",
+        "geometry",
+    }.issubset(contract.forbidden_model_input_columns)
+    assert contract.provenance.repository_revision == WORLDWIDE_DATASET_REVISION
+    assert contract.provenance.parquet_sha256 == WORLDWIDE_PARQUET_SHA256
+
+
+def test_worldwide_v2_contract_matches_the_published_schema() -> None:
+    assert (
+        WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT.required_columns
+        == WORLDWIDE_REQUIRED_COLUMNS
+    )
+
+
+def test_worldwide_v2_contract_accepts_any_non_blank_region() -> None:
+    row = dict.fromkeys(WORLDWIDE_REQUIRED_COLUMNS)
+    row.update(
+        {
+            "region": "jp-hokkaido",
+            "sentence_text_normalized": "A physical description.",
+            "place_relevance": "yes",
+        }
+    )
+
+    assert WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT.validate_row(row) is None

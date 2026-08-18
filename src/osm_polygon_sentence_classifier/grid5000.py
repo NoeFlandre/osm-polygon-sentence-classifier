@@ -1,4 +1,4 @@
-"""Guarded Grid'5000 planning and submission boundaries for landuse training."""
+"""Guarded Grid'5000 planning and submission boundaries for classifier training."""
 
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ WORKER_MODULE = "osm_polygon_sentence_classifier.grid5000_worker"
 CONTAINER_HOME = "/home/app"
 CONTAINER_CHECKOUT = f"{CONTAINER_HOME}/checkout"
 CONTAINER_DATA_ROOT = f"{CONTAINER_HOME}/data"
+SUPPORTED_TASK_NAMES: Final = frozenset({"landuse", "place-relevance-v2"})
 
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
 _SITE_PATTERN = re.compile(r"[a-z][a-z0-9-]*")
@@ -220,8 +221,12 @@ class Grid5000RunIdentity:
         _require_revision("dataset_revision", self.dataset_revision)
         _require_revision("model_revision", self.model_revision)
         _require_non_empty("model_name_or_path", self.model_name_or_path)
-        if self.task_name != "landuse":
-            raise Grid5000ConfigurationError("task_name must be 'landuse'")
+        if (
+            not isinstance(self.task_name, str)
+            or self.task_name not in SUPPORTED_TASK_NAMES
+        ):
+            supported = ", ".join(sorted(SUPPORTED_TASK_NAMES))
+            raise Grid5000ConfigurationError(f"task_name must be one of: {supported}")
         canonical, normalized = _canonical_training_config(self.training_config)
         object.__setattr__(self, "training_config", MappingProxyType(normalized))
         object.__setattr__(self, "_training_config_json", canonical)
@@ -273,7 +278,7 @@ class Grid5000RunIdentity:
             model_name_or_path = payload["model_name_or_path"]
             model_revision = payload["model_revision"]
             training_config = payload["training_config"]
-            task_name = payload["task_name"]
+            task_name = payload.get("task_name", "landuse")
         except KeyError as error:
             raise Grid5000StateError(
                 "durable state has an incomplete run identity"
@@ -445,6 +450,8 @@ class Grid5000Plan:
             "python",
             "-m",
             WORKER_MODULE,
+            "--task-name",
+            self.identity.task_name,
             "--run-id",
             self.identity.run_id,
             "--source-commit",
@@ -498,6 +505,8 @@ class Grid5000Plan:
             "python",
             "-m",
             WORKER_MODULE,
+            "--task-name",
+            self.identity.task_name,
             "--run-id",
             self.identity.run_id,
             "--source-commit",
@@ -1076,6 +1085,7 @@ __all__ = [
     "REMOTE_CHECKOUT_SUBDIRECTORY",
     "REMOTE_DATA_SUBDIRECTORY",
     "REMOTE_RUNS_SUBDIRECTORY",
+    "SUPPORTED_TASK_NAMES",
     "SubprocessCommandRunner",
     "parse_job_id",
     "parse_quota_output",

@@ -1,7 +1,8 @@
 # OSM Polygon Sentence Classifier
 
-Train a sentence classifier for OSM polygon descriptions, starting with the
-`landuse` task.
+Train sentence classifiers for OSM polygon descriptions. The original
+Afghanistan `landuse` study and the worldwide V2 `place-relevance` experiment
+use separate identities and public study namespaces.
 
 The public [MkDocs documentation](https://noeflandre.github.io/osm-polygon-sentence-classifier/)
 contains the guides, architecture notes, and operational reference.
@@ -82,8 +83,38 @@ its released `v1-afghanistan/` and `v2-worldwide/` lanes; labeling checkpoints
 are provenance, not training splits. The model repository keeps completed
 artifacts under stable `experiments/` and `studies/` namespaces. Future work
 must pin a dataset revision and code commit and use a new experiment lane; no
-worldwide V2 classifier training is part of this release. See the
+worldwide V2 classifier uses a separate study lane. See the
 [experiment organization guide](docs/guides/experiment-organization.md).
+
+## Worldwide V2 place relevance
+
+The V2 lane trains a binary place-relevance classifier from the pinned
+`v2-worldwide` release. It uses only `sentence_text_normalized`, assigns
+polygons deterministically to 80/10/10 train/validation/test partitions, removes
+contradictory and duplicate sentence-content hashes, evaluates validation at the
+end of each streamed epoch, and evaluates the held-out test set once. The
+`jhu-clsp/mmBERT-small` encoder is frozen; only its classification head is
+trained. The pinned audit leaves 141,283 train, 17,619 validation, and 16,556
+test representatives, so one default epoch is 17,661 steps at batch size 8.
+
+Run or resume the complete guarded workflow across the configured Grid'5000
+sites with public model and static Trackio publication enabled:
+
+```bash
+uv run grid5000-place-relevance-v2 run \
+  --source-commit "$(git rev-parse HEAD)" \
+  --model-revision abc32620dd4f6ab06f5fbe905dc25f310618e09f \
+  --publish \
+  --sync-trackio \
+  --execute
+```
+
+The V2 operator uses short, policy-checked allocations and allows up to 40
+bounded checkpoint continuations by default. It never starts speculative jobs
+on multiple sites and resumes only from a verified checkpoint. The public study
+registry is generated under `studies/place-relevance-v2/` with the protocol,
+data audit, and final metrics. See the
+[Grid'5000 operator reference](docs/reference/grid5000-operator.md).
 
 ## How to read a run
 
@@ -95,6 +126,8 @@ it is not an OAR job ID. A run's `checkpoints/step-N/` directories are complete
 resumable Trainer checkpoints, while its `final/` directory is the terminal
 model. The Hub study `results.json` contains the complete scalar metrics and
 `study.json` contains the pinned protocol and provenance.
+V2 uses the stable name `place-relevance-v2|baseline|seed-42`; its
+`studies/place-relevance-v2/` registry also contains `data-audit.json`.
 
 ## Data and model repositories
 
@@ -154,7 +187,7 @@ Grid'5000 worker mode are documented in
 
 ## Grid'5000
 
-The autonomous command probes all configured Grid'5000 sites concurrently,
+The autonomous commands probe all configured Grid'5000 sites concurrently,
 selects a factually compatible x86_64 GPU (including CUDA capability `>= 7.5`),
 derives the correct OAR queue/resource type from `oarnodes`, stages the exact
 checkout, submits one short job, and monitors it. The worker rechecks the
@@ -162,8 +195,9 @@ assigned GPU before training and retains five complete, identity-bound
 checkpoints. If a job ends before producing a verified model, the controller
 continues only from
 the newest complete checkpoint, on the same site, with a bounded successor
-job; it never restarts from scratch. The default limit is three continuation
-jobs and can be changed with `--max-continuations`. If OAR forecasts the
+job; it never restarts from scratch. Landuse uses three continuation jobs by
+default; worldwide V2 uses 40. Both can be changed with `--max-continuations`.
+If OAR forecasts the
 fallback too late, it probes every configured site, tries one replacement at
 a time, and repeats the bounded probe after a ten-minute cooldown, for at most
 three rounds. The same search starts immediately when OAR provides no start

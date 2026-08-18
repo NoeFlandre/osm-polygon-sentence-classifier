@@ -3,13 +3,14 @@
 The implementation keeps the interfaces narrow and separates data validity,
 training, publication, tracking, and Grid'5000 orchestration:
 
-- `config.py` defines immutable project metadata, including the landuse task,
+- `config.py` defines immutable project metadata, including the original
+  landuse task,
   the read-only source dataset identifier, the eventual model repository
   identifier, and the approved data root.
 - `paths.py` resolves application paths beneath a containment-checked root and
   rejects absolute, traversal, or escaping-symlink paths.
-- `dataset_contract.py` defines the pinned landuse schema, supported labels,
-  and source provenance.
+- `dataset_contract.py` defines the pinned landuse and worldwide V2 schemas,
+  supported labels, model-input exclusions, and source provenance.
 - `dataset_loader.py` exposes the lazy pinned-source loader, deterministic
   polygon split function, and the two-pass `iter_clean_training_examples`
   boundary. Training code must consume only that clean iterator: it
@@ -23,13 +24,18 @@ training, publication, tracking, and Grid'5000 orchestration:
 - `dataset_audit.py` reduces the stream to immutable counts, sentence-level
   content-hash readiness reasons, and a sorted polygon split manifest;
   `audit_cli.py` writes those derived artifacts beneath `audit/landuse`.
+  The V2 lane publishes its pinned aggregate audit beside its study protocol;
+  it uses an 80/10/10 polygon split and a one-epoch budget derived from the
+  clean train count.
 - `tracking.py` builds Trackio project, managed-directory, static-Space, and
   Bucket settings. It provisions the free static Space and does not deploy a
   Gradio service; normal configuration does not import or start Trackio.
 - `training.py` adapts the clean iterator to lazy split-specific Trainer
   records and wires a Hugging Face sequence-classification Trainer. The pure
   evaluation and model-card metric helpers live in `training_metrics.py`, so
-  the orchestration module does not also own metric calculation.
+  the orchestration module does not also own metric calculation. The original
+  landuse wrapper preserves its step-based validation; the V2 wrapper uses
+  epoch validation and evaluates its held-out test split once after training.
   `training_freezing.py` owns the frozen-head and last-two-layer parameter
   policies. Its default `jhu-clsp/mmBERT-small` encoder is multilingual and
   frozen; only the binary classification head is trained, following the
@@ -90,6 +96,10 @@ training, publication, tracking, and Grid'5000 orchestration:
   executes one ablation at a time through the autonomous controller and never
   races multiple jobs. Malformed persisted run records are rejected rather
   than silently ignored.
+- `place_relevance_reporting.py` renders the credential-free V2 study protocol,
+  exact aggregate data audit, and final metric registry under
+  `studies/place-relevance-v2/`. `grid5000_place_relevance_cli.py` exposes the
+  separate autonomous V2 command without changing the landuse CLI.
 
 The audit command is the only local data-consuming command. The autonomous
 Grid'5000 worker consumes the pinned dataset only after the explicit

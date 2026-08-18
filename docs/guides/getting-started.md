@@ -115,8 +115,24 @@ evidence. Review
 execution. The default is a 20-minute allocation with Europe/Paris
 `auto` policy; `--policy-type day` is capped at one hour. A distant queued
 fallback is rechecked across all configured sites in at most three bounded
-replacement rounds, with one trial at a time and a ten-minute cooldown. A run
-allows at most three checkpoint continuations by default.
+replacement rounds, with one trial at a time and a ten-minute cooldown. A
+landuse run allows at most three checkpoint continuations by default. The
+worldwide V2 command uses the same safeguards with a separate task identity,
+the `place-relevance-v2` Trackio project, epoch-level validation, a held-out
+test evaluation at the end, and 40 bounded checkpoint continuations by default:
+
+```bash
+uv run grid5000-place-relevance-v2 run \
+  --source-commit "$(git rev-parse HEAD)" \
+  --model-revision abc32620dd4f6ab06f5fbe905dc25f310618e09f \
+  --publish \
+  --sync-trackio \
+  --execute
+```
+
+The V2 study publishes its protocol and aggregate data audit under
+`studies/place-relevance-v2/`; no result should be interpreted until the
+terminal model and held-out test metrics are present.
 If that limit is exhausted after a complete checkpoint was retained, use
 `resume --run-id RUN_ID --max-continuations N --execute` to extend it; the
 controller checks that the previous job is no longer active before submitting.

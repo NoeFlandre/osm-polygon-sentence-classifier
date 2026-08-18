@@ -14,17 +14,21 @@ from osm_polygon_sentence_classifier.checkpointing import (
 from osm_polygon_sentence_classifier.config import ProjectConfig
 from osm_polygon_sentence_classifier.dataset_contract import (
     LANDUSE_DATASET_CONTRACT,
+    WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT,
 )
 from osm_polygon_sentence_classifier.dataset_loader import split_for_polygon
 from osm_polygon_sentence_classifier.tracking import (
     TRACKIO_STATIC_SPACE_ID,
 )
 from osm_polygon_sentence_classifier.training import (
+    PLACE_RELEVANCE_V2_DEFAULT_MAX_STEPS,
     TrainingConfig,
     TrainingError,
     TrainingResult,
     iter_split_training_records,
+    place_relevance_v2_training_config,
     train_landuse_classifier,
+    train_place_relevance_classifier,
 )
 
 
@@ -45,6 +49,28 @@ def _row(
             "sentence_text_normalized": text,
             "sentence_content_hash": content_hash,
             "landuse_relevance": label,
+        }
+    )
+    return row
+
+
+def _worldwide_row(
+    *,
+    sentence_id: str = "sentence-1",
+    polygon_id: str = "polygon-1",
+    text: str = "A physical description.",
+    label: str = "yes",
+    content_hash: str | None = None,
+) -> dict[str, object]:
+    row = dict.fromkeys(WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT.required_columns)
+    row.update(
+        {
+            "sentence_id": sentence_id,
+            "polygon_id": polygon_id,
+            "region": "us-colorado",
+            "sentence_text_normalized": text,
+            "sentence_content_hash": content_hash,
+            "place_relevance": label,
         }
     )
     return row
@@ -74,6 +100,23 @@ def test_training_config_is_frozen_and_uses_a_managed_relative_output() -> None:
 
     with pytest.raises(AttributeError):
         config.max_steps = 1  # type: ignore[misc]  # ty: ignore[invalid-assignment]
+
+
+def test_training_config_supports_epoch_evaluation_and_a_held_out_test_fraction() -> (
+    None
+):
+    config = TrainingConfig(eval_strategy="epoch", test_fraction=0.1)
+
+    assert config.eval_strategy == "epoch"
+    assert config.test_fraction == 0.1
+
+
+def test_worldwide_v2_config_uses_the_audited_single_epoch_budget() -> None:
+    config = place_relevance_v2_training_config()
+
+    assert PLACE_RELEVANCE_V2_DEFAULT_MAX_STEPS == 17_661
+    assert config.max_steps == 17_661
+    assert config.max_steps == PLACE_RELEVANCE_V2_DEFAULT_MAX_STEPS
 
 
 @pytest.mark.parametrize("output_subdirectory", [Path("."), Path(".."), Path("/tmp")])
@@ -350,6 +393,7 @@ class _FakeTrainer:
     init_calls: list[dict[str, object]] = []
     save_model_calls: list[str] = []
     train_calls: list[str | None] = []
+    evaluate_calls: list[tuple[object, str]] = []
     environment_during_train: dict[str, str | None] = {}
     train_output = object()
 
@@ -363,6 +407,12 @@ class _FakeTrainer:
             "TRACKIO_DIR": os.environ.get("TRACKIO_DIR"),
         }
         return self.train_output
+
+    def evaluate(
+        self, dataset: object, metric_key_prefix: str = "eval"
+    ) -> dict[str, float]:
+        self.evaluate_calls.append((dataset, metric_key_prefix))
+        return {f"{metric_key_prefix}_accuracy": 0.9}
 
     def save_model(self, output_directory: str) -> None:
         self.save_model_calls.append(output_directory)
@@ -391,6 +441,7 @@ def test_training_wires_managed_streams_tokenizer_trainer_and_tracking(
     _FakeTrainer.init_calls.clear()
     _FakeTrainer.save_model_calls.clear()
     _FakeTrainer.train_calls.clear()
+    _FakeTrainer.evaluate_calls.clear()
     _FakeTrainer.environment_during_train.clear()
 
     dependencies = training_runtime.TrainingDependencies(
@@ -469,6 +520,49 @@ def test_training_wires_managed_streams_tokenizer_trainer_and_tracking(
         "HF_HOME": str(ProjectConfig().data_root / "cache/huggingface"),
         "TRACKIO_DIR": str(ProjectConfig().data_root / "tracking"),
     }
+
+
+def test_worldwide_training_evaluates_the_held_out_test_set_after_training(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from osm_polygon_sentence_classifier import training
+
+    dependencies = training_runtime.TrainingDependencies(
+        iterable_dataset=_FakeDataset,
+        auto_tokenizer=_FakeTokenizer,
+        auto_model_for_sequence_classification=_FakeModel,
+        data_collator_with_padding=_FakeDataCollator,
+        training_arguments=_FakeTrainingArguments,
+        trainer=_FakeTrainer,
+    )
+    monkeypatch.setattr(
+        training_runtime, "load_training_dependencies", lambda: dependencies
+    )
+    monkeypatch.setattr(training, "_write_model_card", lambda *args, **kwargs: None)
+    _FakeDataset.created.clear()
+    _FakeTrainer.init_calls.clear()
+    _FakeTrainer.evaluate_calls.clear()
+    _FakeTrainingArguments.calls.clear()
+
+    result = train_place_relevance_classifier(
+        rows_factory=lambda: iter([_worldwide_row(content_hash="worldwide-hash")]),
+        config=TrainingConfig(
+            model_name_or_path="test-model",
+            eval_strategy="epoch",
+            test_fraction=0.1,
+            run_name="place-relevance-v2|baseline|seed-42",
+            output_subdirectory=Path("studies/place-relevance-v2/baseline/models"),
+            tracking_project="place-relevance-v2",
+            artifact_namespace="studies/place-relevance-v2/baseline",
+        ),
+    )
+
+    assert len(_FakeDataset.created) == 3
+    assert _FakeTrainingArguments.calls[0]["eval_strategy"] == "epoch"
+    assert _FakeTrainer.evaluate_calls == [
+        (_FakeDataset.created[2], "test"),
+    ]
+    assert result.metrics == {"test_accuracy": 0.9}
 
 
 def test_training_uses_the_ablation_trackio_project_and_artifact_namespace(

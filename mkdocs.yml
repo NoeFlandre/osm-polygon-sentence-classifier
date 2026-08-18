@@ -1,5 +1,5 @@
 site_name: OSM Polygon Sentence Classifier
-site_description: A safe, landuse-first sentence classifier for OSM polygon descriptions.
+site_description: Reproducible sentence classifiers for OSM polygon descriptions.
 site_url: https://noeflandre.github.io/osm-polygon-sentence-classifier/
 repo_name: NoeFlandre/osm-polygon-sentence-classifier
 repo_url: https://github.com/NoeFlandre/osm-polygon-sentence-classifier
@@ -42,6 +42,7 @@ nav:
       - Docker runtime: guides/docker.md
       - Data policy: guides/data-policy.md
       - Landuse ablation study: guides/ablations.md
+      - Worldwide V2 experiment: guides/place-relevance-v2.md
       - Experiment organization: guides/experiment-organization.md
   - Architecture:
       - Overview: architecture/overview.md

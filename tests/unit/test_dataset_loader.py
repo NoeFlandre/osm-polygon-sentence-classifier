@@ -46,7 +46,7 @@ def _row(
 
 
 def test_training_types_are_limited_to_the_contract_values() -> None:
-    assert get_args(DatasetSplit) == ("train", "validation")
+    assert get_args(DatasetSplit) == ("train", "validation", "test")
     assert get_args(TrainingLabel) == ("no", "yes")
 
 
@@ -55,6 +55,40 @@ def test_split_for_polygon_is_deterministic_and_returns_a_supported_split() -> N
 
     assert result in ("train", "validation")
     assert result == split_for_polygon("polygon-1", validation_fraction=0.2, seed=42)
+
+
+def test_split_for_polygon_supports_a_deterministic_held_out_test_split() -> None:
+    splits = {
+        split_for_polygon(
+            f"polygon-{index}",
+            validation_fraction=0.1,
+            test_fraction=0.1,
+            seed=42,
+        )
+        for index in range(100)
+    }
+
+    assert splits == {"train", "validation", "test"}
+    assert split_for_polygon(
+        "polygon-1", validation_fraction=0.1, test_fraction=0.1, seed=42
+    ) == split_for_polygon(
+        "polygon-1", validation_fraction=0.1, test_fraction=0.1, seed=42
+    )
+
+
+@pytest.mark.parametrize(
+    ("validation_fraction", "test_fraction"),
+    [(-0.1, 0.1), (0.1, -0.1), (0.8, 0.3)],
+)
+def test_split_for_polygon_rejects_invalid_three_way_fractions(
+    validation_fraction: float, test_fraction: float
+) -> None:
+    with pytest.raises(DatasetLoaderError, match="fractions"):
+        split_for_polygon(
+            "polygon-1",
+            validation_fraction=validation_fraction,
+            test_fraction=test_fraction,
+        )
 
 
 @pytest.mark.parametrize("fraction", [-0.01, 1.01, float("nan"), float("inf")])
@@ -315,6 +349,33 @@ def test_clean_iterator_places_a_repeated_hash_in_at_most_one_split() -> None:
         {"train"},
         {"validation"},
     )
+
+
+def test_clean_iterator_can_assign_a_representative_to_the_held_out_test_split() -> (
+    None
+):
+    test_polygon = next(
+        f"polygon-{index}"
+        for index in range(100)
+        if split_for_polygon(
+            f"polygon-{index}",
+            validation_fraction=0.1,
+            test_fraction=0.8,
+            seed=42,
+        )
+        == "test"
+    )
+    example = next(
+        example
+        for example in iter_clean_training_examples(
+            lambda: iter([_row(polygon_id=test_polygon, content_hash="test-hash")]),
+            validation_fraction=0.1,
+            test_fraction=0.8,
+            seed=42,
+        )
+    )
+
+    assert example.split == "test"
 
 
 def test_clean_iterator_ignores_uncertain_rows_when_finding_conflicts() -> None:

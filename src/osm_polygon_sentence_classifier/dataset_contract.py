@@ -9,6 +9,7 @@ __all__ = [
     "DatasetContractError",
     "DatasetProvenance",
     "LANDUSE_DATASET_CONTRACT",
+    "WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT",
 ]
 
 
@@ -54,7 +55,7 @@ class DatasetContract:
     dataset_id: str
     config: str
     split: str
-    region: str
+    region: str | None
     label_column: str
     supported_label_values: tuple[str, ...]
     training_label_values: tuple[str, ...]
@@ -116,10 +117,14 @@ class DatasetContract:
                 "missing required row keys: " + ", ".join(missing)
             )
 
-        if row["region"] != self.region:
+        if self.region is not None and row["region"] != self.region:
             raise DatasetContractError(
                 f"region must be {self.region!r}, got {row['region']!r}"
             )
+        if self.region is None and (
+            not isinstance(row["region"], str) or not row["region"].strip()
+        ):
+            raise DatasetContractError("region must be a non-empty string")
 
         normalized_sentence = row["sentence_text_normalized"]
         if not isinstance(normalized_sentence, str) or not normalized_sentence.strip():
@@ -196,6 +201,83 @@ LANDUSE_DATASET_CONTRACT = DatasetContract(
         repository_revision="07e421a3020127ced2c19304645a6f63e6735966",
         parquet_sha256=(
             "4e9f3300a3f93d5485ada9f950ed77f05b448f9ffba09500ca25b33930b15eb0"
+        ),
+    ),
+)
+
+
+WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT = DatasetContract(
+    dataset_id="NoeFlandre/osm-polygon-wikidata-sentence-relevance",
+    config="v2-worldwide",
+    split="train",
+    region=None,
+    label_column="place_relevance",
+    supported_label_values=("no", "yes"),
+    training_label_values=("no", "yes"),
+    model_input_columns=("sentence_text_normalized",),
+    forbidden_model_input_columns=(
+        "place_relevance",
+        "yes_logprob",
+        "no_logprob",
+        "logit_margin",
+        "two_class_probability",
+        "geometry",
+        "polygon_id",
+        "region",
+        "language",
+        "source",
+        "page_title",
+        "previous_sentence",
+        "next_sentence",
+    ),
+    required_columns=(
+        "sentence_id",
+        "polygon_id",
+        "wikidata",
+        "document_id",
+        "article_id",
+        "source",
+        "language",
+        "site",
+        "page_title",
+        "section_id",
+        "section_index",
+        "section_path",
+        "sentence_index",
+        "sentence_text_raw",
+        "sentence_text_normalized",
+        "previous_sentence",
+        "next_sentence",
+        "url",
+        "page_id",
+        "revision_id",
+        "revision_timestamp",
+        "document_content_hash",
+        "section_content_hash",
+        "sentence_content_hash",
+        "duplicate_occurrence_count",
+        "duplicate_sources",
+        "polygon_name",
+        "osm_primary_tag",
+        "osm_tags",
+        "region",
+        "lat",
+        "lon",
+        "input_dataset_revision",
+        "pipeline_version",
+        "area_km2",
+        "area_bucket",
+        "place_relevance",
+        "yes_logprob",
+        "no_logprob",
+        "logit_margin",
+        "two_class_probability",
+        "geometry",
+    ),
+    provenance=DatasetProvenance(
+        repository_revision="4d0d2b5d53630c24acfb280e9d8159bf6ed0d3fa",
+        parquet_sha256=(
+            "0f76f64f9d2a13081ad26cacb27b18f48c204d9150a494dafb340375e82eb270"
         ),
     ),
 )

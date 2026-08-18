@@ -7,6 +7,9 @@ import pytest
 
 from osm_polygon_sentence_classifier.checkpointing import write_checkpoint_manifest
 from osm_polygon_sentence_classifier.config import ProjectConfig
+from osm_polygon_sentence_classifier.dataset_contract import (
+    WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT,
+)
 from osm_polygon_sentence_classifier.grid5000 import (
     GRID5000_DATASET_REVISION,
     MINIMUM_HOME_HEADROOM_BYTES,
@@ -25,6 +28,7 @@ from osm_polygon_sentence_classifier.grid5000 import (
 from osm_polygon_sentence_classifier.grid5000_worker import (
     WorkerError,
     run_landuse_training_worker,
+    run_place_relevance_training_worker,
     validate_compute_node,
     write_completion_manifest,
 )
@@ -73,6 +77,43 @@ def test_run_identity_rejects_unpinned_revisions(field: str) -> None:
 
     with pytest.raises(Grid5000ConfigurationError, match="40 lowercase"):
         cast(Any, Grid5000RunIdentity)(**values)
+
+
+def test_run_identity_accepts_the_worldwide_v2_task_name() -> None:
+    identity = Grid5000RunIdentity(
+        source_commit=SOURCE_COMMIT,
+        dataset_revision=(
+            WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT.provenance.repository_revision
+        ),
+        model_name_or_path="test-model",
+        model_revision=MODEL_REVISION,
+        task_name="place-relevance-v2",
+        training_config={"max_steps": 100},
+    )
+
+    assert identity.task_name == "place-relevance-v2"
+    assert identity.canonical_payload["task_name"] == "place-relevance-v2"
+
+
+def test_run_identity_reads_legacy_landuse_state_without_task_name() -> None:
+    payload = _identity().canonical_payload
+    payload.pop("task_name")
+
+    identity = Grid5000RunIdentity.from_payload(payload)
+
+    assert identity.task_name == "landuse"
+
+
+def test_run_identity_rejects_an_unknown_task_name() -> None:
+    with pytest.raises(Grid5000ConfigurationError, match="task_name"):
+        Grid5000RunIdentity(
+            source_commit=SOURCE_COMMIT,
+            dataset_revision="d" * 40,
+            model_name_or_path="test-model",
+            model_revision=MODEL_REVISION,
+            task_name="unknown-task",
+            training_config={"max_steps": 100},
+        )
 
 
 def test_run_identity_is_canonical_and_changes_with_training_settings() -> None:
@@ -205,6 +246,23 @@ def test_worker_command_uses_allocation_local_locked_uv_environment() -> None:
     assert 'exec "$uv_bin" run --locked --no-dev --extra training python -m ' in command
     assert '"$HOME/osm-polygon-sentence-classifier"' in command
     assert '"$HOME/osm-polygon-sentence-classifier-data/grid5000/runs/' in command
+
+
+def test_worker_command_carries_the_immutable_task_name() -> None:
+    identity = Grid5000RunIdentity(
+        source_commit=SOURCE_COMMIT,
+        dataset_revision="d" * 40,
+        model_name_or_path="test-model",
+        model_revision=MODEL_REVISION,
+        task_name="place-relevance-v2",
+        training_config={"max_steps": 100},
+    )
+    plan = Grid5000Plan(
+        identity=identity,
+        allocation=Grid5000Allocation(site="nancy", walltime_seconds=1_800),
+    )
+
+    assert "--task-name place-relevance-v2" in plan.worker_command
 
 
 def test_worker_command_leaves_remote_home_path_for_shell_expansion() -> None:
@@ -616,6 +674,66 @@ def test_worker_runs_training_only_after_preflight(tmp_path: Path) -> None:
     )
     assert received["resume_from_checkpoint"] is None
     assert received["checkpoint_identity"] == identity.canonical_payload
+
+
+def test_worldwide_worker_keeps_one_trackio_run_name_across_allocations(
+    tmp_path: Path,
+) -> None:
+    training_config = TrainingConfig(
+        model_name_or_path="test-model",
+        model_revision=MODEL_REVISION,
+        output_subdirectory=Path("studies/place-relevance-v2/baseline/models"),
+        validation_fraction=0.1,
+        test_fraction=0.1,
+        eval_strategy="epoch",
+        trainable_layers="head",
+        run_name="place-relevance-v2|baseline|seed-42",
+        tracking_project="place-relevance-v2",
+        artifact_namespace="studies/place-relevance-v2/baseline",
+    )
+    identity = Grid5000RunIdentity(
+        source_commit=SOURCE_COMMIT,
+        dataset_revision=(
+            WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT.provenance.repository_revision
+        ),
+        model_name_or_path=training_config.model_name_or_path,
+        model_revision=MODEL_REVISION,
+        task_name="place-relevance-v2",
+        training_config={
+            "model_name_or_path": training_config.model_name_or_path,
+            "model_revision": MODEL_REVISION,
+            "output_subdirectory": str(training_config.output_subdirectory),
+            "validation_fraction": 0.1,
+            "test_fraction": 0.1,
+            "eval_strategy": "epoch",
+            "trainable_layers": "head",
+            "run_name": training_config.run_name,
+            "tracking_project": training_config.tracking_project,
+            "artifact_namespace": training_config.artifact_namespace,
+        },
+    )
+    received: dict[str, object] = {}
+
+    def fake_train(**kwargs: object) -> TrainingResult:
+        received.update(kwargs)
+        return TrainingResult(
+            output_directory=tmp_path / "model", train_output=object()
+        )
+
+    run_place_relevance_training_worker(
+        identity,
+        checkout=tmp_path / "checkout",
+        training_config=training_config,
+        remote_data_root=Path.home() / "training-data",
+        environ={"OAR_JOB_ID": "12345"},
+        platform_name="linux",
+        git_runner=_git_runner(SOURCE_COMMIT),
+        cuda_probe=lambda: (True, 1, "Test GPU", (8, 0)),
+        train=fake_train,
+    )
+
+    assert isinstance(received["config"], TrainingConfig)
+    assert received["config"].run_name == training_config.run_name  # type: ignore[union-attr]
 
 
 def test_worker_requires_a_complete_checkpoint_for_continuation(

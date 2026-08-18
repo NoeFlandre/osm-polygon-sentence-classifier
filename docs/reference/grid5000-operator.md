@@ -19,6 +19,37 @@ by the landuse dataset contract. The default model is
 [`jhu-clsp/mmBERT-small`](https://huggingface.co/jhu-clsp/mmBERT-small), with
 the encoder frozen and only the classifier head trained.
 
+## Worldwide V2 place relevance
+
+The separate `grid5000-place-relevance-v2` entry point owns the worldwide
+place-relevance experiment. It uses the same policy, quota, site-probing,
+checkpoint, cleanup, and publication safeguards, but has its own task identity,
+Trackio project, model namespace, and public study registry:
+
+```bash
+uv run grid5000-place-relevance-v2 run \
+  --source-commit "$(git rev-parse HEAD)" \
+  --model-revision abc32620dd4f6ab06f5fbe905dc25f310618e09f \
+  --publish \
+  --sync-trackio \
+  --execute
+```
+
+The V2 contract pins dataset revision
+`4d0d2b5d53630c24acfb280e9d8159bf6ed0d3fa` and uses only
+`sentence_text_normalized`. Polygon IDs determine deterministic 80/10/10
+train/validation/test splits with seed 42. The audited clean counts are
+141,283 / 17,619 / 16,556, so the default one streamed epoch is 17,661 steps
+at batch size 8. Validation runs at each logical epoch end; the held-out test
+set is evaluated once after training. The public study files include the exact
+aggregate audit and are written beneath `studies/place-relevance-v2/`.
+
+V2 uses the stable Trackio project `place-relevance-v2` and run name
+`place-relevance-v2|baseline|seed-42`, so checkpoint continuations extend one
+logical public run instead of creating one run per OAR allocation. Its default
+continuation bound is 40; all replacements remain sequential and policy
+checked.
+
 ## Plan and recovery commands
 
 Without `--execute`, `run` prints a deterministic JSON plan and performs no
@@ -34,8 +65,9 @@ The autonomous command defaults to all configured frontends, a 20-minute
 allocation, Europe/Paris automatic policy selection, and removal of the
 successful run's marked remote data after Hub verification. Repeat `--site` to
 restrict discovery, or use `--keep-remote` to retain the successful run root.
-It retains five complete checkpoints and allows at most three successor jobs;
-override that bound deliberately with `--max-continuations`.
+It retains five complete checkpoints. Landuse allows at most three successor
+jobs by default; worldwide V2 allows 40. Override either bound deliberately
+with `--max-continuations`.
 
 ```bash
 uv run grid5000-landuse status --run-id RUN_ID

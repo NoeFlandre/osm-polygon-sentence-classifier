@@ -1,4 +1,4 @@
-"""Plan, submit, or autonomously run one guarded landuse training run."""
+"""Plan, submit, or autonomously run one guarded classifier training run."""
 
 from __future__ import annotations
 
@@ -15,7 +15,11 @@ from .ablation_study import (
     AblationStudyError,
     publish_study_report,
 )
-from .dataset_contract import LANDUSE_DATASET_CONTRACT
+from .dataset_contract import (
+    LANDUSE_DATASET_CONTRACT,
+    WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT,
+    DatasetContract,
+)
 from .grid5000 import (
     DEFAULT_DAY_WALLTIME_SECONDS,
     MAX_WALLTIME_SECONDS,
@@ -41,7 +45,46 @@ from .training import (
     TrainingConfig,
     TrainingError,
     _training_config_payload,
+    place_relevance_v2_training_config,
 )
+
+TaskName = Literal["landuse", "place-relevance-v2"]
+PLACE_RELEVANCE_V2_DEFAULT_MAX_CONTINUATIONS = 40
+
+
+def _task_contract(task_name: TaskName) -> DatasetContract:
+    return (
+        LANDUSE_DATASET_CONTRACT
+        if task_name == "landuse"
+        else WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT
+    )
+
+
+def _training_config_for_task(
+    arguments: argparse.Namespace,
+    *,
+    task_name: TaskName,
+) -> TrainingConfig:
+    max_steps = arguments.max_steps
+    if task_name == "place-relevance-v2":
+        return place_relevance_v2_training_config(
+            model_name_or_path=arguments.model_name,
+            model_revision=arguments.model_revision,
+            max_steps=(
+                max_steps
+                if max_steps is not None
+                else place_relevance_v2_training_config().max_steps
+            ),
+            publish_to_hub=arguments.publish,
+            sync_trackio=arguments.sync_trackio,
+        )
+    return TrainingConfig(
+        model_name_or_path=arguments.model_name,
+        model_revision=arguments.model_revision,
+        max_steps=1_000 if max_steps is None else max_steps,
+        publish_to_hub=arguments.publish,
+        sync_trackio=arguments.sync_trackio,
+    )
 
 
 def _add_plan_arguments(parser: argparse.ArgumentParser) -> None:
@@ -57,6 +100,7 @@ def _add_plan_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         type=int,
     )
+    parser.add_argument("--max-steps", default=None, type=int)
     parser.add_argument(
         "--policy-type",
         choices=("day", "night"),
@@ -86,9 +130,12 @@ def _add_plan_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _parser() -> argparse.ArgumentParser:
+def _parser(task_name: TaskName) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Plan, submit, or autonomously run one guarded landuse Grid'5000 training run"
+        description=(
+            "Plan, submit, or autonomously run one guarded "
+            f"{task_name} Grid'5000 training run"
+        )
     )
     commands = parser.add_subparsers(dest="command", required=True)
     plan_parser = commands.add_parser("plan", help="print a side-effect-free plan")
@@ -104,7 +151,7 @@ def _parser() -> argparse.ArgumentParser:
         "run",
         help="autonomously probe sites, prepare, submit, monitor, and publish",
     )
-    _add_autonomous_arguments(run_parser)
+    _add_autonomous_arguments(run_parser, task_name=task_name)
     run_parser.add_argument(
         "--execute",
         action="store_true",
@@ -131,15 +178,20 @@ def _parser() -> argparse.ArgumentParser:
         help="print one local autonomous run state",
     )
     status_parser.add_argument("--run-id", required=True)
-    ablations_parser = commands.add_parser(
-        "ablations",
-        help="plan or autonomously run the reproducible landuse ablation study",
-    )
-    _add_ablation_arguments(ablations_parser)
+    if task_name == "landuse":
+        ablations_parser = commands.add_parser(
+            "ablations",
+            help="plan or autonomously run the reproducible landuse ablation study",
+        )
+        _add_ablation_arguments(ablations_parser)
     return parser
 
 
-def _add_autonomous_arguments(parser: argparse.ArgumentParser) -> None:
+def _add_autonomous_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    task_name: TaskName = "landuse",
+) -> None:
     parser.add_argument(
         "--site",
         action="append",
@@ -149,6 +201,7 @@ def _add_autonomous_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--source-commit", default=None)
     parser.add_argument("--model-revision", required=True)
     parser.add_argument("--model-name", default=DEFAULT_MODEL_NAME)
+    parser.add_argument("--max-steps", default=None, type=int)
     parser.add_argument(
         "--walltime-seconds",
         type=int,
@@ -165,8 +218,17 @@ def _add_autonomous_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--max-continuations",
         type=int,
-        default=3,
-        help="maximum bounded same-site checkpoint successors (default: 3)",
+        default=(
+            PLACE_RELEVANCE_V2_DEFAULT_MAX_CONTINUATIONS
+            if task_name == "place-relevance-v2"
+            else 3
+        ),
+        help=(
+            "maximum bounded same-site checkpoint successors "
+            f"(default: {PLACE_RELEVANCE_V2_DEFAULT_MAX_CONTINUATIONS})"
+            if task_name == "place-relevance-v2"
+            else "maximum bounded same-site checkpoint successors (default: 3)"
+        ),
     )
     parser.add_argument("--publish", action="store_true")
     parser.add_argument("--sync-trackio", action="store_true")
@@ -247,18 +309,18 @@ def _add_ablation_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _build_plan(arguments: argparse.Namespace) -> Grid5000Plan:
-    config = TrainingConfig(
-        model_name_or_path=arguments.model_name,
-        model_revision=arguments.model_revision,
-        publish_to_hub=arguments.publish,
-        sync_trackio=arguments.sync_trackio,
-    )
+def _build_plan(
+    arguments: argparse.Namespace,
+    *,
+    task_name: TaskName = "landuse",
+) -> Grid5000Plan:
+    config = _training_config_for_task(arguments, task_name=task_name)
     identity = Grid5000RunIdentity(
         source_commit=arguments.source_commit,
-        dataset_revision=LANDUSE_DATASET_CONTRACT.provenance.repository_revision,
+        dataset_revision=_task_contract(task_name).provenance.repository_revision,
         model_name_or_path=config.model_name_or_path,
         model_revision=arguments.model_revision,
+        task_name=task_name,
         training_config=_training_config_payload(config),
     )
     walltime_seconds = arguments.walltime_seconds
@@ -317,19 +379,19 @@ def _current_source_commit() -> str:
     return source_commit
 
 
-def _build_autonomous_config(arguments: argparse.Namespace) -> AutonomousRunConfig:
+def _build_autonomous_config(
+    arguments: argparse.Namespace,
+    *,
+    task_name: TaskName = "landuse",
+) -> AutonomousRunConfig:
     source_commit = arguments.source_commit or _current_source_commit()
-    training_config = TrainingConfig(
-        model_name_or_path=arguments.model_name,
-        model_revision=arguments.model_revision,
-        publish_to_hub=arguments.publish,
-        sync_trackio=arguments.sync_trackio,
-    )
+    training_config = _training_config_for_task(arguments, task_name=task_name)
     identity = Grid5000RunIdentity(
         source_commit=source_commit,
-        dataset_revision=LANDUSE_DATASET_CONTRACT.provenance.repository_revision,
+        dataset_revision=_task_contract(task_name).provenance.repository_revision,
         model_name_or_path=training_config.model_name_or_path,
         model_revision=arguments.model_revision,
+        task_name=task_name,
         training_config=_training_config_payload(training_config),
     )
     return AutonomousRunConfig(
@@ -538,8 +600,8 @@ def _print_progress(message: str) -> None:
     print(f"[grid5000] {message}", file=sys.stderr, flush=True)
 
 
-def _handle_run(arguments: argparse.Namespace) -> int:
-    autonomous = _build_autonomous_config(arguments)
+def _handle_run(arguments: argparse.Namespace, *, task_name: TaskName) -> int:
+    autonomous = _build_autonomous_config(arguments, task_name=task_name)
     if not arguments.execute:
         _print_json(_autonomous_plan_payload(autonomous))
         return 0
@@ -563,10 +625,17 @@ def _handle_status(arguments: argparse.Namespace) -> int:
     return 0
 
 
-def _handle_resume(arguments: argparse.Namespace) -> int:
+def _handle_resume(
+    arguments: argparse.Namespace,
+    *,
+    task_name: TaskName,
+) -> int:
     state = AutonomousStateStore().load(arguments.run_id)
     if state is None:
         raise Grid5000StateError("autonomous run state was not found")
+    persisted_task = state.identity.get("task_name", "landuse")
+    if persisted_task != task_name:
+        raise Grid5000StateError(f"run task does not match {task_name!r} command")
     autonomous = _config_from_state(
         state.to_dict(),
         max_continuations_override=arguments.max_continuations,
@@ -584,8 +653,12 @@ def _handle_resume(arguments: argparse.Namespace) -> int:
     return 0
 
 
-def _handle_plan_or_submit(arguments: argparse.Namespace) -> int:
-    plan = _build_plan(arguments)
+def _handle_plan_or_submit(
+    arguments: argparse.Namespace,
+    *,
+    task_name: TaskName,
+) -> int:
+    plan = _build_plan(arguments, task_name=task_name)
     if arguments.command == "plan":
         _print_json(plan.to_dict())
         return 0
@@ -600,14 +673,14 @@ def _handle_plan_or_submit(arguments: argparse.Namespace) -> int:
     return 0
 
 
-def _dispatch(arguments: argparse.Namespace) -> int:
+def _dispatch(arguments: argparse.Namespace, *, task_name: TaskName) -> int:
     handlers = {
-        "run": _handle_run,
+        "run": lambda args: _handle_run(args, task_name=task_name),
         "ablations": _handle_ablations,
         "status": _handle_status,
-        "resume": _handle_resume,
-        "plan": _handle_plan_or_submit,
-        "submit": _handle_plan_or_submit,
+        "resume": lambda args: _handle_resume(args, task_name=task_name),
+        "plan": lambda args: _handle_plan_or_submit(args, task_name=task_name),
+        "submit": lambda args: _handle_plan_or_submit(args, task_name=task_name),
     }
     handler = handlers.get(arguments.command)
     if handler is None:
@@ -615,13 +688,17 @@ def _dispatch(arguments: argparse.Namespace) -> int:
     return handler(arguments)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    task_name: TaskName = "landuse",
+) -> int:
     """Run a side-effect-free plan unless an explicit execute gate is supplied."""
 
-    parser = _parser()
+    parser = _parser(task_name)
     arguments = parser.parse_args(argv)
     try:
-        return _dispatch(arguments)
+        return _dispatch(arguments, task_name=task_name)
     except (
         Grid5000ConfigurationError,
         Grid5000ExecutionError,

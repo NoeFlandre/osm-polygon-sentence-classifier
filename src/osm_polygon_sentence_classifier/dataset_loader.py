@@ -10,7 +10,7 @@ from .config import ProjectConfig
 from .dataset_contract import LANDUSE_DATASET_CONTRACT, DatasetContract
 from .paths import ManagedPaths
 
-DatasetSplit = Literal["train", "validation"]
+DatasetSplit = Literal["train", "validation", "test"]
 TrainingLabel = Literal["no", "yes"]
 
 __all__ = [
@@ -52,6 +52,31 @@ def _validate_validation_fraction(validation_fraction: float) -> None:
         )
 
 
+def _validate_split_fractions(
+    validation_fraction: float,
+    test_fraction: float,
+) -> None:
+    if test_fraction == 0:
+        _validate_validation_fraction(validation_fraction)
+        return
+    if (
+        isinstance(validation_fraction, bool)
+        or not isinstance(validation_fraction, (int, float))
+        or not math.isfinite(validation_fraction)
+        or validation_fraction < 0
+        or validation_fraction > 1
+        or isinstance(test_fraction, bool)
+        or not isinstance(test_fraction, (int, float))
+        or not math.isfinite(test_fraction)
+        or not 0 <= test_fraction <= 1
+        or validation_fraction + test_fraction > 1
+    ):
+        raise DatasetLoaderError(
+            "validation and test fractions must be finite, non-negative, "
+            "and sum to at most 1"
+        )
+
+
 def _require_identifier(name: str, value: object) -> str:
     if not isinstance(value, str) or not value.strip():
         raise DatasetLoaderError(f"{name} must be a non-empty string")
@@ -62,15 +87,20 @@ def split_for_polygon(
     polygon_id: str,
     *,
     validation_fraction: float = 0.2,
+    test_fraction: float = 0.0,
     seed: int = 42,
 ) -> DatasetSplit:
-    """Assign a polygon to a deterministic training or validation split."""
+    """Assign a polygon to deterministic training, validation, or test."""
 
-    _validate_validation_fraction(validation_fraction)
+    _validate_split_fractions(validation_fraction, test_fraction)
     polygon_id = _require_identifier("polygon_id", polygon_id)
     digest = hashlib.sha256(f"{seed}:{polygon_id}".encode()).digest()
     value = int.from_bytes(digest[:8], byteorder="big", signed=False) / 2**64
-    return "validation" if value < validation_fraction else "train"
+    if value < validation_fraction:
+        return "validation"
+    if value < validation_fraction + test_fraction:
+        return "test"
+    return "train"
 
 
 def _training_label_for_row(
@@ -91,6 +121,7 @@ def _training_example_from_row(
     *,
     label: TrainingLabel,
     validation_fraction: float,
+    test_fraction: float,
     seed: int,
 ) -> TrainingExample:
     sentence_id = _require_identifier("sentence_id", row["sentence_id"])
@@ -103,6 +134,7 @@ def _training_example_from_row(
         split=split_for_polygon(
             polygon_id,
             validation_fraction=validation_fraction,
+            test_fraction=test_fraction,
             seed=seed,
         ),
     )
@@ -130,12 +162,13 @@ def iter_training_examples(
     rows: Iterable[Mapping[str, object]],
     *,
     validation_fraction: float = 0.2,
+    test_fraction: float = 0.0,
     seed: int = 42,
     contract: DatasetContract = LANDUSE_DATASET_CONTRACT,
 ) -> Iterator[TrainingExample]:
     """Lazily validate every row, filter, and transform streaming dataset rows."""
 
-    _validate_validation_fraction(validation_fraction)
+    _validate_split_fractions(validation_fraction, test_fraction)
     for row in _validated_rows(rows, contract=contract):
         label = row[contract.label_column]
         if label not in contract.training_label_values:
@@ -147,6 +180,7 @@ def iter_training_examples(
             row,
             label=training_label,
             validation_fraction=validation_fraction,
+            test_fraction=test_fraction,
             seed=seed,
         )
 
@@ -184,6 +218,7 @@ def _emit_clean_examples(
     *,
     contradictory_hashes: set[str],
     validation_fraction: float,
+    test_fraction: float,
     seed: int,
     contract: DatasetContract,
 ) -> Iterator[TrainingExample]:
@@ -205,6 +240,7 @@ def _emit_clean_examples(
                 row,
                 label=label,
                 validation_fraction=validation_fraction,
+                test_fraction=test_fraction,
                 seed=seed,
             )
             continue
@@ -215,6 +251,7 @@ def _emit_clean_examples(
             row,
             label=label,
             validation_fraction=validation_fraction,
+            test_fraction=test_fraction,
             seed=seed,
         )
 
@@ -223,6 +260,7 @@ def iter_clean_training_examples(
     rows_factory: Callable[[], Iterable[Mapping[str, object]]],
     *,
     validation_fraction: float = 0.2,
+    test_fraction: float = 0.0,
     seed: int = 42,
     contract: DatasetContract = LANDUSE_DATASET_CONTRACT,
 ) -> Iterator[TrainingExample]:
@@ -239,7 +277,7 @@ def iter_clean_training_examples(
     behavior.
     """
 
-    _validate_validation_fraction(validation_fraction)
+    _validate_split_fractions(validation_fraction, test_fraction)
     first_stream = rows_factory()
     second_stream = rows_factory()
     first_iterator = iter(first_stream)
@@ -255,6 +293,7 @@ def iter_clean_training_examples(
         second_iterator,
         contradictory_hashes=contradictory_hashes,
         validation_fraction=validation_fraction,
+        test_fraction=test_fraction,
         seed=seed,
         contract=contract,
     )

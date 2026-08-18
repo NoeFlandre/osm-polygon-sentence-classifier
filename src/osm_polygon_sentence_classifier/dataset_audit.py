@@ -45,7 +45,7 @@ class AuditReport:
     dataset_id: str
     config: str
     split: str
-    region: str
+    region: str | None
     repository_revision: str
     parquet_sha256: str
     validation_fraction: float
