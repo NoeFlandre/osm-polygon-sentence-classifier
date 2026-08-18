@@ -235,14 +235,16 @@ def test_day_allocation_accepts_only_a_one_hour_window() -> None:
         )
 
 
-def test_worker_command_uses_allocation_local_locked_uv_environment() -> None:
+def test_worker_command_reuses_a_run_scoped_locked_uv_environment() -> None:
     command = _plan().worker_command
 
     assert (
-        'export UV_PROJECT_ENVIRONMENT="/tmp/osm-polygon-sentence-classifier-'
+        'remote_run_root="$HOME/osm-polygon-sentence-classifier-data/grid5000/runs/'
         in command
     )
-    assert 'export UV_CACHE_DIR="/tmp/osm-polygon-sentence-classifier-' in command
+    assert 'export UV_PROJECT_ENVIRONMENT="$remote_run_root/.venv"' in command
+    assert 'export UV_CACHE_DIR="$remote_run_root/.uv-cache"' in command
+    assert "/tmp/osm-polygon-sentence-classifier-" not in command
     assert 'cpu_architecture="$(uname -m)"' in command
     assert '[ "$cpu_architecture" = "x86_64" ]' in command
     assert 'uv_bin="$(command -v uv || true)"' in command
@@ -273,12 +275,11 @@ def test_worker_command_carries_the_immutable_task_name() -> None:
 def test_worker_command_leaves_remote_home_path_for_shell_expansion() -> None:
     command = _plan().worker_command
 
-    expected_root = (
-        '--remote-data-root "$HOME/osm-polygon-sentence-classifier-data/'
-        f'grid5000/runs/{_plan().identity.run_id}"'
-    )
-
-    assert expected_root in command
+    assert '--remote-data-root "$remote_run_root"' in command
+    assert (
+        'remote_run_root="$HOME/osm-polygon-sentence-classifier-data/grid5000/runs/'
+        f'{_plan().identity.run_id}"'
+    ) in command
 
 
 def test_container_worker_command_uses_explicit_mounts_and_fails_closed() -> None:

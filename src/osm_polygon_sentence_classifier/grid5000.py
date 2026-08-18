@@ -429,10 +429,10 @@ class Grid5000Plan:
     def worker_command(self) -> str:
         """Return the fixed compute-node command for the training worker.
 
-        The locked Python environment and uv cache live in allocation-local
-        scratch rather than consuming the user's persistent home quota. Model
-        caches, outputs, checkpoints, and Trackio state remain under the
-        worker's managed persistent data root.
+        The locked Python environment and uv cache live in the managed,
+        run-scoped data root so short continuation jobs reuse downloads. The
+        terminal controller cleanup removes that root after completion; model
+        caches, outputs, checkpoints, and Trackio state remain there as well.
         """
 
         if self.container_image is not None:
@@ -473,18 +473,19 @@ class Grid5000Plan:
                 *worker_args[2:],
             )
         )
-        remote_data_root = (
+        remote_run_root = (
             f'"$HOME/{REMOTE_DATA_SUBDIRECTORY}/{REMOTE_RUNS_SUBDIRECTORY}/'
             f'{self.identity.run_id}"'
         )
-        worker_command += f" --remote-data-root {remote_data_root}"
+        worker_command += ' --remote-data-root "$remote_run_root"'
         if self.resume_from_checkpoint:
             worker_command += " --require-checkpoint"
         return (
             f'cd "$HOME/{REMOTE_CHECKOUT_SUBDIRECTORY}" && '
             "umask 077 && set -eu && "
-            'export UV_PROJECT_ENVIRONMENT="/tmp/osm-polygon-sentence-classifier-${OAR_JOB_ID}.venv" && '
-            'export UV_CACHE_DIR="/tmp/osm-polygon-sentence-classifier-${OAR_JOB_ID}-uv-cache" && '
+            f"remote_run_root={remote_run_root} && "
+            'export UV_PROJECT_ENVIRONMENT="$remote_run_root/.venv" && '
+            'export UV_CACHE_DIR="$remote_run_root/.uv-cache" && '
             'cpu_architecture="$(uname -m)"; '
             '[ "$cpu_architecture" = "x86_64" ] || '
             '{ echo "unsupported compute-node architecture: $cpu_architecture" >&2; exit 78; }; '
