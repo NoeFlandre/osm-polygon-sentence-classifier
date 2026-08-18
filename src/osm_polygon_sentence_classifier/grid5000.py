@@ -467,6 +467,7 @@ class Grid5000Plan:
         )
         worker_command = shlex.join(
             (
+                *worker_args[:2],
                 "--no-dev",
                 "--extra",
                 "training",
@@ -486,12 +487,6 @@ class Grid5000Plan:
             f"remote_run_root={remote_run_root} && "
             'export UV_PROJECT_ENVIRONMENT="$remote_run_root/.venv" && '
             'export UV_CACHE_DIR="$HOME/.cache/osm-polygon-sentence-classifier/uv" && '
-            "uv_run_options=(run --locked); "
-            'if [ -d "$HOME/.cache/osm-polygon-sentence-classifier/wheels" ]; '
-            'then export UV_FIND_LINKS="$HOME/.cache/osm-polygon-sentence-classifier/wheels"; '
-            "uv_run_options+=(--no-index --find-links "
-            '"$HOME/.cache/osm-polygon-sentence-classifier/wheels"); '
-            "fi && "
             'cpu_architecture="$(uname -m)"; '
             '[ "$cpu_architecture" = "x86_64" ] || '
             '{ echo "unsupported compute-node architecture: $cpu_architecture" >&2; exit 78; }; '
@@ -500,7 +495,14 @@ class Grid5000Plan:
             'test -x "$uv_bin"; '
             '"$uv_bin" --version >/dev/null 2>&1 || '
             '{ echo "uv is not executable on compute-node architecture $cpu_architecture" >&2; exit 78; }; '
-            'exec "$uv_bin" "${uv_run_options[@]}" ' + worker_command
+            'if [ -d "$HOME/.cache/osm-polygon-sentence-classifier/wheels" ]; '
+            'then "$uv_bin" venv "$UV_PROJECT_ENVIRONMENT" --allow-existing '
+            "--no-python-downloads >/dev/null; "
+            '"$uv_bin" pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" '
+            "--no-index --no-deps --find-links "
+            '"$HOME/.cache/osm-polygon-sentence-classifier/wheels" torch; '
+            "fi && "
+            'exec "$uv_bin" ' + worker_command
         )
 
     def _container_worker_command(self) -> str:

@@ -249,15 +249,12 @@ def test_worker_command_reuses_a_shared_locked_uv_cache() -> None:
     )
     assert (
         'if [ -d "$HOME/.cache/osm-polygon-sentence-classifier/wheels" ]; then '
-        'export UV_FIND_LINKS="$HOME/.cache/osm-polygon-sentence-classifier/wheels"; '
-        "uv_run_options+=(--no-index --find-links "
-        '"$HOME/.cache/osm-polygon-sentence-classifier/wheels"); '
+        '"$uv_bin" venv "$UV_PROJECT_ENVIRONMENT" --allow-existing '
+        "--no-python-downloads >/dev/null; "
+        '"$uv_bin" pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" '
+        "--no-index --no-deps --find-links "
+        '"$HOME/.cache/osm-polygon-sentence-classifier/wheels" torch; '
         "fi" in command
-    )
-    assert "uv_run_options=(run --locked)" in command
-    assert (
-        "uv_run_options+=(--no-index --find-links "
-        '"$HOME/.cache/osm-polygon-sentence-classifier/wheels")' in command
     )
     assert "/tmp/osm-polygon-sentence-classifier-" not in command
     assert 'cpu_architecture="$(uname -m)"' in command
@@ -265,10 +262,7 @@ def test_worker_command_reuses_a_shared_locked_uv_cache() -> None:
     assert 'uv_bin="$(command -v uv || true)"' in command
     assert '[ -n "$uv_bin" ] || uv_bin="$HOME/.local/bin/uv"' in command
     assert '"$uv_bin" --version >/dev/null 2>&1' in command
-    assert (
-        'exec "$uv_bin" "${uv_run_options[@]}" --no-dev --extra training python -m '
-        in command
-    )
+    assert 'exec "$uv_bin" run --locked --no-dev --extra training python -m ' in command
     assert '"$HOME/osm-polygon-sentence-classifier"' in command
     assert '"$HOME/osm-polygon-sentence-classifier-data/grid5000/runs/' in command
 
