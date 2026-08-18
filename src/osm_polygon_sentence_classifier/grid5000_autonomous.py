@@ -76,6 +76,12 @@ DEFAULT_AUTONOMOUS_WALLTIME_SECONDS = SHORT_TRIAL_WALLTIME_SECONDS
 MAX_REPLACEMENT_ATTEMPTS = 3
 REPLACEMENT_RETRY_INTERVAL = timedelta(minutes=10)
 _SOURCE_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
+_STALE_QUEUE_ERROR_PATTERN = re.compile(
+    r"^[A-Za-z0-9_.-]+ job [1-9][0-9]* remained queued with "
+    r"(?:no start-time prediction|scheduled start "
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}) "
+    r"after [1-9][0-9]* replacement rounds$"
+)
 
 
 class AutonomousRunError(RuntimeError):
@@ -817,8 +823,14 @@ class AutonomousRunController:
             facts.get("error") == "job ended without a complete checkpoint"
             and raw_count < self.config.max_continuations
         )
+        stale_queued_failure = (
+            isinstance(facts.get("error"), str)
+            and _STALE_QUEUE_ERROR_PATTERN.fullmatch(cast(str, facts["error"]))
+            is not None
+            and raw_count < self.config.max_continuations
+        )
         exhausted = raw_count == raw_limit and facts.get("error") == expected_error
-        if not (recoverable_checkpoint_failure or exhausted):
+        if not (recoverable_checkpoint_failure or stale_queued_failure or exhausted):
             raise AutonomousRunError("run is not resumable from phase failed")
         if exhausted and self.config.max_continuations <= raw_limit:
             raise AutonomousRunError(

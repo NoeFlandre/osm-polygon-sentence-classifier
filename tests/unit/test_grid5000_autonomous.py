@@ -929,6 +929,59 @@ def test_failed_run_can_extend_from_a_retained_checkpoint(
     assert remote.prepared_allow_failed_run is True
 
 
+def test_failed_run_can_restart_after_a_stale_queued_job(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+    config = replace(_config(), max_continuations=41)
+    remote = _FailedRunContinuationRemote()
+    probe = SiteProbe(
+        name="grenoble",
+        reachable=True,
+        resources=(
+            GpuResource(
+                gpu_memory_mb=16_000,
+                cuda_capability=(8, 0),
+                jobs_assigned=0,
+                production=True,
+                exotic=False,
+            ),
+        ),
+        persistent_free_bytes=10 * 1024**3,
+        queued_jobs=0,
+    )
+    current = AutonomousRunState(
+        run_id=config.identity.run_id,
+        phase="failed",
+        identity=config.identity.canonical_payload,
+        site="grenoble",
+        job_id=99,
+        facts={
+            "continuation_count": 14,
+            "max_continuations": 41,
+            "error": (
+                "grenoble job 99 remained queued with scheduled start "
+                "2026-08-19 10:34:02 after 3 replacement rounds"
+            ),
+        },
+    )
+    controller = AutonomousRunController(
+        config,
+        state_root=tmp_path / "runs",
+        probe_sites=lambda **_: (probe,),
+        remote_factory=lambda _site: remote,
+        hub_api=_FakeHub(),
+        poll_seconds=0,
+    )
+    controller.state.create(current)
+
+    result = controller.run()
+
+    assert result.phase == "completed"
+    assert remote.submission_count == 1
+
+
 def test_failed_run_can_recover_from_a_published_checkpoint(
     tmp_path: Path,
     monkeypatch,
