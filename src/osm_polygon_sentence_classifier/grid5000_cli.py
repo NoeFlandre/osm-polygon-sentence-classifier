@@ -610,9 +610,7 @@ def _handle_resume(
         state.to_dict(),
         max_continuations_override=arguments.max_continuations,
         worker_source_commit_override=(
-            _current_source_commit()
-            if arguments.execute and arguments.max_continuations is not None
-            else None
+            _current_source_commit() if arguments.execute else None
         ),
     )
     if not arguments.execute:

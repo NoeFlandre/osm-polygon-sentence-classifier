@@ -249,6 +249,59 @@ def test_resume_can_explicitly_extend_a_failed_run_continuation_limit(
     assert json.loads(capsys.readouterr().out) == {"phase": "submitted"}
 
 
+def test_resume_execution_uses_current_worker_commit_without_limit_override(
+    monkeypatch,
+    capsys,
+) -> None:
+    identity = Grid5000RunIdentity(
+        source_commit=SOURCE_COMMIT,
+        dataset_revision="d" * 40,
+        model_name_or_path="jhu-clsp/mmBERT-small",
+        model_revision=MODEL_REVISION,
+        training_config={
+            "model_name_or_path": "jhu-clsp/mmBERT-small",
+            "model_revision": MODEL_REVISION,
+            "publish_to_hub": False,
+            "sync_trackio": False,
+        },
+    )
+    state = AutonomousRunState(
+        run_id=identity.run_id,
+        phase="running",
+        identity=identity.canonical_payload,
+        site="nancy",
+        job_id=99,
+        facts={
+            "max_continuations": 3,
+            "continuation_count": 1,
+            "worker_source_commit": "c" * 40,
+        },
+    )
+    captured: list[str | None] = []
+
+    class FakeController:
+        def __init__(self, config, *, emit) -> None:
+            del emit
+            captured.append(config.worker_source_commit)
+
+        def run(self) -> SimpleNamespace:
+            return SimpleNamespace(to_dict=lambda: {"phase": "running"})
+
+    monkeypatch.setattr(
+        grid5000_cli.AutonomousStateStore,
+        "load",
+        lambda _self, _run_id: state,
+    )
+    monkeypatch.setattr(grid5000_cli, "_current_source_commit", lambda: "e" * 40)
+    monkeypatch.setattr(grid5000_cli, "AutonomousRunController", FakeController)
+
+    exit_code = grid5000_cli.main(["resume", "--run-id", identity.run_id, "--execute"])
+
+    assert exit_code == 0
+    assert captured == ["e" * 40]
+    assert json.loads(capsys.readouterr().out) == {"phase": "running"}
+
+
 def test_autonomous_execution_prints_progress_to_stderr_and_json_to_stdout(
     monkeypatch, capsys
 ) -> None:
