@@ -40,12 +40,16 @@ from .grid5000_oar import (
 from .grid5000_policy import (
     SHORT_TRIAL_WALLTIME_SECONDS,
     ReplacementCandidate,
-    attempt_immediate_replacement,
     decide_queued_replacement,
     policy_type_for,
     should_seek_replacement,
 )
 from .grid5000_remote import Grid5000Remote
+from .grid5000_replacement import (
+    ReplacementContext,
+    ReplacementCoordinator,
+    replacement_candidates,
+)
 from .grid5000_sites import (
     DEFAULT_MAX_WORKERS,
     DEFAULT_SITES,
@@ -434,112 +438,11 @@ class AutonomousRunController:
         *,
         fallback_site: str,
     ) -> tuple[ReplacementCandidate, ...]:
-        candidates: list[ReplacementCandidate] = []
-        for probe in probes:
-            if probe.name == fallback_site:
-                continue
-            if (
-                not probe.reachable
-                or not probe.idle_compatible(self.config.requirements)
-                or probe.persistent_free_bytes
-                < self.config.requirements.persistent_free_bytes
-            ):
-                continue
-            allocation = choose_allocation(
-                probe.resources,
-                requirements=self.config.requirements,
-            )
-            if allocation is not None:
-                candidates.append(ReplacementCandidate(probe.name, allocation))
-        return tuple(sorted(candidates, key=lambda item: item.site))
-
-    def _replacement_raw_remote(
-        self,
-        site: str,
-        raw_remotes: dict[str, Any],
-    ) -> Any:
-        remote = raw_remotes.get(site)
-        if remote is None:
-            remote = self.remote_factory(site)
-            raw_remotes[site] = remote
-        return remote
-
-    def _replacement_client(
-        self,
-        site: str,
-        *,
-        raw_remotes: dict[str, Any],
-        clients: dict[str, Any],
-    ) -> Any:
-        client = clients.get(site)
-        if client is None:
-            client = OarClient(
-                self._replacement_raw_remote(site, raw_remotes),
-            )
-            clients[site] = client
-        return client
-
-    def _submit_replacement_candidate(
-        self,
-        candidate: ReplacementCandidate,
-        *,
-        probes: Sequence[SiteProbe],
-        raw_remotes: dict[str, Any],
-    ) -> int:
-        remote = self._replacement_raw_remote(candidate.site, raw_remotes)
-        self.emit(f"submitting a short replacement trial at {candidate.site}")
-        remote.prepare(
-            run_id=self.config.identity.run_id,
-            source_commit=self._worker_source_commit(),
+        return replacement_candidates(
+            probes,
+            fallback_site=fallback_site,
+            requirements=self.config.requirements,
         )
-        token = self._local_token_for_publication()
-        if token:
-            remote.install_hugging_face_token(token)
-        probe = next(item for item in probes if item.name == candidate.site)
-        plan = self._build_plan(
-            probe,
-            walltime_seconds=SHORT_TRIAL_WALLTIME_SECONDS,
-        )
-        return self._submit_plan(remote, plan)
-
-    def _replacement_status(
-        self,
-        site: str,
-        job_id: int,
-        *,
-        raw_remotes: dict[str, Any],
-        clients: dict[str, Any],
-    ) -> JobStatus:
-        status = self._replacement_client(
-            site,
-            raw_remotes=raw_remotes,
-            clients=clients,
-        ).status(job_id)
-        self.emit(f"{site} replacement job {job_id}: {format_job_status(status)}")
-        return status
-
-    def _cancel_replacement(
-        self,
-        site: str,
-        job_id: int,
-        *,
-        raw_remotes: dict[str, Any],
-        clients: dict[str, Any],
-    ) -> None:
-        remote = self._replacement_raw_remote(site, raw_remotes)
-        client = self._replacement_client(
-            site,
-            raw_remotes=raw_remotes,
-            clients=clients,
-        )
-        client.cancel(job_id)
-        self.emit(f"cancelled replacement job {job_id} at {site}")
-        if not self.config.cleanup:
-            return
-        with suppress(Exception):
-            if not is_live_state(client.status(job_id).state):
-                remote.mark_status(self.config.identity.run_id, "failed")
-                remote.cleanup(self.config.identity.run_id)
 
     def _try_replacement(
         self,
@@ -548,52 +451,32 @@ class AutonomousRunController:
         fallback_job_id: int,
         fallback_remote: Any,
     ) -> tuple[str, int, Any]:
-        self.emit(
-            f"run {self.config.identity.run_id}: checking all "
-            f"{len(self.config.sites)} configured sites for replacement"
+        coordinator = ReplacementCoordinator(
+            ReplacementContext(
+                run_id=self.config.identity.run_id,
+                source_commit=self._worker_source_commit(),
+                sites=self.config.sites,
+                requirements=self.config.requirements,
+                max_workers=self.config.max_workers,
+                cleanup=self.config.cleanup,
+                poll_seconds=self.poll_seconds or 1.0,
+                probe_sites=self.probe_sites,
+                remote_factory=self.remote_factory,
+                build_plan=lambda probe, walltime: self._build_plan(
+                    probe,
+                    walltime_seconds=walltime,
+                ),
+                submit_plan=self._submit_plan,
+                token_provider=self._local_token_for_publication,
+                emit=self.emit,
+                sleep=self.sleeper,
+            )
         )
-        probes = self.probe_sites(
-            sites=self.config.sites,
-            requirements=self.config.requirements,
-            max_workers=self.config.max_workers,
-        )
-        candidates = self._candidate_list(probes, fallback_site=fallback_site)
-        candidate_names = (
-            ", ".join(candidate.site for candidate in candidates) or "none"
-        )
-        self.emit(
-            f"run {self.config.identity.run_id}: replacement candidates: "
-            f"{candidate_names}"
-        )
-        raw_remotes: dict[str, Any] = {fallback_site: fallback_remote}
-        clients: dict[str, Any] = {fallback_site: OarClient(fallback_remote)}
-
-        outcome = attempt_immediate_replacement(
+        return coordinator.run(
             fallback_site=fallback_site,
             fallback_job_id=fallback_job_id,
-            candidates=candidates,
-            submit=lambda candidate: self._submit_replacement_candidate(
-                candidate,
-                probes=probes,
-                raw_remotes=raw_remotes,
-            ),
-            status=lambda site, job_id: self._replacement_status(
-                site,
-                job_id,
-                raw_remotes=raw_remotes,
-                clients=clients,
-            ),
-            cancel=lambda site, job_id: self._cancel_replacement(
-                site,
-                job_id,
-                raw_remotes=raw_remotes,
-                clients=clients,
-            ),
-            sleep=self.sleeper,
-            poll_seconds=self.poll_seconds or 1.0,
+            fallback_remote=fallback_remote,
         )
-        raw_remote = raw_remotes.get(outcome.site, fallback_remote)
-        return outcome.site, outcome.job_id, raw_remote
 
     def _handle_queued_status(
         self,

@@ -15,11 +15,6 @@ from .ablation_study import (
     AblationStudyError,
     publish_study_report,
 )
-from .dataset_contract import (
-    LANDUSE_DATASET_CONTRACT,
-    WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT,
-    DatasetContract,
-)
 from .grid5000 import (
     DEFAULT_DAY_WALLTIME_SECONDS,
     MAX_WALLTIME_SECONDS,
@@ -45,46 +40,13 @@ from .training import (
     TrainingConfig,
     TrainingError,
     _training_config_payload,
-    place_relevance_v2_training_config,
 )
-
-TaskName = Literal["landuse", "place-relevance-v2"]
-PLACE_RELEVANCE_V2_DEFAULT_MAX_CONTINUATIONS = 40
-
-
-def _task_contract(task_name: TaskName) -> DatasetContract:
-    return (
-        LANDUSE_DATASET_CONTRACT
-        if task_name == "landuse"
-        else WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT
-    )
-
-
-def _training_config_for_task(
-    arguments: argparse.Namespace,
-    *,
-    task_name: TaskName,
-) -> TrainingConfig:
-    max_steps = arguments.max_steps
-    if task_name == "place-relevance-v2":
-        return place_relevance_v2_training_config(
-            model_name_or_path=arguments.model_name,
-            model_revision=arguments.model_revision,
-            max_steps=(
-                max_steps
-                if max_steps is not None
-                else place_relevance_v2_training_config().max_steps
-            ),
-            publish_to_hub=arguments.publish,
-            sync_trackio=arguments.sync_trackio,
-        )
-    return TrainingConfig(
-        model_name_or_path=arguments.model_name,
-        model_revision=arguments.model_revision,
-        max_steps=1_000 if max_steps is None else max_steps,
-        publish_to_hub=arguments.publish,
-        sync_trackio=arguments.sync_trackio,
-    )
+from .training_tasks import (
+    TaskName,
+    default_max_continuations,
+    task_contract,
+    training_config_for_task,
+)
 
 
 def _add_plan_arguments(parser: argparse.ArgumentParser) -> None:
@@ -218,16 +180,10 @@ def _add_autonomous_arguments(
     parser.add_argument(
         "--max-continuations",
         type=int,
-        default=(
-            PLACE_RELEVANCE_V2_DEFAULT_MAX_CONTINUATIONS
-            if task_name == "place-relevance-v2"
-            else 3
-        ),
+        default=default_max_continuations(task_name),
         help=(
             "maximum bounded same-site checkpoint successors "
-            f"(default: {PLACE_RELEVANCE_V2_DEFAULT_MAX_CONTINUATIONS})"
-            if task_name == "place-relevance-v2"
-            else "maximum bounded same-site checkpoint successors (default: 3)"
+            f"(default: {default_max_continuations(task_name)})"
         ),
     )
     parser.add_argument("--publish", action="store_true")
@@ -314,10 +270,17 @@ def _build_plan(
     *,
     task_name: TaskName = "landuse",
 ) -> Grid5000Plan:
-    config = _training_config_for_task(arguments, task_name=task_name)
+    config = training_config_for_task(
+        task_name,
+        model_name_or_path=arguments.model_name,
+        model_revision=arguments.model_revision,
+        max_steps=arguments.max_steps,
+        publish_to_hub=arguments.publish,
+        sync_trackio=arguments.sync_trackio,
+    )
     identity = Grid5000RunIdentity(
         source_commit=arguments.source_commit,
-        dataset_revision=_task_contract(task_name).provenance.repository_revision,
+        dataset_revision=task_contract(task_name).provenance.repository_revision,
         model_name_or_path=config.model_name_or_path,
         model_revision=arguments.model_revision,
         task_name=task_name,
@@ -385,10 +348,17 @@ def _build_autonomous_config(
     task_name: TaskName = "landuse",
 ) -> AutonomousRunConfig:
     source_commit = arguments.source_commit or _current_source_commit()
-    training_config = _training_config_for_task(arguments, task_name=task_name)
+    training_config = training_config_for_task(
+        task_name,
+        model_name_or_path=arguments.model_name,
+        model_revision=arguments.model_revision,
+        max_steps=arguments.max_steps,
+        publish_to_hub=arguments.publish,
+        sync_trackio=arguments.sync_trackio,
+    )
     identity = Grid5000RunIdentity(
         source_commit=source_commit,
-        dataset_revision=_task_contract(task_name).provenance.repository_revision,
+        dataset_revision=task_contract(task_name).provenance.repository_revision,
         model_name_or_path=training_config.model_name_or_path,
         model_revision=arguments.model_revision,
         task_name=task_name,

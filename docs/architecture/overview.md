@@ -80,8 +80,11 @@ training, publication, tracking, and Grid'5000 orchestration:
   decisions.
   `grid5000_oar.py` normalizes scheduler lifecycle facts,
   `grid5000_state.py` persists secure phases/events and recoverable legacy
-  reconciliation, and `grid5000_autonomous.py` coordinates the one-command
-  prepare/submit/monitor/verify/cleanup lifecycle.
+  reconciliation. `grid5000_replacement.py` owns candidate filtering and
+  short-trial coordination, while `grid5000_autonomous.py` coordinates the
+  one-command prepare/submit/monitor/verify/cleanup lifecycle and durable
+  state transitions. `training_tasks.py` keeps task contracts, training
+  defaults, and continuation budgets outside the CLI parser.
 - `grid5000_worker.py` validates the Linux compute node, OAR job identity,
   exact clean checkout, and one visible CUDA GPU before invoking the existing
   training boundary. It uses a home-scoped remote project root, requires
