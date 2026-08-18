@@ -461,6 +461,23 @@ def _evaluate_test_dataset(trainer: Any, test_dataset: Any) -> dict[str, object]
     return dict(raw_metrics)
 
 
+def _evaluate_validation_dataset(
+    trainer: Any, validation_dataset: Any
+) -> dict[str, object]:
+    """Evaluate the validation dataset once, after training has finished."""
+
+    evaluate = getattr(trainer, "evaluate", None)
+    if not callable(evaluate):
+        raise TrainingError("Trainer does not expose validation evaluation")
+    try:
+        raw_metrics = evaluate(validation_dataset, metric_key_prefix="eval")
+    except Exception as error:
+        raise TrainingError("validation evaluation failed") from error
+    if not isinstance(raw_metrics, Mapping):
+        raise TrainingError("validation metrics are invalid")
+    return dict(raw_metrics)
+
+
 def _publish_completed_model(
     output_directory: Path,
     *,
@@ -493,7 +510,11 @@ def _publish_completed_model(
         identity=identity,
         repository_readme=repository_readme,
     )
-    if contract is WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT:
+    is_worldwide_v2_baseline = config.artifact_namespace in {
+        None,
+        "studies/place-relevance-v2/baseline",
+    }
+    if contract is WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT and is_worldwide_v2_baseline:
         try:
             publish_study_documents(
                 project_config.target_model_repository_id,
@@ -652,10 +673,12 @@ def _train_classifier(
             class_weight_mode=training_config.class_weight_mode,
         )
         train_output = _training_runtime.run_trainer(trainer, resume_from_checkpoint)
+        validation_metrics = _evaluate_validation_dataset(trainer, validation_dataset)
         test_metrics = _evaluate_test_dataset(trainer, test_dataset)
         trainer.save_model(str(output_directory))
         tokenizer.save_pretrained(str(output_directory))
         final_metrics = _training_metrics.metrics_for_model_card(train_output, trainer)
+        final_metrics.update(validation_metrics)
         final_metrics.update(test_metrics)
         model_card_identity = _model_card_identity(
             checkpoint_identity,

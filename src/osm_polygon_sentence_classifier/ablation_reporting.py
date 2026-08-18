@@ -27,6 +27,11 @@ def render_public_documents(
     rows: Sequence[Mapping[str, object]],
     study_id: str,
     tracking_space_id: str,
+    study_title: str | None = None,
+    study_introduction: str | None = None,
+    evaluation_note: str | None = None,
+    root_scope: str | None = None,
+    include_root_readme: bool = True,
 ) -> dict[str, str]:
     """Render the public study README and machine-readable manifests."""
 
@@ -39,6 +44,14 @@ def render_public_documents(
     source_commit = specification.get("source_commit", "not recorded")
     model_revision = specification.get("model_revision", "not recorded")
     dataset_revision = specification.get("dataset_revision", "not recorded")
+    effective_title = study_title or "Landuse classifier ablation study"
+    effective_introduction = study_introduction or (
+        "This study measures controlled changes to the landuse sentence classifier."
+    )
+    effective_evaluation_note = evaluation_note or (
+        "Results are validation results; this study has no held-out test set."
+    )
+    effective_root_scope = root_scope or "landuse sentence-classification task."
     definition_rows = [
         "| Ablation | Change | Maximum length | Learning rate | "
         "Trainable layers | Class weighting |",
@@ -106,8 +119,8 @@ def render_public_documents(
         "source_commit_history": source_commit_history,
     }
     study_readme = (
-        f"# Landuse classifier ablation study `{study_id}`\n\n"
-        "This study measures controlled changes to the landuse sentence classifier. "
+        f"# {effective_title} `{study_id}`\n\n"
+        f"{effective_introduction} "
         "The existing single-run baseline remains under `experiments/`; this study "
         f"uses the `studies/{study_id}/` namespace.\n\n"
         "## Protocol\n\n"
@@ -117,7 +130,7 @@ def render_public_documents(
         "- Selection metric: positive-class F1 (`eval_f1`). Tie-break: macro-F1.\n"
         "- The polygon split, cleaned input, dataset revision, model revision, and "
         "training budget are fixed across runs.\n"
-        "- Results are validation results; this study has no held-out test set.\n\n"
+        f"- {effective_evaluation_note}\n\n"
         "## Provenance\n\n"
         f"- Dataset revision: `{dataset_revision}`\n"
         f"- Model revision: `{model_revision}`\n"
@@ -152,7 +165,7 @@ def render_public_documents(
         "---\n\n"
         "# OSM Polygon Sentence Classifier\n\n"
         "Public model artifacts and experiment registry for the OSM polygon "
-        "landuse sentence-classification task. The repository root is "
+        f"{effective_root_scope} The repository root is "
         "documentation-only; model files live inside immutable experiment runs.\n\n"
         "## Start here\n\n"
         f"- {study_status_label} ablation study: [`studies/{study_id}/README.md`]"
@@ -171,8 +184,7 @@ def render_public_documents(
         "The run registry explains how the study name, seed, controller run ID, "
         "checkpoint step, and final artifact path relate to one another.\n"
     )
-    return {
-        "README.md": root_readme,
+    documents = {
         f"studies/{study_id}/README.md": study_readme,
         f"studies/{study_id}/study.json": (
             json.dumps(study_payload, ensure_ascii=False, indent=2, sort_keys=True)
@@ -183,6 +195,9 @@ def render_public_documents(
             + "\n"
         ),
     }
+    if include_root_readme:
+        documents["README.md"] = root_readme
+    return documents
 
 
 __all__ = ["render_public_documents"]

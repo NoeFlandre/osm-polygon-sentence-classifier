@@ -50,6 +50,27 @@ logical public run instead of creating one run per OAR allocation. Its default
 continuation bound is 40; all replacements remain sequential and policy
 checked.
 
+### Worldwide V2 ablations
+
+The separate ablation command applies the same safeguards to 13 controlled
+runs. It uses the `place-relevance-v2-ablations` Trackio project and publishes
+under `studies/place-relevance-v2-ablations/`:
+
+```bash
+uv run grid5000-place-relevance-v2 ablations \
+  --source-commit "$(git rev-parse HEAD)" \
+  --model-revision abc32620dd4f6ab06f5fbe905dc25f310618e09f \
+  --publish \
+  --sync-trackio \
+  --execute
+```
+
+Seven seed-42 screening runs are followed by seed-43 and seed-44 replications
+of the baseline and the two best screening variants. Validation positive-class
+F1 selects finalists; the held-out test split is evaluated after each run and
+does not affect selection. The command is idempotent and resumes one study run
+from its newest verified checkpoint after interruption.
+
 ## Plan and recovery commands
 
 Without `--execute`, `run` prints a deterministic JSON plan and performs no

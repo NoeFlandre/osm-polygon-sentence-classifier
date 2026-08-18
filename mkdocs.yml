@@ -43,6 +43,7 @@ nav:
       - Data policy: guides/data-policy.md
       - Landuse ablation study: guides/ablations.md
       - Worldwide V2 experiment: guides/place-relevance-v2.md
+      - Worldwide V2 ablations: guides/place-relevance-v2-ablations.md
       - Experiment organization: guides/experiment-organization.md
   - Architecture:
       - Overview: architecture/overview.md

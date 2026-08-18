@@ -13,6 +13,8 @@ from .ablation_study import (
     DEFAULT_MODEL_REVISION,
     AblationStudyController,
     AblationStudyError,
+    AblationStudyProtocol,
+    place_relevance_v2_ablation_protocol,
     publish_study_report,
 )
 from .grid5000 import (
@@ -146,12 +148,14 @@ def _parser(task_name: TaskName) -> argparse.ArgumentParser:
         help="print one local autonomous run state",
     )
     status_parser.add_argument("--run-id", required=True)
-    if task_name == "landuse":
+    if task_name in {"landuse", "place-relevance-v2"}:
         ablations_parser = commands.add_parser(
             "ablations",
-            help="plan or autonomously run the reproducible landuse ablation study",
+            help=(
+                f"plan or autonomously run the reproducible {task_name} ablation study"
+            ),
         )
-        _add_ablation_arguments(ablations_parser)
+        _add_ablation_arguments(ablations_parser, task_name=task_name)
     return parser
 
 
@@ -212,7 +216,11 @@ def _add_autonomous_arguments(
     )
 
 
-def _add_ablation_arguments(parser: argparse.ArgumentParser) -> None:
+def _add_ablation_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    task_name: TaskName = "landuse",
+) -> None:
     parser.add_argument(
         "--source-commit",
         default=None,
@@ -247,7 +255,15 @@ def _add_ablation_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--gpu-memory-mb", type=int, default=8_000)
     parser.add_argument("--max-workers", type=int, default=4)
-    parser.add_argument("--max-continuations", type=int, default=6)
+    parser.add_argument(
+        "--max-continuations",
+        type=int,
+        default=(
+            default_max_continuations(task_name)
+            if task_name == "place-relevance-v2"
+            else 6
+        ),
+    )
     parser.add_argument(
         "--container-image",
         default=None,
@@ -387,8 +403,15 @@ def _build_autonomous_config(
 
 def _build_ablation_controller(
     arguments: argparse.Namespace,
+    *,
+    task_name: TaskName = "landuse",
 ) -> AblationStudyController:
     source_commit = arguments.source_commit or _current_source_commit()
+    protocol: AblationStudyProtocol | None = (
+        place_relevance_v2_ablation_protocol()
+        if task_name == "place-relevance-v2"
+        else None
+    )
     return AblationStudyController(
         source_commit=source_commit,
         model_revision=arguments.model_revision,
@@ -403,7 +426,8 @@ def _build_ablation_controller(
         container_runtime=cast(ContainerRuntime, arguments.container_runtime),
         cleanup=not arguments.keep_remote,
         allow_source_commit_update=arguments.allow_source_commit_update,
-        publish_report=publish_study_report,
+        protocol=protocol,
+        publish_report=(lambda state: publish_study_report(state, protocol=protocol)),
         emit=_print_progress,
     )
 
@@ -596,8 +620,12 @@ def _handle_run(arguments: argparse.Namespace, *, task_name: TaskName) -> int:
     return 0
 
 
-def _handle_ablations(arguments: argparse.Namespace) -> int:
-    controller = _build_ablation_controller(arguments)
+def _handle_ablations(
+    arguments: argparse.Namespace,
+    *,
+    task_name: TaskName = "landuse",
+) -> int:
+    controller = _build_ablation_controller(arguments, task_name=task_name)
     result = controller.run() if arguments.execute else controller.plan()
     _print_json(result)
     return 0
@@ -661,7 +689,7 @@ def _handle_plan_or_submit(
 def _dispatch(arguments: argparse.Namespace, *, task_name: TaskName) -> int:
     handlers = {
         "run": lambda args: _handle_run(args, task_name=task_name),
-        "ablations": _handle_ablations,
+        "ablations": lambda args: _handle_ablations(args, task_name=task_name),
         "status": _handle_status,
         "resume": lambda args: _handle_resume(args, task_name=task_name),
         "plan": lambda args: _handle_plan_or_submit(args, task_name=task_name),

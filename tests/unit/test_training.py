@@ -560,9 +560,71 @@ def test_worldwide_training_evaluates_the_held_out_test_set_after_training(
     assert len(_FakeDataset.created) == 3
     assert _FakeTrainingArguments.calls[0]["eval_strategy"] == "epoch"
     assert _FakeTrainer.evaluate_calls == [
+        (_FakeDataset.created[1], "eval"),
         (_FakeDataset.created[2], "test"),
     ]
-    assert result.metrics == {"test_accuracy": 0.9}
+    assert result.metrics == {
+        "eval_accuracy": 0.9,
+        "test_accuracy": 0.9,
+    }
+
+
+def test_v2_ablation_publication_does_not_replace_the_baseline_registry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from osm_polygon_sentence_classifier import training
+    from osm_polygon_sentence_classifier.publication import ModelPublicationResult
+    from osm_polygon_sentence_classifier.tracking import TrackioSettings
+
+    study_publications: list[object] = []
+    monkeypatch.setattr(
+        training,
+        "publish_model_directory",
+        lambda *args, **kwargs: ModelPublicationResult(
+            repository_id="owner/model",
+            commit_id="a" * 40,
+            commit_url="https://huggingface.co/owner/model/commit/" + "a" * 40,
+            files=(),
+        ),
+    )
+    monkeypatch.setattr(
+        training,
+        "publish_study_documents",
+        lambda *args, **kwargs: study_publications.append((args, kwargs)),
+    )
+    config = TrainingConfig(
+        model_name_or_path="test-model",
+        model_revision="b" * 40,
+        run_name="place-relevance-v2-ablations|a01-head-128|seed-42",
+        output_subdirectory=Path(
+            "studies/place-relevance-v2-ablations/a01-head-128/models/place-relevance-v2"
+        ),
+        tracking_project="place-relevance-v2-ablations",
+        artifact_namespace="studies/place-relevance-v2-ablations/a01-head-128",
+        publish_to_hub=True,
+    )
+
+    training._publish_completed_model(
+        tmp_path,
+        project_config=ProjectConfig(),
+        config=config,
+        contract=WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT,
+        identity={
+            "task_name": "place-relevance-v2",
+            "run_id": "c" * 20,
+            "model_revision": "b" * 40,
+            "training_config": {"artifact_namespace": config.artifact_namespace},
+        },
+        metrics={},
+        tracking=TrackioSettings(
+            project="place-relevance-v2-ablations",
+            directory=tmp_path / "tracking",
+        ),
+        checkpoint_hub_api=None,
+    )
+
+    assert study_publications == []
 
 
 def test_training_uses_the_ablation_trackio_project_and_artifact_namespace(

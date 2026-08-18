@@ -29,9 +29,11 @@ Start with the [getting-started guide](guides/getting-started.md), use the
 [operator reference](reference/grid5000-operator.md) before proposing a new
 training workflow.
 
-The worldwide V2 lane is implemented but has no claimed training result until
-its guarded Grid'5000 run completes. Its protocol and exact input audit are
-fixed before execution; see the [operator reference](reference/grid5000-operator.md).
+The worldwide V2 baseline is complete and its held-out test result is recorded
+under `studies/place-relevance-v2/`. A separate 13-run V2 ablation protocol is
+implemented but must be run through its explicit Grid'5000 execution gate
+before results are claimed. Read the [V2 ablation guide](guides/place-relevance-v2-ablations.md)
+and [operator reference](reference/grid5000-operator.md) first.
 
 ## Citation
 

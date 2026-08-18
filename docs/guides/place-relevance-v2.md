@@ -66,5 +66,6 @@ studies/place-relevance-v2/baseline/run-<run-id>/final/
 ```
 
 The generated study registry contains the protocol, data audit, and final
-metrics. Until the terminal model and held-out test metrics are published, the
-lane is an implementation and reproducibility record, not a result.
+metrics. The separate [V2 ablation study](place-relevance-v2-ablations.md)
+uses a different Trackio project and public namespace; its results must not be
+mixed with this baseline.

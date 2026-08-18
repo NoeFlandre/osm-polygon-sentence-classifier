@@ -92,17 +92,19 @@ training, publication, tracking, and Grid'5000 orchestration:
   enabled, and has no retry, scheduler, or CPU-fallback responsibility. The
   optional container path supplies the same training dependencies from the
   image and keeps the durable model/data/Trackio paths home-scoped.
-- `ablation_study.py` owns the immutable `landuse-v1` matrix, screening and
-  replication order, durable study state, and public run-row preparation.
+- `ablation_study.py` owns immutable study protocols, screening and replication
+  order, durable study state, and public run-row preparation. It supports the
+  completed `landuse-v1` matrix and the separate worldwide V2 ablation lane.
   `ablation_reporting.py` renders the public README and generated
-  `study.json`/`results.json` documents from those prepared rows. The study
+  `study.json`/`results.json` documents from those prepared rows. Each study
   executes one ablation at a time through the autonomous controller and never
   races multiple jobs. Malformed persisted run records are rejected rather
   than silently ignored.
 - `place_relevance_reporting.py` renders the credential-free V2 study protocol,
   exact aggregate data audit, and final metric registry under
   `studies/place-relevance-v2/`. `grid5000_place_relevance_cli.py` exposes the
-  separate autonomous V2 command without changing the landuse CLI.
+  separate autonomous V2 command, including its baseline and ablation
+  subcommands, without changing the landuse run identity.
 
 The audit command is the only local data-consuming command. The autonomous
 Grid'5000 worker consumes the pinned dataset only after the explicit
@@ -114,13 +116,15 @@ plan mode remains side-effect free.
 
 The Hub repository is a catalogue of immutable run outputs rather than one
 unnamed “latest” model. A study run name has the form
-`landuse-v1|<ablation-id>|seed-<seed>`. The ablation ID maps to one controlled
-configuration, and the seed distinguishes the screening run from a
-replication. The corresponding `run-<run-id>` directory is the autonomous
-controller identity; an OAR job ID identifies only one short allocation
-segment. `checkpoints/step-N/` is resumable state and `final/` is the terminal
-model for that run. The public study report is the human-readable index, while
-`study.json` and `results.json` are the machine-readable source of truth.
+`landuse-v1|<ablation-id>|seed-<seed>` or
+`place-relevance-v2-ablations|<ablation-id>|seed-<seed>`. The ablation ID maps
+to one controlled configuration, and the seed distinguishes the screening run
+from a replication. The corresponding `run-<run-id>` directory is the
+autonomous controller identity; an OAR job ID identifies only one short
+allocation segment. `checkpoints/step-N/` is resumable state and `final/` is
+the terminal model for that run. The public study report is the human-readable
+index, while `study.json` and `results.json` are the machine-readable source
+of truth.
 
 Audit readiness is based on sentence-only model inputs. Mixed labels within a
 polygon and duplicate hashes across polygons remain diagnostic metrics, while

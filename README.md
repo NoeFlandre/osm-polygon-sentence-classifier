@@ -82,8 +82,8 @@ Release `v0.1.0` freezes the completed landuse-v1 work. The input dataset keeps
 its released `v1-afghanistan/` and `v2-worldwide/` lanes; labeling checkpoints
 are provenance, not training splits. The model repository keeps completed
 artifacts under stable `experiments/` and `studies/` namespaces. Future work
-must pin a dataset revision and code commit and use a new experiment lane; no
-worldwide V2 classifier uses a separate study lane. See the
+must pin a dataset revision and code commit and use a new experiment lane; the
+worldwide V2 classifier and its ablations use separate study lanes. See the
 [experiment organization guide](docs/guides/experiment-organization.md).
 
 ## Worldwide V2 place relevance
@@ -111,9 +111,24 @@ uv run grid5000-place-relevance-v2 run \
 
 The V2 operator uses short, policy-checked allocations and allows up to 40
 bounded checkpoint continuations by default. It never starts speculative jobs
-on multiple sites and resumes only from a verified checkpoint. The public study
-registry is generated under `studies/place-relevance-v2/` with the protocol,
-data audit, and final metrics. See the
+on multiple sites and resumes only from a verified checkpoint. The public
+baseline registry is generated under `studies/place-relevance-v2/` with the
+protocol, data audit, and final metrics. The separate V2 ablation lane uses
+seven screening runs plus six finalist replications and publishes under
+`studies/place-relevance-v2-ablations/` with Trackio project
+`place-relevance-v2-ablations`:
+
+```bash
+uv run grid5000-place-relevance-v2 ablations \
+  --source-commit "$(git rev-parse HEAD)" \
+  --model-revision abc32620dd4f6ab06f5fbe905dc25f310618e09f \
+  --publish \
+  --sync-trackio \
+  --execute
+```
+
+See the [V2 ablation study guide](docs/guides/place-relevance-v2-ablations.md)
+and the
 [Grid'5000 operator reference](docs/reference/grid5000-operator.md).
 
 ## How to read a run
@@ -128,6 +143,9 @@ model. The Hub study `results.json` contains the complete scalar metrics and
 `study.json` contains the pinned protocol and provenance.
 V2 uses the stable name `place-relevance-v2|baseline|seed-42`; its
 `studies/place-relevance-v2/` registry also contains `data-audit.json`.
+V2 ablation runs use
+`place-relevance-v2-ablations|<ablation-id>|seed-<seed>` and are catalogued in
+`studies/place-relevance-v2-ablations/`.
 
 ## Data and model repositories
 

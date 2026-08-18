@@ -51,6 +51,25 @@ def test_worldwide_v2_plan_carries_the_task_to_the_worker(capsys) -> None:
     assert "--task-name place-relevance-v2" in payload["scheduler_command"][-1]
 
 
+def test_worldwide_v2_ablation_plan_is_separate_from_the_baseline(capsys) -> None:
+    exit_code = grid5000_place_relevance_cli.main(
+        [
+            "ablations",
+            "--source-commit",
+            SOURCE_COMMIT,
+            "--model-revision",
+            MODEL_REVISION,
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["study_id"] == "place-relevance-v2-ablations"
+    assert payload["total_runs"] == 7
+    assert payload["next_runs"][0]["ablation_id"] == ("a00-baseline-head-256-lr3e-4")
+    assert payload["specification"]["task_name"] == "place-relevance-v2"
+
+
 def test_worldwide_v2_resume_rejects_a_landuse_run(monkeypatch, capsys) -> None:
     identity = Grid5000RunIdentity(
         source_commit=SOURCE_COMMIT,

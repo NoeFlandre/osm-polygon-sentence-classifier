@@ -358,3 +358,149 @@ def test_study_documents_are_public_and_include_clear_run_names() -> None:
     assert "Maximum length" in documents["studies/landuse-v1/README.md"]
     assert "eval_f1" in documents["studies/landuse-v1/results.json"]
     assert "Grid'5000" in documents["studies/landuse-v1/README.md"]
+
+
+def test_worldwide_v2_ablation_protocol_is_separate_and_test_aware() -> None:
+    from osm_polygon_sentence_classifier.ablation_study import (
+        PLACE_RELEVANCE_V2_ABLATION_STUDY_ID,
+        place_relevance_v2_ablation_protocol,
+    )
+
+    protocol = place_relevance_v2_ablation_protocol()
+
+    assert protocol.study_id == PLACE_RELEVANCE_V2_ABLATION_STUDY_ID
+    assert protocol.task_name == "place-relevance-v2"
+    assert protocol.tracking_project == "place-relevance-v2-ablations"
+    assert protocol.validation_fraction == pytest.approx(0.1)
+    assert protocol.test_fraction == pytest.approx(0.1)
+    assert protocol.eval_strategy == "epoch"
+    assert protocol.max_steps == 17_661
+    assert len(protocol.definitions) == 7
+
+
+def test_worldwide_v2_ablation_config_isolated_from_the_baseline() -> None:
+    from osm_polygon_sentence_classifier.ablation_study import (
+        build_ablation_training_config,
+        place_relevance_v2_ablation_protocol,
+    )
+
+    protocol = place_relevance_v2_ablation_protocol()
+    definition = protocol.definitions[1]
+    config = build_ablation_training_config(
+        definition,
+        seed=42,
+        model_revision="a" * 40,
+        protocol=protocol,
+        publish_to_hub=True,
+        sync_trackio=True,
+    )
+
+    assert config.run_name == ("place-relevance-v2-ablations|a01-head-128|seed-42")
+    assert config.output_subdirectory.as_posix() == (
+        "studies/place-relevance-v2-ablations/a01-head-128/models/place-relevance-v2"
+    )
+    assert config.artifact_namespace == (
+        "studies/place-relevance-v2-ablations/a01-head-128"
+    )
+    assert config.max_length == 128
+    assert config.test_fraction == pytest.approx(0.1)
+    assert config.tracking_project == "place-relevance-v2-ablations"
+
+
+def test_worldwide_v2_controller_keeps_the_ablation_lane_separate(
+    tmp_path: Path,
+) -> None:
+    from osm_polygon_sentence_classifier.ablation_study import (
+        AblationStudyController,
+        place_relevance_v2_ablation_protocol,
+    )
+
+    protocol = place_relevance_v2_ablation_protocol()
+    observed: list[tuple[str, str, str]] = []
+
+    class FakeRunController:
+        def __init__(self, config, **kwargs) -> None:
+            del kwargs
+            self.config = config
+
+        def run(self):
+            identity = self.config.identity
+            training = identity.training_config
+            observed.append(
+                (
+                    identity.task_name,
+                    str(training["tracking_project"]),
+                    str(training["run_name"]),
+                )
+            )
+            ablation_id = str(training["run_name"]).split("|")[1]
+            score = 0.99 if ablation_id == "a01-head-128" else 0.1
+            return SimpleNamespace(
+                phase=RunPhase.COMPLETED,
+                facts={
+                    "completion": {
+                        "metrics": {
+                            "eval_f1": score,
+                            "eval_macro_f1": score,
+                        }
+                    }
+                },
+            )
+
+    controller = AblationStudyController(
+        source_commit="b" * 40,
+        model_revision="a" * 40,
+        protocol=protocol,
+        state_root=tmp_path,
+        run_controller_factory=FakeRunController,
+        publish_report=lambda _state: None,
+    )
+
+    state = controller.run()
+
+    assert state["phase"] == "completed"
+    assert len(observed) == 13
+    assert observed[0] == (
+        "place-relevance-v2",
+        "place-relevance-v2-ablations",
+        "place-relevance-v2-ablations|a00-baseline-head-256-lr3e-4|seed-42",
+    )
+
+
+def test_worldwide_v2_report_uses_its_own_public_namespace() -> None:
+    from osm_polygon_sentence_classifier.ablation_study import (
+        place_relevance_v2_ablation_protocol,
+        render_study_documents,
+        study_specification,
+        study_specification_fingerprint,
+    )
+
+    protocol = place_relevance_v2_ablation_protocol()
+    specification = study_specification(
+        source_commit="b" * 40,
+        model_revision="a" * 40,
+        protocol=protocol,
+    )
+    state = {
+        "study_id": protocol.study_id,
+        "fingerprint": study_specification_fingerprint(specification),
+        "specification": specification,
+        "phase": "running",
+        "runs": {},
+    }
+
+    documents = render_study_documents(state, protocol=protocol)
+
+    assert set(documents) == {
+        "studies/place-relevance-v2-ablations/README.md",
+        "studies/place-relevance-v2-ablations/study.json",
+        "studies/place-relevance-v2-ablations/results.json",
+    }
+    assert (
+        "Worldwide V2 place-relevance"
+        in documents["studies/place-relevance-v2-ablations/README.md"]
+    )
+    assert (
+        "held-out test set"
+        in documents["studies/place-relevance-v2-ablations/README.md"]
+    )

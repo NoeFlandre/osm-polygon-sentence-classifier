@@ -33,7 +33,9 @@ provenance/v2-worldwide/labeling-run-*/  Resumability evidence, not a split
 The `v2-worldwide/` directory is the pinned input for the separate
 place-relevance-v2 classifier experiment. Its public study namespace is
 `studies/place-relevance-v2/`; it must not be mixed with the completed
-`landuse-v1` registry. The study report records the exact dataset audit,
+`landuse-v1` registry. The V2 ablation namespace is
+`studies/place-relevance-v2-ablations/` and uses a separate Trackio project.
+The study report records the exact dataset audit,
 polygon split, model revision, and final metrics after a run completes.
 
 ## Future experiment lanes
@@ -48,8 +50,8 @@ Every new training lane must have:
 
 Use `experiments/<experiment>/run-<run-id>/` for an individual run and
 `studies/<study-id>/<ablation-id>/run-<run-id>/` for a controlled comparison.
-The worldwide classifier lane uses the `place-relevance-v2` identifier rather
-than adding files to `landuse-v1`.
+The worldwide baseline uses `place-relevance-v2`; its ablations use
+`place-relevance-v2-ablations`. Neither lane adds files to `landuse-v1`.
 
 ## Public organization rules
 

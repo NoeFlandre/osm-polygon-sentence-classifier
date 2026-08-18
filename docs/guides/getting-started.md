@@ -130,9 +130,11 @@ uv run grid5000-place-relevance-v2 run \
   --execute
 ```
 
-The V2 study publishes its protocol and aggregate data audit under
-`studies/place-relevance-v2/`; no result should be interpreted until the
-terminal model and held-out test metrics are present.
+The V2 baseline publishes its protocol and aggregate data audit under
+`studies/place-relevance-v2/`. Its separate ablation study publishes a 13-run
+registry under `studies/place-relevance-v2-ablations/`; see the
+[V2 ablation guide](place-relevance-v2-ablations.md) for the exact command and
+selection rule.
 If that limit is exhausted after a complete checkpoint was retained, use
 `resume --run-id RUN_ID --max-continuations N --execute` to extend it; the
 controller checks that the previous job is no longer active before submitting.
