@@ -247,6 +247,11 @@ def test_worker_command_reuses_a_shared_locked_uv_cache() -> None:
         'export UV_CACHE_DIR="$HOME/.cache/osm-polygon-sentence-classifier/uv"'
         in command
     )
+    assert (
+        'if [ -d "$HOME/.cache/osm-polygon-sentence-classifier/wheels" ]; then '
+        'export UV_FIND_LINKS="$HOME/.cache/osm-polygon-sentence-classifier/wheels"; '
+        "fi" in command
+    )
     assert "/tmp/osm-polygon-sentence-classifier-" not in command
     assert 'cpu_architecture="$(uname -m)"' in command
     assert '[ "$cpu_architecture" = "x86_64" ]' in command

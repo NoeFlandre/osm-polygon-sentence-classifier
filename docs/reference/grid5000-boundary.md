@@ -56,6 +56,9 @@ site probe applies the same architecture and capability floor. By default the
 worker rechecks the assigned device and the executability of `uv`, using the
    locked `training` extra, a run-scoped environment, and a project-scoped
    shared UV wheel cache under `$HOME/.cache`. When
+the optional project wheel directory exists at
+`$HOME/.cache/osm-polygon-sentence-classifier/wheels`, it is exposed through
+`UV_FIND_LINKS` so pre-staged locked Linux wheels are reused as well.
 `--container-image` is explicit, the host-side controller instead checks the
 requested Docker/Podman runtime and image on the node, then mounts the clean
 checkout read-only and the managed run root read-write into the non-root image.

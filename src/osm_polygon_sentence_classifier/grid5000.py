@@ -487,6 +487,9 @@ class Grid5000Plan:
             f"remote_run_root={remote_run_root} && "
             'export UV_PROJECT_ENVIRONMENT="$remote_run_root/.venv" && '
             'export UV_CACHE_DIR="$HOME/.cache/osm-polygon-sentence-classifier/uv" && '
+            'if [ -d "$HOME/.cache/osm-polygon-sentence-classifier/wheels" ]; '
+            'then export UV_FIND_LINKS="$HOME/.cache/osm-polygon-sentence-classifier/wheels"; '
+            "fi && "
             'cpu_architecture="$(uname -m)"; '
             '[ "$cpu_architecture" = "x86_64" ] || '
             '{ echo "unsupported compute-node architecture: $cpu_architecture" >&2; exit 78; }; '
