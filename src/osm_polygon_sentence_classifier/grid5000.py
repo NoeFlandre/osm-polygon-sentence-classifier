@@ -23,7 +23,8 @@ GRID5000_DATASET_REVISION = LANDUSE_DATASET_CONTRACT.provenance.repository_revis
 MAX_WALLTIME_SECONDS = 12 * 60 * 60
 MAX_DAY_WALLTIME_SECONDS = 60 * 60
 DEFAULT_DAY_WALLTIME_SECONDS = 30 * 60
-# The locked environment and uv cache use allocation-local scratch. Keep a
+# The locked environment is run-scoped; the UV wheel cache is shared by this
+# project beneath the persistent home quota so short jobs do not redownload it.
 # Eight GiB leaves room for two resumable checkpoints, the final model,
 # metadata, and publication artifacts beneath the persistent home quota.
 MINIMUM_HOME_HEADROOM_BYTES = 8 * 1024**3
@@ -429,10 +430,10 @@ class Grid5000Plan:
     def worker_command(self) -> str:
         """Return the fixed compute-node command for the training worker.
 
-        The locked Python environment and uv cache live in the managed,
-        run-scoped data root so short continuation jobs reuse downloads. The
-        terminal controller cleanup removes that root after completion; model
-        caches, outputs, checkpoints, and Trackio state remain there as well.
+        The locked Python environment lives in the managed run-scoped data
+        root. Its project-scoped UV wheel cache is shared beneath ``$HOME`` so
+        later short jobs reuse downloads; model caches, outputs, checkpoints,
+        and Trackio state remain in the run root and are cleaned on completion.
         """
 
         if self.container_image is not None:
@@ -485,7 +486,7 @@ class Grid5000Plan:
             "umask 077 && set -eu && "
             f"remote_run_root={remote_run_root} && "
             'export UV_PROJECT_ENVIRONMENT="$remote_run_root/.venv" && '
-            'export UV_CACHE_DIR="$remote_run_root/.uv-cache" && '
+            'export UV_CACHE_DIR="$HOME/.cache/osm-polygon-sentence-classifier/uv" && '
             'cpu_architecture="$(uname -m)"; '
             '[ "$cpu_architecture" = "x86_64" ] || '
             '{ echo "unsupported compute-node architecture: $cpu_architecture" >&2; exit 78; }; '

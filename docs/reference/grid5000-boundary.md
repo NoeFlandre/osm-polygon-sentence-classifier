@@ -54,7 +54,8 @@ cleanliness, an x86_64 compute-node architecture, exactly one visible CUDA GPU,
 and CUDA capability `>= 7.5` before entering the existing training module. The
 site probe applies the same architecture and capability floor. By default the
 worker rechecks the assigned device and the executability of `uv`, using the
-locked `training` extra and allocation-local `/tmp` environment/cache. When
+   locked `training` extra, a run-scoped environment, and a project-scoped
+   shared UV wheel cache under `$HOME/.cache`. When
 `--container-image` is explicit, the host-side controller instead checks the
 requested Docker/Podman runtime and image on the node, then mounts the clean
 checkout read-only and the managed run root read-write into the non-root image.

@@ -206,8 +206,8 @@ The selected frontend receives a bounded SSH sequence that:
 3. creates the exact per-run data root with a mode-600 ownership marker;
 4. installs the local Hugging Face token through SSH stdin, never a command;
 5. rechecks policy, quota, and the exact checkout before OAR submission; and
-6. submits either the default locked `uv` worker with the `training` extra and
-   allocation-local `/tmp` environment/cache paths, or the explicitly selected
+6. submits either the default locked `uv` worker with the `training` extra, a
+   run-scoped environment, and a project-scoped shared UV wheel cache, or the explicitly selected
    preloaded Docker/Podman image with the clean checkout and per-run data root
    mounted into it.
 

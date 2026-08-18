@@ -51,7 +51,12 @@ def test_worldwide_v2_plan_carries_the_task_to_the_worker(capsys) -> None:
     assert "--task-name place-relevance-v2" in payload["scheduler_command"][-1]
 
 
-def test_worldwide_v2_ablation_plan_is_separate_from_the_baseline(capsys) -> None:
+def test_worldwide_v2_ablation_plan_is_separate_from_the_baseline(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    from osm_polygon_sentence_classifier import ablation_study
+
+    monkeypatch.setattr(ablation_study, "_default_state_root", lambda: tmp_path)
     exit_code = grid5000_place_relevance_cli.main(
         [
             "ablations",

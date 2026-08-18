@@ -235,7 +235,7 @@ def test_day_allocation_accepts_only_a_one_hour_window() -> None:
         )
 
 
-def test_worker_command_reuses_a_run_scoped_locked_uv_environment() -> None:
+def test_worker_command_reuses_a_shared_locked_uv_cache() -> None:
     command = _plan().worker_command
 
     assert (
@@ -243,7 +243,10 @@ def test_worker_command_reuses_a_run_scoped_locked_uv_environment() -> None:
         in command
     )
     assert 'export UV_PROJECT_ENVIRONMENT="$remote_run_root/.venv"' in command
-    assert 'export UV_CACHE_DIR="$remote_run_root/.uv-cache"' in command
+    assert (
+        'export UV_CACHE_DIR="$HOME/.cache/osm-polygon-sentence-classifier/uv"'
+        in command
+    )
     assert "/tmp/osm-polygon-sentence-classifier-" not in command
     assert 'cpu_architecture="$(uname -m)"' in command
     assert '[ "$cpu_architecture" = "x86_64" ]' in command
