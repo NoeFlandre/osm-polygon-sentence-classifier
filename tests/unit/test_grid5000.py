@@ -235,7 +235,7 @@ def test_day_allocation_accepts_only_a_one_hour_window() -> None:
         )
 
 
-def test_worker_command_reuses_a_shared_locked_uv_cache() -> None:
+def test_worker_command_builds_the_runtime_on_node_local_scratch() -> None:
     command = _plan().worker_command
 
     assert (
@@ -243,10 +243,12 @@ def test_worker_command_reuses_a_shared_locked_uv_cache() -> None:
         in command
     )
     assert (
-        'export UV_PROJECT_ENVIRONMENT="$HOME/osm-polygon-sentence-classifier-data/'
-        'grid5000/environment"' in command
+        'runtime_root="${TMPDIR:-/tmp}/osm-polygon-sentence-classifier-${OAR_JOB_ID}"'
+        in command
     )
-    assert "worker_env_root" not in command
+    assert 'mkdir -p "$runtime_root"' in command
+    assert 'export UV_PROJECT_ENVIRONMENT="$runtime_root/environment"' in command
+    assert "grid5000/environment" not in command
     assert (
         'export UV_CACHE_DIR="$HOME/.cache/osm-polygon-sentence-classifier/uv"'
         in command
@@ -260,7 +262,7 @@ def test_worker_command_reuses_a_shared_locked_uv_cache() -> None:
         '"$HOME/.cache/osm-polygon-sentence-classifier/wheels" torch; '
         "fi" in command
     )
-    assert "/tmp/osm-polygon-sentence-classifier-" not in command
+    assert '"$TMPDIR"' not in command
     assert 'cpu_architecture="$(uname -m)"' in command
     assert '[ "$cpu_architecture" = "x86_64" ]' in command
     assert 'uv_bin="$(command -v uv || true)"' in command

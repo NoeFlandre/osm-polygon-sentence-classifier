@@ -23,10 +23,11 @@ GRID5000_DATASET_REVISION = LANDUSE_DATASET_CONTRACT.provenance.repository_revis
 MAX_WALLTIME_SECONDS = 12 * 60 * 60
 MAX_DAY_WALLTIME_SECONDS = 60 * 60
 DEFAULT_DAY_WALLTIME_SECONDS = 30 * 60
-# The locked environment and UV wheel cache are shared by this project beneath
-# the persistent home quota so short jobs reuse the installed runtime.
-# Eight GiB leaves room for two resumable checkpoints, the final model,
-# metadata, and publication artifacts beneath the persistent home quota.
+# The UV wheel cache is shared by this project beneath the persistent home
+# quota so short jobs can build a node-local runtime without downloading the
+# locked dependencies repeatedly. Eight GiB leaves room for two resumable
+# checkpoints, the final model, metadata, and publication artifacts beneath
+# the persistent home quota.
 MINIMUM_HOME_HEADROOM_BYTES = 8 * 1024**3
 MINIMUM_CUDA_CAPABILITY: Final[tuple[int, int]] = (7, 5)
 COMMAND_TIMEOUT_SECONDS = 120.0
@@ -431,9 +432,8 @@ class Grid5000Plan:
     def worker_command(self) -> str:
         """Return the fixed compute-node command for the training worker.
 
-        The locked Python environment and project-scoped UV wheel cache are
-        shared beneath the managed home quota so later short jobs reuse the
-        installed CUDA runtime. Model caches, outputs, checkpoints, and
+        The locked dependencies are built into node-local scratch from the
+        project-scoped UV wheel cache. Model caches, outputs, checkpoints, and
         Trackio state remain in the managed run root.
         """
 
@@ -479,9 +479,7 @@ class Grid5000Plan:
             f'"$HOME/{REMOTE_DATA_SUBDIRECTORY}/{REMOTE_RUNS_SUBDIRECTORY}/'
             f'{self.identity.run_id}"'
         )
-        remote_environment_root = (
-            f'"$HOME/{REMOTE_DATA_SUBDIRECTORY}/{REMOTE_ENVIRONMENT_SUBDIRECTORY}"'
-        )
+        runtime_root = '"${TMPDIR:-/tmp}/osm-polygon-sentence-classifier-${OAR_JOB_ID}"'
         worker_command += ' --remote-data-root "$remote_run_root"'
         if self.resume_from_checkpoint:
             worker_command += " --require-checkpoint"
@@ -489,7 +487,9 @@ class Grid5000Plan:
             f'cd "$HOME/{REMOTE_CHECKOUT_SUBDIRECTORY}" && '
             "umask 077 && set -eu && "
             f"remote_run_root={remote_run_root} && "
-            f"export UV_PROJECT_ENVIRONMENT={remote_environment_root} && "
+            f"runtime_root={runtime_root} && "
+            'mkdir -p "$runtime_root" && '
+            'export UV_PROJECT_ENVIRONMENT="$runtime_root/environment" && '
             'export UV_CACHE_DIR="$HOME/.cache/osm-polygon-sentence-classifier/uv" && '
             'cpu_architecture="$(uname -m)"; '
             '[ "$cpu_architecture" = "x86_64" ] || '
