@@ -13,6 +13,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, cast
 
+from .checkpoint_hub import HubCheckpointError, restore_published_checkpoint
 from .checkpointing import (
     CheckpointError,
     CheckpointInfo,
@@ -297,8 +298,21 @@ def _run_training_worker(
     checkpoint = _latest_worker_checkpoint(
         output_directory,
         identity=identity,
-        require_checkpoint=require_checkpoint,
+        require_checkpoint=False,
     )
+    if require_checkpoint and checkpoint is None:
+        if not effective_config.publish_to_hub:
+            raise WorkerError("no complete checkpoint is available for continuation")
+        try:
+            checkpoint = restore_published_checkpoint(
+                output_directory,
+                identity=identity.canonical_payload,
+                repository_id=project_config.target_model_repository_id,
+            )
+        except HubCheckpointError as error:
+            raise WorkerError(
+                "no complete local or published checkpoint is available for continuation"
+            ) from error
     trackio_config = replace(
         effective_config,
         run_name=_trackio_segment_run_name(

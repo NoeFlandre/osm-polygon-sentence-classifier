@@ -69,6 +69,13 @@ It retains five complete checkpoints. Landuse allows at most three successor
 jobs by default; worldwide V2 allows 40. Override either bound deliberately
 with `--max-continuations`.
 
+Grid'5000 home storage is site-local. A continuation first uses the newest
+identity-matching checkpoint on the selected site; when that site has no local
+copy and Hub publication is enabled, it restores the newest complete
+identity-matching checkpoint from the model repository. This keeps a site
+replacement resumable without assuming that another site's home directory is
+mounted or shared.
+
 ```bash
 uv run grid5000-landuse status --run-id RUN_ID
 uv run grid5000-landuse resume --run-id RUN_ID --execute
@@ -192,8 +199,9 @@ identity-bound checkpoints, and writes the final model and Trackio data beneath
 the marked run root. A successor job is submitted only after the previous job
 has terminated, the controller has found complete checkpoint evidence, and the
 same site passes the storage/policy preflight again. The successor worker
-requires a valid checkpoint and passes the newest one to the Trainer; missing,
-partial, or identity-mismatched checkpoints stop the run. When requested, the
+requires a valid local or published checkpoint and passes the newest one to the
+Trainer; missing, partial, or identity-mismatched checkpoints stop the run.
+When requested, the
 worker queues each complete checkpoint to the dedicated Hugging Face model
 repository under the run-scoped permanent
 `experiments/<experiment>/run-<run-id>/checkpoints/step-N/` directory. The Trainer

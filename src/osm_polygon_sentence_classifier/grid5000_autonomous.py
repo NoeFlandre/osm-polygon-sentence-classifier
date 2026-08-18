@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, NoReturn, cast
 
+from .checkpoint_hub import HubCheckpointError, latest_published_checkpoint
 from .config import ProjectConfig
 from .grid5000 import (
     MINIMUM_HOME_HEADROOM_BYTES,
@@ -610,7 +611,7 @@ class AutonomousRunController:
     ) -> bool:
         """Probe checkpoint evidence with bounded retries for SSH outages."""
         try:
-            return probe_complete_checkpoint(
+            local_ready = probe_complete_checkpoint(
                 remote,
                 run_id=self.config.identity.run_id,
                 output_subdirectory=self.config.training_config.output_subdirectory,
@@ -628,6 +629,26 @@ class AutonomousRunController:
             if error.__cause__ is not None:
                 raise AutonomousRunError(str(error)) from error.__cause__
             raise AutonomousRunError(str(error)) from error
+        if local_ready:
+            return True
+        if not self.config.training_config.publish_to_hub:
+            return False
+        try:
+            published = latest_published_checkpoint(
+                self.config.identity.canonical_payload,
+                repository_id=ProjectConfig().target_model_repository_id,
+                hub_api=self._hub(),
+            )
+        except HubCheckpointError as error:
+            raise AutonomousRunError(
+                "published checkpoint availability could not be verified"
+            ) from error
+        if published is None:
+            return False
+        self.emit(
+            f"{site} job {job_id}: using published checkpoint at step {published.step}"
+        )
+        return True
 
     def _continue_after_incomplete(
         self,
@@ -792,9 +813,14 @@ class AutonomousRunController:
         expected_error = (
             f"job ended without completion after {raw_count} checkpoint continuations"
         )
-        if raw_count != raw_limit or facts.get("error") != expected_error:
+        recoverable_checkpoint_failure = (
+            facts.get("error") == "job ended without a complete checkpoint"
+            and raw_count < self.config.max_continuations
+        )
+        exhausted = raw_count == raw_limit and facts.get("error") == expected_error
+        if not (recoverable_checkpoint_failure or exhausted):
             raise AutonomousRunError("run is not resumable from phase failed")
-        if self.config.max_continuations <= raw_limit:
+        if exhausted and self.config.max_continuations <= raw_limit:
             raise AutonomousRunError(
                 f"failed run exhausted {raw_limit} checkpoint continuations; "
                 f"resume with --max-continuations greater than {raw_limit}"

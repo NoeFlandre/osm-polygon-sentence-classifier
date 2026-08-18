@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from osm_polygon_sentence_classifier.checkpoint_hub import PublishedCheckpoint
 from osm_polygon_sentence_classifier.grid5000 import (
     CommandResult,
     Grid5000ExecutionError,
@@ -250,6 +251,19 @@ class _FlakyCheckpointProbeRemote(_FailedRunContinuationRemote):
                 "remote command failed with exit code 255: connection timed out"
             )
         return True
+
+
+class _MissingCheckpointRemote(_FailedRunContinuationRemote):
+    def has_complete_checkpoint(
+        self,
+        run_id: str,
+        *,
+        output_subdirectory: str,
+        identity: dict[str, object],
+        allow_failed_status: bool = False,
+    ) -> bool:
+        del run_id, output_subdirectory, identity, allow_failed_status
+        return False
 
 
 class _ReplacementRemote:
@@ -913,6 +927,65 @@ def test_failed_run_can_extend_from_a_retained_checkpoint(
     assert facts["max_continuations"] == 2
     assert remote.checkpoint_allow_failed_status is True
     assert remote.prepared_allow_failed_run is True
+
+
+def test_failed_run_can_recover_from_a_published_checkpoint(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+    config = replace(_config(), max_continuations=2)
+    remote = _MissingCheckpointRemote()
+    probe = SiteProbe(
+        name="grenoble",
+        reachable=True,
+        resources=(
+            GpuResource(
+                gpu_memory_mb=16_000,
+                cuda_capability=(8, 0),
+                jobs_assigned=0,
+                production=True,
+                exotic=False,
+            ),
+        ),
+        persistent_free_bytes=10 * 1024**3,
+        queued_jobs=0,
+    )
+    monkeypatch.setattr(
+        "osm_polygon_sentence_classifier.grid5000_autonomous.latest_published_checkpoint",
+        lambda *_args, **_kwargs: PublishedCheckpoint(
+            repository_id="NoeFlandre/osm-polygon-sentence-classifier",
+            prefix="studies/landuse-v1/run-test",
+            step=12,
+            files=(),
+        ),
+    )
+    current = AutonomousRunState(
+        run_id=config.identity.run_id,
+        phase="failed",
+        identity=config.identity.canonical_payload,
+        site="grenoble",
+        job_id=99,
+        facts={
+            "continuation_count": 1,
+            "max_continuations": 2,
+            "error": "job ended without a complete checkpoint",
+        },
+    )
+    controller = AutonomousRunController(
+        config,
+        state_root=tmp_path / "runs",
+        probe_sites=lambda **_: (probe,),
+        remote_factory=lambda _site: remote,
+        hub_api=_FakeHub(),
+        poll_seconds=0,
+    )
+    controller.state.create(current)
+
+    result = controller.run()
+
+    assert result.phase == "completed"
+    assert remote.submission_count > 0
 
 
 def test_failed_run_retries_a_transient_checkpoint_probe(
