@@ -164,6 +164,7 @@ def _continuation_facts(
     last_terminal_job_id: int | None = None,
     resume_from_checkpoint: bool | None = None,
     scheduler_command: Sequence[str] | None = None,
+    requested_policy_type: PolicyType | None = None,
 ) -> dict[str, object]:
     facts: dict[str, object] = {
         "continuation_count": continuation_count,
@@ -187,6 +188,8 @@ def _continuation_facts(
         facts["resume_from_checkpoint"] = resume_from_checkpoint
     if scheduler_command is not None:
         facts["scheduler_command"] = list(scheduler_command)
+    if requested_policy_type is not None:
+        facts["requested_policy_type"] = requested_policy_type
     return facts
 
 
@@ -735,6 +738,7 @@ class AutonomousRunController:
                 continuation_pending=True,
                 continuation_reason=reason,
                 last_terminal_job_id=job_id,
+                requested_policy_type=self.config.policy_type,
             ),
         )
         successor_job_id = OarClient(remote).submit(plan.scheduler_command)
@@ -750,6 +754,7 @@ class AutonomousRunController:
                 continuation_pending=False,
                 resume_from_checkpoint=True,
                 scheduler_command=plan.scheduler_command,
+                requested_policy_type=self.config.policy_type,
             ),
         )
         return self._monitor(submitted, remote=remote)
@@ -938,6 +943,7 @@ class AutonomousRunController:
                 "worker_source_commit": self.config.worker_source_commit,
                 "container_image": self.config.container_image,
                 "container_runtime": self.config.container_runtime,
+                "requested_policy_type": self.config.policy_type,
                 "sites": list(self.config.sites),
                 "requirements": {
                     "gpu_memory_mb": self.config.requirements.gpu_memory_mb,

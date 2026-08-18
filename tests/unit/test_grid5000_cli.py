@@ -302,6 +302,124 @@ def test_resume_execution_uses_current_worker_commit_without_limit_override(
     assert json.loads(capsys.readouterr().out) == {"phase": "running"}
 
 
+def test_resume_uses_the_requested_auto_policy_after_a_day_allocation(
+    monkeypatch,
+) -> None:
+    identity = Grid5000RunIdentity(
+        source_commit=SOURCE_COMMIT,
+        dataset_revision="d" * 40,
+        model_name_or_path="jhu-clsp/mmBERT-small",
+        model_revision=MODEL_REVISION,
+        training_config={
+            "model_name_or_path": "jhu-clsp/mmBERT-small",
+            "model_revision": MODEL_REVISION,
+            "publish_to_hub": False,
+            "sync_trackio": False,
+        },
+    )
+    state = AutonomousRunState(
+        run_id=identity.run_id,
+        phase="queued",
+        identity=identity.canonical_payload,
+        site="nancy",
+        job_id=99,
+        facts={
+            "allocation": {
+                "policy_type": "day",
+                "walltime_seconds": 1_200,
+            },
+            "requested_policy_type": "auto",
+            "max_continuations": 3,
+            "continuation_count": 1,
+        },
+    )
+
+    captured: list[str] = []
+
+    class FakeController:
+        def __init__(self, config, *, emit) -> None:
+            del emit
+            captured.append(config.policy_type)
+
+        def run(self) -> SimpleNamespace:
+            return SimpleNamespace(to_dict=lambda: {"phase": "queued"})
+
+    monkeypatch.setattr(
+        grid5000_cli.AutonomousStateStore,
+        "load",
+        lambda _self, _run_id: state,
+    )
+    monkeypatch.setattr(grid5000_cli, "_current_source_commit", lambda: "e" * 40)
+    monkeypatch.setattr(grid5000_cli, "AutonomousRunController", FakeController)
+
+    grid5000_cli.main(["resume", "--run-id", identity.run_id, "--execute"])
+
+    assert captured == ["auto"]
+
+
+def test_resume_can_override_the_policy_for_a_legacy_state(
+    monkeypatch,
+) -> None:
+    identity = Grid5000RunIdentity(
+        source_commit=SOURCE_COMMIT,
+        dataset_revision="d" * 40,
+        model_name_or_path="jhu-clsp/mmBERT-small",
+        model_revision=MODEL_REVISION,
+        training_config={
+            "model_name_or_path": "jhu-clsp/mmBERT-small",
+            "model_revision": MODEL_REVISION,
+            "publish_to_hub": False,
+            "sync_trackio": False,
+        },
+    )
+    state = AutonomousRunState(
+        run_id=identity.run_id,
+        phase="queued",
+        identity=identity.canonical_payload,
+        site="nancy",
+        job_id=99,
+        facts={
+            "allocation": {
+                "policy_type": "day",
+                "walltime_seconds": 1_200,
+            },
+            "max_continuations": 3,
+            "continuation_count": 1,
+        },
+    )
+
+    captured: list[str] = []
+
+    class FakeController:
+        def __init__(self, config, *, emit) -> None:
+            del emit
+            captured.append(config.policy_type)
+
+        def run(self) -> SimpleNamespace:
+            return SimpleNamespace(to_dict=lambda: {"phase": "queued"})
+
+    monkeypatch.setattr(
+        grid5000_cli.AutonomousStateStore,
+        "load",
+        lambda _self, _run_id: state,
+    )
+    monkeypatch.setattr(grid5000_cli, "_current_source_commit", lambda: "e" * 40)
+    monkeypatch.setattr(grid5000_cli, "AutonomousRunController", FakeController)
+
+    grid5000_cli.main(
+        [
+            "resume",
+            "--run-id",
+            identity.run_id,
+            "--policy-type",
+            "auto",
+            "--execute",
+        ]
+    )
+
+    assert captured == ["auto"]
+
+
 def test_autonomous_execution_prints_progress_to_stderr_and_json_to_stdout(
     monkeypatch, capsys
 ) -> None:

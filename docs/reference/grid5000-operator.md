@@ -172,6 +172,12 @@ Europe/Paris; otherwise it uses `night`. The default walltime is 20 minutes and
 day allocations remain capped at one hour. No speculative multi-site jobs or
 unbounded retries are used.
 
+The requested policy is stored separately from the scheduler’s derived `day`
+or `night` flag, so an `auto` run recomputes its policy on every continuation.
+For a run created before this distinction was recorded, pass
+`--policy-type auto` to `resume` if it was launched with automatic policy
+selection.
+
 ## Remote lifecycle
 
 The selected frontend receives a bounded SSH sequence that:

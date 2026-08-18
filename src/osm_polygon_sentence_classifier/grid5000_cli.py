@@ -135,6 +135,12 @@ def _parser(task_name: TaskName) -> argparse.ArgumentParser:
         default=None,
         help="extend a failed run beyond its persisted continuation limit",
     )
+    resume_parser.add_argument(
+        "--policy-type",
+        choices=("auto", "day", "night"),
+        default=None,
+        help="override the persisted policy window for a legacy run",
+    )
     status_parser = commands.add_parser(
         "status",
         help="print one local autonomous run state",
@@ -428,12 +434,18 @@ def _state_facts(state_payload: Mapping[str, object]) -> Mapping[str, object]:
 
 def _state_allocation_settings(
     facts: Mapping[str, object],
+    *,
+    policy_type_override: str | None = None,
 ) -> tuple[object, object, object]:
     allocation = facts.get("allocation", {})
     if not isinstance(allocation, Mapping):
-        return "auto", DEFAULT_AUTONOMOUS_WALLTIME_SECONDS, True
+        policy = policy_type_override or facts.get("requested_policy_type", "auto")
+        return policy, DEFAULT_AUTONOMOUS_WALLTIME_SECONDS, True
+    requested_policy = facts.get("requested_policy_type")
+    if requested_policy not in {"auto", "day", "night"}:
+        requested_policy = allocation.get("policy_type", "auto")
     return (
-        allocation.get("policy_type", "auto"),
+        policy_type_override or requested_policy,
         allocation.get("walltime_seconds", DEFAULT_AUTONOMOUS_WALLTIME_SECONDS),
         facts.get("cleanup", True),
     )
@@ -512,6 +524,7 @@ def _config_from_state(
     *,
     max_continuations_override: int | None = None,
     worker_source_commit_override: str | None = None,
+    policy_type_override: str | None = None,
 ) -> AutonomousRunConfig:
     identity_payload = state_payload.get("identity")
     if not isinstance(identity_payload, Mapping):
@@ -529,7 +542,10 @@ def _config_from_state(
             "autonomous training configuration is invalid"
         ) from error
     facts = _state_facts(state_payload)
-    policy, walltime, cleanup = _state_allocation_settings(facts)
+    policy, walltime, cleanup = _state_allocation_settings(
+        facts,
+        policy_type_override=policy_type_override,
+    )
     max_continuations, worker_source_commit = _state_continuation_settings(
         state_payload,
         facts,
@@ -609,6 +625,7 @@ def _handle_resume(
     autonomous = _config_from_state(
         state.to_dict(),
         max_continuations_override=arguments.max_continuations,
+        policy_type_override=arguments.policy_type,
         worker_source_commit_override=(
             _current_source_commit() if arguments.execute else None
         ),

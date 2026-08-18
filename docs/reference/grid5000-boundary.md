@@ -39,9 +39,15 @@ only after OAR reports it `Running`; until then the original queued job remains
 the fallback. A timed-out or late trial is canceled. If the fallback has no
 forecast, or its known forecast remains outside the immediate-start window,
 after all bounded replacement rounds, it is canceled and the run fails
-explicitly instead of polling forever. A monitor interruption does not cancel
-the active scheduler job; `resume --run-id RUN_ID --execute` reattaches to the
-durable state.
+  explicitly instead of polling forever. A monitor interruption does not cancel
+  the active scheduler job; `resume --run-id RUN_ID --execute` reattaches to the
+  durable state.
+
+The requested policy (`auto`, `day`, or `night`) is persisted separately from
+the derived OAR policy flag. With `auto`, every continuation recomputes the
+day/night window from the current Europe/Paris time; it never reuses an older
+`day` or `night` decision. For a state created by an older release, resume with
+`--policy-type auto` when the original run used automatic policy selection.
 
 The compute worker validates Linux, OAR identity, exact checkout revision and
 cleanliness, an x86_64 compute-node architecture, exactly one visible CUDA GPU,
