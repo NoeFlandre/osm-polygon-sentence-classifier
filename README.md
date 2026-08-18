@@ -75,6 +75,16 @@ The best completed finalist family by mean validation positive-class F1 was
 `a06-last2-256` (seeds `42`, `43`, and `44`). This is a validation comparison,
 not a claim of held-out test performance; the study has no held-out test set.
 
+## Experiment organization
+
+Release `v0.1.0` freezes the completed landuse-v1 work. The input dataset keeps
+its released `v1-afghanistan/` and `v2-worldwide/` lanes; labeling checkpoints
+are provenance, not training splits. The model repository keeps completed
+artifacts under stable `experiments/` and `studies/` namespaces. Future work
+must pin a dataset revision and code commit and use a new experiment lane; no
+worldwide V2 classifier training is part of this release. See the
+[experiment organization guide](docs/guides/experiment-organization.md).
+
 ## How to read a run
 
 Public run names follow

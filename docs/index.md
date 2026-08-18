@@ -24,9 +24,13 @@ following the efficient frozen-encoder approach used by
 Start with the [getting-started guide](guides/getting-started.md), use the
 [completed ablation registry](guides/ablations.md), then read the
 [data policy](guides/data-policy.md), the
+[experiment organization guide](guides/experiment-organization.md), the
 [Grid'5000 boundary](reference/grid5000-boundary.md), and the
 [operator reference](reference/grid5000-operator.md) before proposing a new
 training workflow.
+
+The next planned experiment lane uses the worldwide V2 input release. No V2
+training or evaluation result is included in this release.
 
 ## Citation
 

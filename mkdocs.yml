@@ -42,6 +42,7 @@ nav:
       - Docker runtime: guides/docker.md
       - Data policy: guides/data-policy.md
       - Landuse ablation study: guides/ablations.md
+      - Experiment organization: guides/experiment-organization.md
   - Architecture:
       - Overview: architecture/overview.md
   - Reference:

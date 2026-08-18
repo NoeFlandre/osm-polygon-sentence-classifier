@@ -29,3 +29,6 @@ tracking/
 .env
 .env.*
 !.env.example
+
+# Internal planning notes stay local and are never part of the public tree.
+docs/superpowers/
