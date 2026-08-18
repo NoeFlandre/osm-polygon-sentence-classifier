@@ -16,6 +16,7 @@ from osm_polygon_sentence_classifier.grid5000_autonomous import (
     AutonomousRunConfig,
     AutonomousRunController,
     AutonomousRunError,
+    _continuation_facts,
     _replacement_attempt_count_for_job,
 )
 from osm_polygon_sentence_classifier.grid5000_oar import JobState, JobStatus
@@ -668,6 +669,54 @@ def test_controller_continues_from_a_checkpoint_after_walltime_termination(
     assert facts["continuation_count"] == 1
     assert facts["resume_from_checkpoint"] is True
     assert facts["replacement_attempted"] is False
+
+
+def test_continuation_facts_preserve_the_resume_state_contract() -> None:
+    assert _continuation_facts(
+        continuation_count=2,
+        max_continuations=3,
+        worker_source_commit="a" * 40,
+        continuation_pending=False,
+        continuation_reason="walltime",
+        last_terminal_job_id=99,
+        resume_from_checkpoint=True,
+        scheduler_command=("oarsub", "-l", "nodes=1"),
+    ) == {
+        "continuation_count": 2,
+        "max_continuations": 3,
+        "worker_source_commit": "a" * 40,
+        "continuation_pending": False,
+        "continuation_reason": "walltime",
+        "last_terminal_job_id": 99,
+        "replacement_attempted": False,
+        "replacement_attempted_job_id": None,
+        "replacement_attempt_count": 0,
+        "replacement_last_attempt_at": None,
+        "resume_from_checkpoint": True,
+        "scheduler_command": ["oarsub", "-l", "nodes=1"],
+    }
+
+
+def test_pending_continuation_facts_omit_submission_only_fields() -> None:
+    assert _continuation_facts(
+        continuation_count=2,
+        max_continuations=3,
+        worker_source_commit=None,
+        continuation_pending=True,
+        continuation_reason="walltime",
+        last_terminal_job_id=99,
+    ) == {
+        "continuation_count": 2,
+        "max_continuations": 3,
+        "worker_source_commit": None,
+        "continuation_pending": True,
+        "continuation_reason": "walltime",
+        "last_terminal_job_id": 99,
+        "replacement_attempted": False,
+        "replacement_attempted_job_id": None,
+        "replacement_attempt_count": 0,
+        "replacement_last_attempt_at": None,
+    }
 
 
 def test_controller_stops_after_the_continuation_limit(

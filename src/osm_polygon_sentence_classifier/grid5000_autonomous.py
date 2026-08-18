@@ -143,6 +143,42 @@ def _now() -> datetime:
     return datetime.now().astimezone()
 
 
+def _continuation_facts(
+    *,
+    continuation_count: int,
+    max_continuations: int,
+    worker_source_commit: str | None,
+    continuation_pending: bool,
+    continuation_reason: str | None = None,
+    last_terminal_job_id: int | None = None,
+    resume_from_checkpoint: bool | None = None,
+    scheduler_command: Sequence[str] | None = None,
+) -> dict[str, object]:
+    facts: dict[str, object] = {
+        "continuation_count": continuation_count,
+        "max_continuations": max_continuations,
+        "worker_source_commit": worker_source_commit,
+        "continuation_pending": continuation_pending,
+    }
+    if continuation_reason is not None:
+        facts["continuation_reason"] = continuation_reason
+    if last_terminal_job_id is not None:
+        facts["last_terminal_job_id"] = last_terminal_job_id
+    facts.update(
+        {
+            "replacement_attempted": False,
+            "replacement_attempted_job_id": None,
+            "replacement_attempt_count": 0,
+            "replacement_last_attempt_at": None,
+        }
+    )
+    if resume_from_checkpoint is not None:
+        facts["resume_from_checkpoint"] = resume_from_checkpoint
+    if scheduler_command is not None:
+        facts["scheduler_command"] = list(scheduler_command)
+    return facts
+
+
 def _replacement_attempt_count_for_job(
     facts: Mapping[str, object],
     *,
@@ -766,18 +802,14 @@ class AutonomousRunController:
             RunPhase.SUBMITTING,
             site=site,
             job_id=None,
-            facts={
-                "continuation_count": raw_count + 1,
-                "max_continuations": self.config.max_continuations,
-                "worker_source_commit": self.config.worker_source_commit,
-                "continuation_pending": True,
-                "continuation_reason": reason,
-                "last_terminal_job_id": job_id,
-                "replacement_attempted": False,
-                "replacement_attempted_job_id": None,
-                "replacement_attempt_count": 0,
-                "replacement_last_attempt_at": None,
-            },
+            facts=_continuation_facts(
+                continuation_count=raw_count + 1,
+                max_continuations=self.config.max_continuations,
+                worker_source_commit=self.config.worker_source_commit,
+                continuation_pending=True,
+                continuation_reason=reason,
+                last_terminal_job_id=job_id,
+            ),
         )
         successor_job_id = OarClient(remote).submit(plan.scheduler_command)
         submitted = self._transition(
@@ -785,18 +817,14 @@ class AutonomousRunController:
             RunPhase.SUBMITTED,
             site=site,
             job_id=successor_job_id,
-            facts={
-                "continuation_count": raw_count + 1,
-                "max_continuations": self.config.max_continuations,
-                "worker_source_commit": self.config.worker_source_commit,
-                "continuation_pending": False,
-                "replacement_attempted": False,
-                "replacement_attempted_job_id": None,
-                "replacement_attempt_count": 0,
-                "replacement_last_attempt_at": None,
-                "resume_from_checkpoint": True,
-                "scheduler_command": list(plan.scheduler_command),
-            },
+            facts=_continuation_facts(
+                continuation_count=raw_count + 1,
+                max_continuations=self.config.max_continuations,
+                worker_source_commit=self.config.worker_source_commit,
+                continuation_pending=False,
+                resume_from_checkpoint=True,
+                scheduler_command=plan.scheduler_command,
+            ),
         )
         return self._monitor(submitted, remote=remote)
 
