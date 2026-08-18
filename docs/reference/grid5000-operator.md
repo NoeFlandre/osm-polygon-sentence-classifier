@@ -207,7 +207,7 @@ The selected frontend receives a bounded SSH sequence that:
 4. installs the local Hugging Face token through SSH stdin, never a command;
 5. rechecks policy, quota, and the exact checkout before OAR submission; and
 6. submits either the default locked `uv` worker with the `training` extra, a
-   node-local run-scoped environment, a project-scoped shared UV wheel cache, and any
+   project-shared environment, a project-scoped shared UV wheel cache, and any
    optional pre-staged wheels in the project wheel directory, or the explicitly selected
    preloaded Docker/Podman image with the clean checkout and per-run data root
    mounted into it.

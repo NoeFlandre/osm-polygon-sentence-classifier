@@ -54,9 +54,8 @@ cleanliness, an x86_64 compute-node architecture, exactly one visible CUDA GPU,
 and CUDA capability `>= 7.5` before entering the existing training module. The
 site probe applies the same architecture and capability floor. By default the
 worker rechecks the assigned device and the executability of `uv`, using the
-   locked `training` extra, a node-local run-scoped environment, and a project-scoped
-   shared UV wheel cache under `$HOME/.cache`; the transient environment is
-   removed when the worker exits. When
+   locked `training` extra, a project-shared environment, and a project-scoped
+   shared UV wheel cache under `$HOME/.cache`. When
 the optional project wheel directory exists at
 `$HOME/.cache/osm-polygon-sentence-classifier/wheels`, it is exposed through
 `UV_FIND_LINKS` so pre-staged locked Linux wheels are reused as well.

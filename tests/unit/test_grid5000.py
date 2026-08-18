@@ -243,10 +243,10 @@ def test_worker_command_reuses_a_shared_locked_uv_cache() -> None:
         in command
     )
     assert (
-        'worker_env_root="${TMPDIR:-/tmp}/osm-polygon-sentence-classifier/' in command
+        'export UV_PROJECT_ENVIRONMENT="$HOME/osm-polygon-sentence-classifier-data/'
+        'grid5000/environment"' in command
     )
-    assert 'export UV_PROJECT_ENVIRONMENT="$worker_env_root/.venv"' in command
-    assert "trap 'rm -rf -- \"$worker_env_root\"' EXIT" in command
+    assert "worker_env_root" not in command
     assert (
         'export UV_CACHE_DIR="$HOME/.cache/osm-polygon-sentence-classifier/uv"'
         in command

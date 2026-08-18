@@ -23,8 +23,8 @@ GRID5000_DATASET_REVISION = LANDUSE_DATASET_CONTRACT.provenance.repository_revis
 MAX_WALLTIME_SECONDS = 12 * 60 * 60
 MAX_DAY_WALLTIME_SECONDS = 60 * 60
 DEFAULT_DAY_WALLTIME_SECONDS = 30 * 60
-# The locked environment is run-scoped; the UV wheel cache is shared by this
-# project beneath the persistent home quota so short jobs do not redownload it.
+# The locked environment and UV wheel cache are shared by this project beneath
+# the persistent home quota so short jobs reuse the installed runtime.
 # Eight GiB leaves room for two resumable checkpoints, the final model,
 # metadata, and publication artifacts beneath the persistent home quota.
 MINIMUM_HOME_HEADROOM_BYTES = 8 * 1024**3
@@ -33,6 +33,7 @@ COMMAND_TIMEOUT_SECONDS = 120.0
 REMOTE_CHECKOUT_SUBDIRECTORY = "osm-polygon-sentence-classifier"
 REMOTE_DATA_SUBDIRECTORY = "osm-polygon-sentence-classifier-data"
 REMOTE_RUNS_SUBDIRECTORY = "grid5000/runs"
+REMOTE_ENVIRONMENT_SUBDIRECTORY = "grid5000/environment"
 WORKER_MODULE = "osm_polygon_sentence_classifier.grid5000_worker"
 CONTAINER_HOME = "/home/app"
 CONTAINER_CHECKOUT = f"{CONTAINER_HOME}/checkout"
@@ -430,10 +431,9 @@ class Grid5000Plan:
     def worker_command(self) -> str:
         """Return the fixed compute-node command for the training worker.
 
-        The locked Python environment lives in node-local scratch so importing
-        CUDA libraries does not traverse the shared home filesystem. Its
-        project-scoped UV wheel cache is shared beneath ``$HOME`` so later
-        short jobs reuse downloads; model caches, outputs, checkpoints, and
+        The locked Python environment and project-scoped UV wheel cache are
+        shared beneath the managed home quota so later short jobs reuse the
+        installed CUDA runtime. Model caches, outputs, checkpoints, and
         Trackio state remain in the managed run root.
         """
 
@@ -479,6 +479,9 @@ class Grid5000Plan:
             f'"$HOME/{REMOTE_DATA_SUBDIRECTORY}/{REMOTE_RUNS_SUBDIRECTORY}/'
             f'{self.identity.run_id}"'
         )
+        remote_environment_root = (
+            f'"$HOME/{REMOTE_DATA_SUBDIRECTORY}/{REMOTE_ENVIRONMENT_SUBDIRECTORY}"'
+        )
         worker_command += ' --remote-data-root "$remote_run_root"'
         if self.resume_from_checkpoint:
             worker_command += " --require-checkpoint"
@@ -486,9 +489,7 @@ class Grid5000Plan:
             f'cd "$HOME/{REMOTE_CHECKOUT_SUBDIRECTORY}" && '
             "umask 077 && set -eu && "
             f"remote_run_root={remote_run_root} && "
-            f'worker_env_root="${{TMPDIR:-/tmp}}/osm-polygon-sentence-classifier/{self.identity.run_id}" && '
-            'export UV_PROJECT_ENVIRONMENT="$worker_env_root/.venv" && '
-            "trap 'rm -rf -- \"$worker_env_root\"' EXIT && "
+            f"export UV_PROJECT_ENVIRONMENT={remote_environment_root} && "
             'export UV_CACHE_DIR="$HOME/.cache/osm-polygon-sentence-classifier/uv" && '
             'cpu_architecture="$(uname -m)"; '
             '[ "$cpu_architecture" = "x86_64" ] || '
@@ -1096,6 +1097,7 @@ __all__ = [
     "QuotaUsage",
     "REMOTE_CHECKOUT_SUBDIRECTORY",
     "REMOTE_DATA_SUBDIRECTORY",
+    "REMOTE_ENVIRONMENT_SUBDIRECTORY",
     "REMOTE_RUNS_SUBDIRECTORY",
     "SUPPORTED_TASK_NAMES",
     "SubprocessCommandRunner",
