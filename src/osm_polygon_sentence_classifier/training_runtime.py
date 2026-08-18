@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib import import_module
@@ -130,11 +131,58 @@ def build_trainer(
     return trainer_type(**trainer_values)
 
 
+def _checkpoint_global_step(state_path: Path) -> int | None:
+    """Read a valid global step from one Trainer checkpoint state file."""
+
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, Mapping):
+        return None
+    global_step = payload.get("global_step")
+    if isinstance(global_step, bool) or not isinstance(global_step, int):
+        return None
+    return global_step
+
+
+def _load_completed_checkpoint(trainer: Any, checkpoint: Path) -> bool:
+    """Load a checkpoint at or beyond ``max_steps`` without replaying data."""
+
+    max_steps = getattr(getattr(trainer, "args", None), "max_steps", None)
+    if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps <= 0:
+        return False
+    state_path = checkpoint / "trainer_state.json"
+    global_step = _checkpoint_global_step(state_path)
+    if global_step is None or global_step < max_steps:
+        return False
+    load_checkpoint = getattr(trainer, "_load_from_checkpoint", None)
+    if not callable(load_checkpoint):
+        return False
+    load_checkpoint(str(checkpoint))
+
+    state = getattr(trainer, "state", None)
+    load_state = getattr(type(state), "load_from_json", None)
+    if callable(load_state):
+        trainer.state = load_state(str(state_path))
+    elif state is not None:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+        for name in ("global_step", "epoch", "log_history"):
+            if isinstance(payload, Mapping) and name in payload:
+                setattr(state, name, payload[name])
+    restore_callbacks = getattr(trainer, "_load_callback_state", None)
+    if callable(restore_callbacks):
+        restore_callbacks()
+    return True
+
+
 def run_trainer(trainer: Any, resume_from_checkpoint: Path | None) -> object:
-    """Run Trainer with the exact optional resume argument used by the pipeline."""
+    """Run Trainer, skipping data replay for an already-complete checkpoint."""
 
     if resume_from_checkpoint is None:
         return trainer.train()
+    if _load_completed_checkpoint(trainer, resume_from_checkpoint):
+        return None
     return trainer.train(resume_from_checkpoint=str(resume_from_checkpoint))
 
 

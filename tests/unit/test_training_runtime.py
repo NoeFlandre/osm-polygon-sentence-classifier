@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -105,3 +106,53 @@ def test_build_and_run_trainer_preserve_callback_and_resume_arguments(
     assert FakeTrainer.init_calls[0]["callbacks"] == [callback]
     assert result == "trained"
     assert FakeTrainer.train_calls == ["models/landuse/checkpoint-7"]
+
+
+def test_run_trainer_loads_a_completed_checkpoint_without_replaying(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "checkpoint-12"
+    checkpoint.mkdir()
+    (checkpoint / "trainer_state.json").write_text(
+        '{"global_step": 12, "log_history": [{"loss": 0.1}]}',
+        encoding="utf-8",
+    )
+
+    class FakeState:
+        def __init__(self) -> None:
+            self.global_step = 0
+            self.log_history: list[dict[str, float]] = []
+
+        @classmethod
+        def load_from_json(cls, path: str) -> "FakeState":
+            import json
+
+            payload = json.loads(Path(path).read_text(encoding="utf-8"))
+            state = cls()
+            state.global_step = payload["global_step"]
+            state.log_history = payload["log_history"]
+            return state
+
+    class FakeTrainer:
+        def __init__(self) -> None:
+            self.args = SimpleNamespace(max_steps=12)
+            self.state = FakeState()
+            self.load_calls: list[str] = []
+            self.train_calls: list[str | None] = []
+
+        def _load_from_checkpoint(self, path: str) -> None:
+            self.load_calls.append(path)
+
+        def train(self, resume_from_checkpoint: str | None = None) -> object:
+            self.train_calls.append(resume_from_checkpoint)
+            return "replayed"
+
+    trainer = FakeTrainer()
+
+    result = run_trainer(trainer, checkpoint)
+
+    assert result is None
+    assert trainer.load_calls == [str(checkpoint)]
+    assert trainer.train_calls == []
+    assert trainer.state.global_step == 12
+    assert trainer.state.log_history == [{"loss": 0.1}]
