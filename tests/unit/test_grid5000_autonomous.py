@@ -501,6 +501,11 @@ def test_queued_replacement_is_retried_after_a_cooldown_but_is_bounded(
 ) -> None:
     config = _config()
     controller = AutonomousRunController(config, state_root=tmp_path / "runs")
+    monkeypatch.setattr(
+        controller,
+        "_has_complete_checkpoint",
+        lambda *args, **kwargs: False,
+    )
     now = datetime(2026, 8, 5, 19, 0, tzinfo=UTC)
     monkeypatch.setattr(
         "osm_polygon_sentence_classifier.grid5000_autonomous._now",
@@ -528,34 +533,40 @@ def test_queued_replacement_is_retried_after_a_cooldown_but_is_bounded(
 
     monkeypatch.setattr(controller, "_try_replacement", try_replacement)
 
-    current, *_ = controller._handle_queued_status(
+    queued = controller._handle_queued_status(
         current,
         status=status,
         site="grenoble",
         job_id=99,
         remote=remote,
     )
+    assert isinstance(queued, tuple)
+    current, *_ = queued
     assert calls == [1]
     assert dict(current.facts or {})["replacement_attempt_count"] == 1
 
-    current, *_ = controller._handle_queued_status(
+    queued = controller._handle_queued_status(
         current,
         status=status,
         site="grenoble",
         job_id=99,
         remote=remote,
     )
+    assert isinstance(queued, tuple)
+    current, *_ = queued
     assert calls == [1]
 
     now += REPLACEMENT_RETRY_INTERVAL
     for expected_count in range(2, MAX_REPLACEMENT_ATTEMPTS + 1):
-        current, *_ = controller._handle_queued_status(
+        queued = controller._handle_queued_status(
             current,
             status=status,
             site="grenoble",
             job_id=99,
             remote=remote,
         )
+        assert isinstance(queued, tuple)
+        current, *_ = queued
         assert calls == list(range(1, expected_count + 1))
 
         if expected_count < MAX_REPLACEMENT_ATTEMPTS:
@@ -602,13 +613,15 @@ def test_queued_job_without_a_forecast_starts_a_bounded_replacement_round(
 
     monkeypatch.setattr(controller, "_try_replacement", try_replacement)
 
-    current, *_ = controller._handle_queued_status(
+    queued = controller._handle_queued_status(
         current,
         status=JobStatus(job_id=99, state=JobState.QUEUED),
         site="grenoble",
         job_id=99,
         remote=object(),
     )
+    assert isinstance(queued, tuple)
+    current, *_ = queued
 
     assert calls == [1]
     assert dict(current.facts or {})["replacement_attempt_count"] == 1
@@ -620,6 +633,11 @@ def test_unpredicted_fallback_is_canceled_after_bounded_replacement_rounds(
 ) -> None:
     config = _config()
     controller = AutonomousRunController(config, state_root=tmp_path / "runs")
+    monkeypatch.setattr(
+        controller,
+        "_has_complete_checkpoint",
+        lambda *args, **kwargs: False,
+    )
     now = datetime(2026, 8, 5, 19, 0, tzinfo=UTC)
     monkeypatch.setattr(
         "osm_polygon_sentence_classifier.grid5000_autonomous._now",
@@ -662,13 +680,15 @@ def test_unpredicted_fallback_is_canceled_after_bounded_replacement_rounds(
     )
 
     for _ in range(MAX_REPLACEMENT_ATTEMPTS):
-        current, *_ = controller._handle_queued_status(
+        queued = controller._handle_queued_status(
             current,
             status=JobStatus(job_id=99, state=JobState.QUEUED),
             site="grenoble",
             job_id=99,
             remote=remote,
         )
+        assert isinstance(queued, tuple)
+        current, *_ = queued
         now += REPLACEMENT_RETRY_INTERVAL
 
     with pytest.raises(AutonomousRunError, match="no start-time prediction"):
@@ -682,6 +702,70 @@ def test_unpredicted_fallback_is_canceled_after_bounded_replacement_rounds(
 
     assert remote.commands == ["oardel 99"]
     assert remote.marked == ["failed"]
+
+
+def test_stale_queued_job_restarts_from_a_complete_checkpoint(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+    config = replace(_config(), max_continuations=41)
+    remote = _CheckpointContinuationRemote()
+    probe = SiteProbe(
+        name="grenoble",
+        reachable=True,
+        resources=(
+            GpuResource(
+                gpu_memory_mb=16_000,
+                cuda_capability=(8, 0),
+                jobs_assigned=0,
+                production=True,
+                exotic=False,
+            ),
+        ),
+        persistent_free_bytes=10 * 1024**3,
+        queued_jobs=0,
+    )
+    current = AutonomousRunState(
+        run_id=config.identity.run_id,
+        phase="queued",
+        identity=config.identity.canonical_payload,
+        site="grenoble",
+        job_id=99,
+        facts={
+            "continuation_count": 14,
+            "max_continuations": 41,
+            "replacement_attempted": True,
+            "replacement_attempted_job_id": 99,
+            "replacement_attempt_count": MAX_REPLACEMENT_ATTEMPTS,
+            "replacement_last_attempt_at": "2026-08-18T19:00:00+02:00",
+        },
+    )
+    controller = AutonomousRunController(
+        config,
+        state_root=tmp_path / "runs",
+        probe_sites=lambda **_: (probe,),
+        remote_factory=lambda _site: remote,
+        hub_api=_FakeHub(),
+        poll_seconds=0,
+    )
+    controller.state.create(current)
+
+    result = controller._handle_queued_status(
+        current,
+        status=JobStatus(
+            job_id=99,
+            state=JobState.QUEUED,
+            scheduled_start="2026-08-19 10:34:02",
+        ),
+        site="grenoble",
+        job_id=99,
+        remote=remote,
+    )
+
+    assert isinstance(result, AutonomousRunState)
+    assert result.phase == "completed"
+    assert remote.submission_count > 0
 
 
 def test_controller_runs_prepare_submit_monitor_publish_verify_and_cleanup(

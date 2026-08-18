@@ -493,7 +493,7 @@ class AutonomousRunController:
         site: str,
         job_id: int,
         remote: Any,
-    ) -> tuple[AutonomousRunState, str, int, Any]:
+    ) -> tuple[AutonomousRunState, str, int, Any] | AutonomousRunState:
         if current.phase is RunPhase.SUBMITTED:
             current = self._transition(current, RunPhase.QUEUED)
         now = _now()
@@ -517,12 +517,13 @@ class AutonomousRunController:
             message = cast(str, decision.message)
             self.emit(f"{message}; canceling stale fallback")
             OarClient(remote).cancel(job_id)
-            return self._fail_terminal(
+            return self._continue_after_incomplete(
                 current,
                 site=site,
                 job_id=job_id,
                 remote=remote,
-                message=message,
+                reason=message,
+                failure_message=message,
             )
         if decision.action == "wait":
             return current, site, job_id, remote
@@ -664,6 +665,7 @@ class AutonomousRunController:
         job_id: int,
         remote: Any,
         reason: str,
+        failure_message: str | None = None,
     ) -> AutonomousRunState:
         facts = dict(current.facts or {})
         raw_count = facts.get("continuation_count", 0)
@@ -700,7 +702,7 @@ class AutonomousRunController:
                 site=site,
                 job_id=job_id,
                 remote=remote,
-                message="job ended without a complete checkpoint",
+                message=failure_message or "job ended without a complete checkpoint",
             )
         self.emit(f"{site} job {job_id}: complete checkpoint found")
         probe = self._continuation_probe(site)
@@ -885,18 +887,16 @@ class AutonomousRunController:
             status = oar.status(job_id)
             self.emit(f"{site} job {job_id}: {format_job_status(status)}")
             if status.state is JobState.QUEUED:
-                (
-                    current,
-                    site,
-                    job_id,
-                    current_remote,
-                ) = self._handle_queued_status(
+                queued_result = self._handle_queued_status(
                     current,
                     status=status,
                     site=site,
                     job_id=job_id,
                     remote=current_remote,
                 )
+                if isinstance(queued_result, AutonomousRunState):
+                    return queued_result
+                current, site, job_id, current_remote = queued_result
                 oar = OarClient(current_remote)
             elif status.state is JobState.RUNNING:
                 if current.phase in {RunPhase.SUBMITTED, RunPhase.QUEUED}:
