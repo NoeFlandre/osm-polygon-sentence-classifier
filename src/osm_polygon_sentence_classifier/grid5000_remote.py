@@ -391,7 +391,7 @@ printf 'REMOTE_STATUS_MARKED\n'
         self.run(command)
 
     def cleanup(self, run_id: str) -> None:
-        """Remove only a terminal, marker-owned run root."""
+        """Asynchronously remove only a terminal, marker-owned run root."""
 
         _validate_run_id(run_id)
         path = f'"$HOME/{REMOTE_DATA_SUBDIRECTORY}/{REMOTE_RUNS_SUBDIRECTORY}/{run_id}"'
@@ -400,15 +400,15 @@ set -euo pipefail
 root={path}
 [ ! -L "$root" ]
 [ -d "$root" ] || exit 0
-marker="$root/.operator-managed.json"
-[ -f "$marker" ] && [ ! -L "$marker" ]
-grep -Fq {shlex.quote(f'"run_id":"{run_id}"')} "$marker"
-grep -Eq '"status":"(complete|failed)"' "$marker"
-rm -rf -- "$root"
-printf 'REMOTE_CLEANED\n'
-""".strip()
+    marker="$root/.operator-managed.json"
+    [ -f "$marker" ] && [ ! -L "$marker" ]
+    grep -Fq {shlex.quote(f'"run_id":"{run_id}"')} "$marker"
+    grep -Eq '"status":"(complete|failed)"' "$marker"
+    nohup rm -rf -- "$root" >/dev/null 2>&1 < /dev/null &
+    printf 'REMOTE_CLEANUP_STARTED\n'
+    """.strip()
         result = self.run(command)
-        if result.stdout and "REMOTE_CLEANED" not in result.stdout:
+        if result.stdout and "REMOTE_CLEANUP_STARTED" not in result.stdout:
             raise Grid5000ExecutionError("remote cleanup marker is missing")
 
 

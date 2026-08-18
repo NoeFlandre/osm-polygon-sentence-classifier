@@ -39,8 +39,8 @@ class _RecordingRemoteRunner:
             return CommandResult(returncode=0, stdout="REMOTE_PREPARED reused=false\n")
         if "HF_AUTH_INSTALLED" in remote_command:
             return CommandResult(returncode=0, stdout="HF_AUTH_INSTALLED\n")
-        if "REMOTE_CLEANED" in remote_command:
-            return CommandResult(returncode=0, stdout="REMOTE_CLEANED\n")
+        if "REMOTE_CLEANUP_STARTED" in remote_command:
+            return CommandResult(returncode=0, stdout="REMOTE_CLEANUP_STARTED\n")
         if "checkpoint-manifest.json" in remote_command:
             return CommandResult(returncode=0, stdout="CHECKPOINT_READY\n")
         return CommandResult(returncode=0, stdout='{"run_id":"a"}\n')
@@ -91,7 +91,8 @@ def test_cleanup_targets_only_the_managed_run_marker() -> None:
     command = runner.calls[0][0][-1]
     assert ".operator-managed.json" in command
     assert '"status":"(complete|failed)"' in command
-    assert "REMOTE_CLEANED" in command
+    assert "REMOTE_CLEANUP_STARTED" in command
+    assert "nohup rm -rf" in command
     assert '[ ! -L "$marker" ]' in command
 
 
