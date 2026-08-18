@@ -6,6 +6,7 @@ import pytest
 from osm_polygon_sentence_classifier.checkpointing import write_checkpoint_manifest
 from osm_polygon_sentence_classifier.publication import (
     ModelPublicationError,
+    _commit_publication,
     ensure_model_repository,
     publish_checkpoint_directory,
     publish_model_directory,
@@ -45,6 +46,41 @@ def _checkpoint_directory(tmp_path: Path, step: int = 10) -> Path:
         global_step=step,
     )
     return directory
+
+
+def test_commit_publication_returns_the_validated_commit_result() -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeHub:
+        def create_commit(self, **kwargs: object) -> SimpleNamespace:
+            calls.append(kwargs)
+            return SimpleNamespace(
+                oid="c" * 40,
+                commit_url="https://huggingface.co/test/commit/" + "c" * 40,
+            )
+
+    result = _commit_publication(
+        api=FakeHub(),
+        repository="owner/model",
+        operations=["operation"],
+        commit_message="Publish artifacts",
+        published_paths=["artifacts/model.safetensors"],
+        failure_message="publication failed",
+    )
+
+    assert result.repository_id == "owner/model"
+    assert result.commit_id == "c" * 40
+    assert result.commit_url.endswith("/" + "c" * 40)
+    assert result.files == ("artifacts/model.safetensors",)
+    assert calls == [
+        {
+            "repo_id": "owner/model",
+            "repo_type": "model",
+            "operations": ["operation"],
+            "commit_message": "Publish artifacts",
+            "revision": "main",
+        }
+    ]
 
 
 def test_model_repository_setup_is_idempotent() -> None:

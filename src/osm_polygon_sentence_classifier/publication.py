@@ -6,7 +6,7 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path, PurePosixPath
@@ -384,6 +384,34 @@ def _commit_facts(info: Any) -> tuple[str, str]:
     return commit_id, commit_url
 
 
+def _commit_publication(
+    *,
+    api: Any,
+    repository: str,
+    operations: Sequence[Any],
+    commit_message: str,
+    published_paths: Sequence[str],
+    failure_message: str,
+) -> ModelPublicationResult:
+    try:
+        info = api.create_commit(
+            repo_id=repository,
+            repo_type="model",
+            operations=operations,
+            commit_message=commit_message,
+            revision="main",
+        )
+    except Exception as error:
+        raise ModelPublicationError(failure_message) from error
+    commit_id, commit_url = _commit_facts(info)
+    return ModelPublicationResult(
+        repository_id=repository,
+        commit_id=commit_id,
+        commit_url=commit_url,
+        files=tuple(published_paths),
+    )
+
+
 def publish_model_directory(
     directory: str | Path,
     repository_id: object,
@@ -432,22 +460,13 @@ def publish_model_directory(
         ) from error
 
     api = hub_api or _default_hub_api()
-    try:
-        info = api.create_commit(
-            repo_id=repository,
-            repo_type="model",
-            operations=operations,
-            commit_message="Publish completed landuse classifier",
-            revision="main",
-        )
-    except Exception as error:
-        raise ModelPublicationError("Hugging Face model publication failed") from error
-    commit_id, commit_url = _commit_facts(info)
-    return ModelPublicationResult(
-        repository_id=repository,
-        commit_id=commit_id,
-        commit_url=commit_url,
-        files=tuple(published_paths),
+    return _commit_publication(
+        api=api,
+        repository=repository,
+        operations=operations,
+        commit_message="Publish completed landuse classifier",
+        published_paths=published_paths,
+        failure_message="Hugging Face model publication failed",
     )
 
 
@@ -496,22 +515,13 @@ def publish_study_documents(
         ) from error
 
     api = hub_api or _default_hub_api()
-    try:
-        info = api.create_commit(
-            repo_id=repository,
-            repo_type="model",
-            operations=operations,
-            commit_message="Update landuse ablation study report",
-            revision="main",
-        )
-    except Exception as error:
-        raise ModelPublicationError("study documentation publication failed") from error
-    commit_id, commit_url = _commit_facts(info)
-    return ModelPublicationResult(
-        repository_id=repository,
-        commit_id=commit_id,
-        commit_url=commit_url,
-        files=tuple(published_paths),
+    return _commit_publication(
+        api=api,
+        repository=repository,
+        operations=operations,
+        commit_message="Update landuse ablation study report",
+        published_paths=published_paths,
+        failure_message="study documentation publication failed",
     )
 
 
@@ -594,28 +604,17 @@ def publish_checkpoint_directory(
             "Hugging Face checkpoint operations could not be constructed"
         ) from error
 
+    published_paths = tuple(
+        _checkpoint_path_in_repo(path, checkpoint, identity=identity) for path in files
+    )
     api = hub_api or _default_hub_api()
-    try:
-        info = api.create_commit(
-            repo_id=repository,
-            repo_type="model",
-            operations=operations,
-            commit_message=f"Publish checkpoint {checkpoint.name}",
-            revision="main",
-        )
-    except Exception as error:
-        raise ModelPublicationError(
-            "Hugging Face checkpoint publication failed"
-        ) from error
-    commit_id, commit_url = _commit_facts(info)
-    return ModelPublicationResult(
-        repository_id=repository,
-        commit_id=commit_id,
-        commit_url=commit_url,
-        files=tuple(
-            _checkpoint_path_in_repo(path, checkpoint, identity=identity)
-            for path in files
-        ),
+    return _commit_publication(
+        api=api,
+        repository=repository,
+        operations=operations,
+        commit_message=f"Publish checkpoint {checkpoint.name}",
+        published_paths=published_paths,
+        failure_message="Hugging Face checkpoint publication failed",
     )
 
 
