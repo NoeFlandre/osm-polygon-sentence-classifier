@@ -460,6 +460,7 @@ class AutonomousRunController:
         fallback_site: str,
         fallback_job_id: int,
         fallback_remote: Any,
+        resume_from_checkpoint: bool = False,
     ) -> tuple[str, int, Any]:
         coordinator = ReplacementCoordinator(
             ReplacementContext(
@@ -475,6 +476,7 @@ class AutonomousRunController:
                 build_plan=lambda probe, walltime: self._build_plan(
                     probe,
                     walltime_seconds=walltime,
+                    resume_from_checkpoint=resume_from_checkpoint,
                 ),
                 submit_plan=self._submit_plan,
                 token_provider=self._local_token_for_publication,
@@ -550,6 +552,7 @@ class AutonomousRunController:
             fallback_site=site,
             fallback_job_id=job_id,
             fallback_remote=remote,
+            resume_from_checkpoint=facts.get("resume_from_checkpoint") is True,
         )
         current = self._transition(
             current,

@@ -9,6 +9,7 @@ from osm_polygon_sentence_classifier.checkpoint_hub import PublishedCheckpoint
 from osm_polygon_sentence_classifier.grid5000 import (
     CommandResult,
     Grid5000ExecutionError,
+    Grid5000Plan,
     Grid5000RunIdentity,
 )
 from osm_polygon_sentence_classifier.grid5000_autonomous import (
@@ -517,6 +518,7 @@ def test_queued_replacement_is_retried_after_a_cooldown_but_is_bounded(
         identity=config.identity.canonical_payload,
         site="grenoble",
         job_id=99,
+        facts={"resume_from_checkpoint": True},
     )
     controller.state.create(current)
     remote = _FakeRemote()
@@ -525,10 +527,10 @@ def test_queued_replacement_is_retried_after_a_cooldown_but_is_bounded(
         state=JobState.QUEUED,
         scheduled_start="2026-08-06 08:02:02",
     )
-    calls: list[int] = []
+    calls: list[tuple[int, bool]] = []
 
     def try_replacement(**kwargs: object) -> tuple[str, int, object]:
-        calls.append(len(calls) + 1)
+        calls.append((len(calls) + 1, kwargs["resume_from_checkpoint"] is True))
         return "grenoble", 99, kwargs["fallback_remote"]
 
     monkeypatch.setattr(controller, "_try_replacement", try_replacement)
@@ -542,7 +544,7 @@ def test_queued_replacement_is_retried_after_a_cooldown_but_is_bounded(
     )
     assert isinstance(queued, tuple)
     current, *_ = queued
-    assert calls == [1]
+    assert calls == [(1, True)]
     assert dict(current.facts or {})["replacement_attempt_count"] == 1
 
     queued = controller._handle_queued_status(
@@ -554,7 +556,7 @@ def test_queued_replacement_is_retried_after_a_cooldown_but_is_bounded(
     )
     assert isinstance(queued, tuple)
     current, *_ = queued
-    assert calls == [1]
+    assert calls == [(1, True)]
 
     now += REPLACEMENT_RETRY_INTERVAL
     for expected_count in range(2, MAX_REPLACEMENT_ATTEMPTS + 1):
@@ -567,7 +569,7 @@ def test_queued_replacement_is_retried_after_a_cooldown_but_is_bounded(
         )
         assert isinstance(queued, tuple)
         current, *_ = queued
-        assert calls == list(range(1, expected_count + 1))
+        assert calls == [(count, True) for count in range(1, expected_count + 1)]
 
         if expected_count < MAX_REPLACEMENT_ATTEMPTS:
             now += REPLACEMENT_RETRY_INTERVAL
@@ -581,7 +583,7 @@ def test_queued_replacement_is_retried_after_a_cooldown_but_is_bounded(
             job_id=99,
             remote=remote,
         )
-    assert calls == list(range(1, MAX_REPLACEMENT_ATTEMPTS + 1))
+    assert calls == [(count, True) for count in range(1, MAX_REPLACEMENT_ATTEMPTS + 1)]
     assert remote.marked == ["failed"]
 
 
@@ -1361,6 +1363,57 @@ def test_replacement_reuses_the_remote_that_submitted_the_trial(
     assert (site, job_id) == ("grenoble", 11)
     assert selected_remote is candidate
     assert probed_sites == [("nancy", "grenoble")]
+
+
+def test_checkpoint_replacement_requires_worker_resume_flag(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+    config = replace(_config(), sites=("nancy", "grenoble"), cleanup=False)
+    fallback = _ReplacementRemote("nancy", "Waiting")
+    candidate = _ReplacementRemote("grenoble", "Running")
+    remotes = {"nancy": fallback, "grenoble": candidate}
+    probe = SiteProbe(
+        name="grenoble",
+        reachable=True,
+        resources=(
+            GpuResource(
+                gpu_memory_mb=16_000,
+                cuda_capability=(8, 0),
+                jobs_assigned=0,
+                production=True,
+                exotic=False,
+            ),
+        ),
+        persistent_free_bytes=10 * 1024**3,
+        queued_jobs=0,
+    )
+    controller = AutonomousRunController(
+        config,
+        state_root=tmp_path / "runs",
+        probe_sites=lambda **_: (probe,),
+        remote_factory=lambda site: remotes[site],
+        poll_seconds=0,
+    )
+    plans: list[Grid5000Plan] = []
+
+    def fake_submit_plan(_remote: object, plan: Grid5000Plan) -> int:
+        plans.append(plan)
+        return 11
+
+    monkeypatch.setattr(controller, "_submit_plan", fake_submit_plan)
+
+    controller._try_replacement(
+        fallback_site="nancy",
+        fallback_job_id=10,
+        fallback_remote=fallback,
+        resume_from_checkpoint=True,
+    )
+
+    assert len(plans) == 1
+    assert plans[0].resume_from_checkpoint is True
+    assert "--require-checkpoint" in plans[0].worker_command
 
 
 def test_replacement_skips_a_site_without_persistent_headroom(
