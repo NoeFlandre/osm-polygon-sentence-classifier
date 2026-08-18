@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Protocol, cast
 
 from .checkpointing import CheckpointError, find_complete_checkpoint
 from .config import SOURCE_DATASET_ID, TARGET_MODEL_REPOSITORY_ID
@@ -30,7 +30,20 @@ class ModelPublicationResult:
     files: tuple[str, ...]
 
 
-OperationFactory = Callable[..., Any]
+OperationFactory = Callable[..., object]
+
+
+class _HubCommitProtocol(Protocol):
+    def create_commit(self, **kwargs: object) -> object: ...
+
+
+class _HubRepositoryProtocol(Protocol):
+    def create_repo(self, **kwargs: object) -> object: ...
+
+
+class _HubApiProtocol(_HubCommitProtocol, _HubRepositoryProtocol, Protocol):
+    pass
+
 
 _WEIGHT_PATTERN = re.compile(
     r"(?:model|pytorch_model)(?:-\d{5}-of-\d{5})?\.(?:bin|safetensors)$"
@@ -86,10 +99,10 @@ def _require_non_blank(value: object, field: str) -> str:
     return value
 
 
-def _default_hub_api() -> Any:
+def _default_hub_api() -> _HubApiProtocol:
     try:
         hub = import_module("huggingface_hub")
-        return hub.HfApi()
+        return cast(_HubApiProtocol, hub.HfApi())
     except Exception as error:
         raise ModelPublicationError(
             "Hugging Face publication requires the training dependencies"
@@ -318,7 +331,7 @@ def render_repository_readme(
 def ensure_model_repository(
     repository_id: object,
     *,
-    hub_api: Any | None = None,
+    hub_api: _HubRepositoryProtocol | None = None,
 ) -> None:
     """Create the dedicated model repository without uploading an artifact."""
 
@@ -374,7 +387,7 @@ def _final_model_files(directory: Path) -> tuple[Path, ...]:
     return selected
 
 
-def _commit_facts(info: Any) -> tuple[str, str]:
+def _commit_facts(info: object) -> tuple[str, str]:
     commit_id = getattr(info, "oid", None)
     commit_url = getattr(info, "commit_url", None)
     if not isinstance(commit_id, str) or not commit_id.strip():
@@ -386,9 +399,9 @@ def _commit_facts(info: Any) -> tuple[str, str]:
 
 def _commit_publication(
     *,
-    api: Any,
+    api: _HubCommitProtocol,
     repository: str,
-    operations: Sequence[Any],
+    operations: Sequence[object],
     commit_message: str,
     published_paths: Sequence[str],
     failure_message: str,
@@ -418,7 +431,7 @@ def publish_model_directory(
     *,
     identity: Mapping[str, object] | None = None,
     repository_readme: str | None = None,
-    hub_api: Any | None = None,
+    hub_api: _HubCommitProtocol | None = None,
     operation_factory: OperationFactory | None = None,
 ) -> ModelPublicationResult:
     """Validate and commit final artifacts under an immutable run directory."""
@@ -427,7 +440,7 @@ def publish_model_directory(
     output_directory = Path(directory)
     files = _final_model_files(output_directory)
     factory = operation_factory or _default_operation_factory()
-    operations: list[Any] = []
+    operations: list[object] = []
     published_paths: list[str] = []
     artifact_prefix = _model_artifact_prefix(identity) if identity is not None else None
     try:
@@ -474,7 +487,7 @@ def publish_study_documents(
     repository_id: object,
     documents: Mapping[str, str],
     *,
-    hub_api: Any | None = None,
+    hub_api: _HubCommitProtocol | None = None,
     operation_factory: OperationFactory | None = None,
 ) -> ModelPublicationResult:
     """Commit generated study documentation under explicit repository paths."""
@@ -483,7 +496,7 @@ def publish_study_documents(
     if not documents:
         raise ModelPublicationError("study documents cannot be empty")
     factory = operation_factory or _default_operation_factory()
-    operations: list[Any] = []
+    operations: list[object] = []
     published_paths: list[str] = []
     try:
         for raw_path, content in sorted(documents.items()):
@@ -577,7 +590,7 @@ def publish_checkpoint_directory(
     repository_id: object,
     *,
     identity: Mapping[str, object],
-    hub_api: Any | None = None,
+    hub_api: _HubCommitProtocol | None = None,
     operation_factory: OperationFactory | None = None,
 ) -> ModelPublicationResult:
     """Commit one complete checkpoint under its permanent step directory."""
@@ -586,7 +599,7 @@ def publish_checkpoint_directory(
     checkpoint = Path(directory)
     files = _complete_checkpoint_files(checkpoint, identity=identity)
     factory = operation_factory or _default_operation_factory()
-    operations: list[Any] = []
+    operations: list[object] = []
     try:
         for path in files:
             operations.append(

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from osm_polygon_sentence_classifier import publication
 from osm_polygon_sentence_classifier.checkpointing import write_checkpoint_manifest
 from osm_polygon_sentence_classifier.publication import (
     ModelPublicationError,
@@ -81,6 +82,13 @@ def test_commit_publication_returns_the_validated_commit_result() -> None:
             "revision": "main",
         }
     ]
+
+
+def test_publication_declares_the_typed_hub_dependency_boundary() -> None:
+    protocol = getattr(publication, "_HubApiProtocol", None)
+    assert protocol is not None
+    assert callable(getattr(protocol, "create_repo", None))
+    assert callable(getattr(protocol, "create_commit", None))
 
 
 def test_model_repository_setup_is_idempotent() -> None:
