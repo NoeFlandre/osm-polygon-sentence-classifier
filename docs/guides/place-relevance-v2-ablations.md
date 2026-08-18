@@ -41,8 +41,6 @@ verified checkpoints:
 uv run grid5000-place-relevance-v2 ablations \
   --source-commit "$(git rev-parse HEAD)" \
   --model-revision abc32620dd4f6ab06f5fbe905dc25f310618e09f \
-  --publish \
-  --sync-trackio \
   --execute
 ```
 
