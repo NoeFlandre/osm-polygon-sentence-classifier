@@ -6,6 +6,7 @@ from typing import Any, cast
 import pytest
 
 import osm_polygon_sentence_classifier.grid5000_worker as grid5000_worker
+from osm_polygon_sentence_classifier.checkpoint_hub import PublishedCheckpoint
 from osm_polygon_sentence_classifier.checkpointing import (
     CheckpointInfo,
     write_checkpoint_manifest,
@@ -855,6 +856,97 @@ def test_worker_restores_a_published_checkpoint_when_site_storage_is_empty(
 
     assert received["resume_from_checkpoint"] == checkpoint
     assert received["restore_identity"] == identity.canonical_payload
+
+
+def test_worker_prefers_a_newer_published_checkpoint_than_stale_local_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
+    training_config = TrainingConfig(
+        model_name_or_path="test-model",
+        model_revision=MODEL_REVISION,
+        publish_to_hub=True,
+    )
+    identity = _identity(
+        training_config={
+            "model_name_or_path": "test-model",
+            "model_revision": MODEL_REVISION,
+            "publish_to_hub": True,
+        }
+    )
+    remote_root = tmp_path / "training-data"
+    stale = remote_root / "models/landuse/checkpoint-12"
+    stale.mkdir(parents=True)
+    for filename in (
+        "model.safetensors",
+        "optimizer.pt",
+        "scheduler.pt",
+        "rng_state.pth",
+    ):
+        (stale / filename).write_bytes(b"stale")
+    (stale / "trainer_state.json").write_text('{"global_step": 12}', encoding="utf-8")
+    write_checkpoint_manifest(
+        stale, identity=identity.canonical_payload, global_step=12
+    )
+    newer = remote_root / "models/landuse/checkpoint-20"
+    received: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        grid5000_worker,
+        "latest_published_checkpoint",
+        lambda *_args, **_kwargs: PublishedCheckpoint(
+            repository_id="NoeFlandre/osm-polygon-sentence-classifier",
+            prefix="experiments/landuse/run-test",
+            step=20,
+            files=(),
+        ),
+    )
+
+    def fake_restore(
+        output_directory: Path,
+        *,
+        identity: Mapping[str, object],
+        repository_id: str,
+    ) -> CheckpointInfo:
+        received["repository_id"] = repository_id
+        newer.mkdir(parents=True)
+        for filename in (
+            "model.safetensors",
+            "optimizer.pt",
+            "scheduler.pt",
+            "rng_state.pth",
+        ):
+            (newer / filename).write_bytes(b"newer")
+        (newer / "trainer_state.json").write_text(
+            '{"global_step": 20}', encoding="utf-8"
+        )
+        write_checkpoint_manifest(newer, identity=identity, global_step=20)
+        return CheckpointInfo(path=newer, global_step=20)
+
+    monkeypatch.setattr(grid5000_worker, "restore_published_checkpoint", fake_restore)
+
+    def fake_train(**kwargs: object) -> TrainingResult:
+        received.update(kwargs)
+        return TrainingResult(
+            output_directory=tmp_path / "model", train_output=object()
+        )
+
+    run_landuse_training_worker(
+        identity,
+        checkout=tmp_path / "checkout",
+        training_config=training_config,
+        remote_data_root=remote_root,
+        environ={"OAR_JOB_ID": "12345", "HF_TOKEN": "hf_test_token"},
+        platform_name="linux",
+        git_runner=_git_runner(SOURCE_COMMIT),
+        cuda_probe=lambda: (True, 1, "Test GPU", (8, 0)),
+        train=fake_train,
+        require_checkpoint=True,
+    )
+
+    assert received["resume_from_checkpoint"] == newer
+    assert received["repository_id"] == "NoeFlandre/osm-polygon-sentence-classifier"
 
 
 def test_worker_passes_the_latest_checkpoint_to_training(
