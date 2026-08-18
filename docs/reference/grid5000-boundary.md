@@ -25,7 +25,8 @@ The execution contract is:
 - run policy and quota checks immediately before one OAR submission;
 - record durable intent before OAR and refuse ambiguous resubmission;
 - monitor one fallback job, with at most three sequential replacement rounds;
-  each round probes all configured sites and runs one 20-minute trial at a time;
+  each round probes all configured sites and runs one trial at a time using the
+  requested walltime (20 minutes by default);
   a fallback with no scheduler forecast triggers this bounded search
   immediately;
 - retain five identity-bound checkpoints and submit at most three bounded

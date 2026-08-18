@@ -471,6 +471,7 @@ class AutonomousRunController:
                 max_workers=self.config.max_workers,
                 cleanup=self.config.cleanup,
                 poll_seconds=self.poll_seconds or 1.0,
+                walltime_seconds=self.config.walltime_seconds,
                 probe_sites=self.probe_sites,
                 remote_factory=self.remote_factory,
                 build_plan=lambda probe, walltime: self._build_plan(

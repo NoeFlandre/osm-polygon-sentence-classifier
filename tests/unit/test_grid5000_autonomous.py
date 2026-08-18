@@ -1462,6 +1462,7 @@ def test_checkpoint_replacement_requires_worker_resume_flag(
 
     assert len(plans) == 1
     assert plans[0].resume_from_checkpoint is True
+    assert plans[0].allocation.walltime_seconds == config.walltime_seconds
     assert "--require-checkpoint" in plans[0].worker_command
 
 

@@ -35,6 +35,7 @@ class ReplacementContext:
     token_provider: Callable[[], str]
     emit: Callable[[str], None]
     sleep: Callable[[float], None]
+    walltime_seconds: int = SHORT_TRIAL_WALLTIME_SECONDS
 
 
 def replacement_candidates(
@@ -102,7 +103,7 @@ class ReplacementCoordinator:
         if token:
             remote.install_hugging_face_token(token)
         probe = next(item for item in probes if item.name == candidate.site)
-        plan = context.build_plan(probe, SHORT_TRIAL_WALLTIME_SECONDS)
+        plan = context.build_plan(probe, context.walltime_seconds)
         return context.submit_plan(remote, plan)
 
     def _status(

@@ -172,8 +172,9 @@ production/standard resources and Nancy-style default/exotic resources without
 hard-coding either site. Only one
 fallback job is live at a time. If its forecast is more than ten minutes away,
 the controller probes every configured site and tries replacement sites
-sequentially with a 20-minute trial allocation. A queued fallback without a
-scheduler forecast is treated the same way immediately; it must not be polled
+sequentially with the requested walltime (20 minutes by default). A queued
+fallback without a scheduler forecast is treated the same way immediately; it
+must not be polled
 indefinitely just because OAR has no prediction. The controller repeats that
 bounded probe after a ten-minute cooldown, for at most three rounds. It cancels
 a trial that has a known late forecast or reaches its ten-minute observation
