@@ -374,6 +374,55 @@ def test_continuation_helper_does_not_require_unused_status(
     assert result is sentinel
 
 
+def test_checkpoint_verification_failure_persists_terminal_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _config()
+    controller = AutonomousRunController(config, state_root=tmp_path / "runs")
+    current = AutonomousRunState(
+        run_id=config.identity.run_id,
+        phase="running",
+        identity=config.identity.canonical_payload,
+        site="grenoble",
+        job_id=99,
+        facts={"continuation_count": 0},
+    )
+    controller.state.create(current)
+    remote = _FakeRemote()
+
+    def fail_checkpoint_verification(*_args, **_kwargs) -> bool:
+        raise AutonomousRunError(
+            "published checkpoint availability could not be verified"
+        )
+
+    monkeypatch.setattr(
+        controller,
+        "_has_complete_checkpoint",
+        fail_checkpoint_verification,
+    )
+
+    with pytest.raises(
+        AutonomousRunError,
+        match="published checkpoint availability could not be verified",
+    ):
+        controller._continue_after_incomplete(
+            current,
+            site="grenoble",
+            job_id=99,
+            remote=remote,
+            reason="job ended",
+        )
+
+    failed = controller.state.load(config.identity.run_id)
+    assert failed is not None
+    assert failed.phase == "failed"
+    assert dict(failed.facts or {})["error"] == (
+        "published checkpoint availability could not be verified"
+    )
+    assert remote.marked == ["failed"]
+
+
 def test_continuation_probe_falls_back_to_another_configured_site(
     tmp_path: Path,
 ) -> None:

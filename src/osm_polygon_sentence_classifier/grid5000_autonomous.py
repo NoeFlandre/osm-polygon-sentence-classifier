@@ -696,12 +696,21 @@ class AutonomousRunController:
             f"{site} job {job_id}: checking checkpoint evidence before "
             f"continuation {raw_count + 1}/{self.config.max_continuations}"
         )
-        checkpoint_ready = self._has_complete_checkpoint(
-            remote,
-            site=site,
-            job_id=job_id,
-            allow_failed_status=current.phase is RunPhase.FAILED,
-        )
+        try:
+            checkpoint_ready = self._has_complete_checkpoint(
+                remote,
+                site=site,
+                job_id=job_id,
+                allow_failed_status=current.phase is RunPhase.FAILED,
+            )
+        except AutonomousRunError as error:
+            return self._fail_terminal(
+                current,
+                site=site,
+                job_id=job_id,
+                remote=remote,
+                message=str(error),
+            )
         if not checkpoint_ready:
             return self._fail_terminal(
                 current,
