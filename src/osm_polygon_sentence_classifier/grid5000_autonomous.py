@@ -585,18 +585,19 @@ class AutonomousRunController:
         )
 
     def _continuation_probe(self, site: str) -> SiteProbe:
+        del site
         probes = tuple(
             self.probe_sites(
-                sites=(site,),
+                sites=self.config.sites,
                 requirements=self.config.requirements,
-                max_workers=1,
+                max_workers=self.config.max_workers,
             )
         )
         try:
             return select_site(probes, requirements=self.config.requirements)
         except RuntimeError as error:
             raise AutonomousRunError(
-                f"site {site} is no longer compatible for checkpoint continuation"
+                "no compatible Grid'5000 site is available for checkpoint continuation"
             ) from error
 
     def _has_complete_checkpoint(
@@ -676,6 +677,13 @@ class AutonomousRunController:
             )
         self.emit(f"{site} job {job_id}: complete checkpoint found")
         probe = self._continuation_probe(site)
+        if probe.name != site:
+            self.emit(
+                f"run {self.config.identity.run_id}: continuing on {probe.name} "
+                f"after {site} became unavailable"
+            )
+            remote = self.remote_factory(probe.name)
+            self._active_remote = remote
         token = self._local_token_for_publication()
         remote.prepare(
             run_id=self.config.identity.run_id,
@@ -689,7 +697,7 @@ class AutonomousRunController:
         pending = self._transition(
             current,
             RunPhase.SUBMITTING,
-            site=site,
+            site=probe.name,
             job_id=None,
             facts=_continuation_facts(
                 continuation_count=raw_count + 1,
@@ -704,7 +712,7 @@ class AutonomousRunController:
         submitted = self._transition(
             pending,
             RunPhase.SUBMITTED,
-            site=site,
+            site=probe.name,
             job_id=successor_job_id,
             facts=_continuation_facts(
                 continuation_count=raw_count + 1,

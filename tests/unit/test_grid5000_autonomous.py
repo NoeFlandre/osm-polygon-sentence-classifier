@@ -359,6 +359,100 @@ def test_continuation_helper_does_not_require_unused_status(
     assert result is sentinel
 
 
+def test_continuation_probe_falls_back_to_another_configured_site(
+    tmp_path: Path,
+) -> None:
+    config = replace(_config(), sites=("nancy", "nantes"))
+    compatible_resource = GpuResource(
+        gpu_memory_mb=16_000,
+        cuda_capability=(8, 0),
+        jobs_assigned=0,
+        production=True,
+        exotic=False,
+    )
+    calls: list[tuple[str, ...]] = []
+
+    def probe_sites(*, sites, **_kwargs):
+        requested = tuple(sites)
+        calls.append(requested)
+        return tuple(
+            SiteProbe(
+                name=site,
+                reachable=site == "nantes",
+                resources=(compatible_resource,) if site == "nantes" else (),
+                persistent_free_bytes=10 * 1024**3 if site == "nantes" else 0,
+                queued_jobs=0,
+            )
+            for site in requested
+        )
+
+    controller = AutonomousRunController(
+        config,
+        state_root=tmp_path / "runs",
+        probe_sites=probe_sites,
+    )
+
+    selected = controller._continuation_probe("nancy")
+
+    assert selected.name == "nantes"
+    assert calls == [("nancy", "nantes")]
+
+
+def test_continuation_uses_the_selected_site_remote(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+    config = replace(_config(), sites=("nancy", "nantes"))
+    compatible_resource = GpuResource(
+        gpu_memory_mb=16_000,
+        cuda_capability=(8, 0),
+        jobs_assigned=0,
+        production=True,
+        exotic=False,
+    )
+    probe = SiteProbe(
+        name="nantes",
+        reachable=True,
+        resources=(compatible_resource,),
+        persistent_free_bytes=10 * 1024**3,
+        queued_jobs=0,
+    )
+    previous_remote = _CheckpointContinuationRemote()
+    successor_remote = _CheckpointContinuationRemote()
+    remotes = {"nantes": successor_remote}
+    controller = AutonomousRunController(
+        config,
+        state_root=tmp_path / "runs",
+        probe_sites=lambda **_: (probe,),
+        remote_factory=lambda site: remotes[site],
+        hub_api=_FakeHub(),
+        poll_seconds=0,
+    )
+    current = AutonomousRunState(
+        run_id=config.identity.run_id,
+        phase="running",
+        identity=config.identity.canonical_payload,
+        site="nancy",
+        job_id=99,
+        facts={"continuation_count": 0},
+    )
+    controller.state.create(current)
+
+    result = controller._continue_after_incomplete(
+        current,
+        site="nancy",
+        job_id=99,
+        remote=previous_remote,
+        reason="walltime",
+    )
+
+    assert result.phase == "completed"
+    assert result.site == "nantes"
+    assert previous_remote.submission_count == 0
+    assert successor_remote.submission_count > 0
+
+
 def test_legacy_replacement_state_is_upgraded_for_the_current_job() -> None:
     assert (
         _replacement_attempt_count_for_job(
