@@ -1,6 +1,6 @@
 [project]
 name = "osm-polygon-sentence-classifier"
-version = "0.1.0"
+version = "0.1.1"
 description = "A sentence classifier for OSM polygon descriptions, starting with landuse."
 readme = "README.md"
 requires-python = ">=3.12"

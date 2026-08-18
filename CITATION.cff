@@ -8,8 +8,8 @@ abstract: >-
 authors:
   - family-names: Flandre
     given-names: Noe
-version: 0.1.0
-date-released: 2026-08-12
+version: 0.1.1
+date-released: 2026-08-18
 repository-code: "https://github.com/NoeFlandre/osm-polygon-sentence-classifier"
 url: "https://github.com/NoeFlandre/osm-polygon-sentence-classifier"
 license: Apache-2.0
