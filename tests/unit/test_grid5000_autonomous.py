@@ -462,6 +462,41 @@ def test_continuation_probe_falls_back_to_another_configured_site(
     assert calls == [("nancy", "nantes")]
 
 
+def test_continuation_probe_accepts_resume_headroom_below_fresh_run_requirement(
+    tmp_path: Path,
+) -> None:
+    config = replace(_config(), sites=("nancy", "nantes"))
+    compatible_resource = GpuResource(
+        gpu_memory_mb=16_000,
+        cuda_capability=(8, 0),
+        jobs_assigned=0,
+        production=True,
+        exotic=False,
+    )
+
+    def probe_sites(*, sites, **_kwargs):
+        return tuple(
+            SiteProbe(
+                name=site,
+                reachable=site == "nantes",
+                resources=(compatible_resource,) if site == "nantes" else (),
+                persistent_free_bytes=(1 * 1024**3) if site == "nantes" else 0,
+                queued_jobs=0,
+            )
+            for site in sites
+        )
+
+    controller = AutonomousRunController(
+        config,
+        state_root=tmp_path / "runs",
+        probe_sites=probe_sites,
+    )
+
+    selected = controller._continuation_probe("nancy")
+
+    assert selected.name == "nantes"
+
+
 def test_continuation_uses_the_selected_site_remote(
     tmp_path: Path,
     monkeypatch,

@@ -163,8 +163,12 @@ calls. It records parsed facts from `oarnodes -J`, including CPU architecture,
 home quota/free space, and a queue-depth diagnostic. Queue depth is never
 interpreted as an ETA. A site is eligible only when it is reachable, has a
 compatible x86_64 GPU and enough persistent headroom, and its observed GPU facts
-support the request. ARM/aarch64 resources are excluded because the locked
-remote `uv` runtime and the reproducible container image target x86_64.
+support the request. Fresh runs reserve 8 GiB for caches and artifacts. A
+continuation with a verified checkpoint uses the smaller continuation reserve
+(512 MiB by default), so a site with an existing checkpoint is not rejected
+merely because it cannot hold another full fresh-run cache. ARM/aarch64
+resources are excluded because the locked remote `uv` runtime and the
+reproducible container image target x86_64.
 
 The OAR queue, `standard`/`exotic` resource type, and a property combining
 `gpu_mem`, `production`, `cpuarch='x86_64'`, and the observed compatible

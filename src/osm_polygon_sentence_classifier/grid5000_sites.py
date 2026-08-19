@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final, cast
 
 from .grid5000 import (
@@ -36,6 +36,8 @@ DEFAULT_SITES: Final[tuple[str, ...]] = (
 DEFAULT_MAX_WORKERS: Final[int] = 4
 DEFAULT_GPU_MEMORY_MB: Final[int] = 8_000
 DEFAULT_CUDA_CAPABILITY: Final[tuple[int, int]] = MINIMUM_CUDA_CAPABILITY
+DEFAULT_PERSISTENT_FREE_BYTES: Final[int] = 8 * 1024**3
+DEFAULT_RESUME_PERSISTENT_FREE_BYTES: Final[int] = 512 * 1024**2
 SUPPORTED_CPU_ARCHITECTURE: Final[str] = "x86_64"
 _PROBE_TIMEOUT_SECONDS: Final[float] = 30.0
 _OAR_NODES_COMMAND: Final[str] = "oarnodes -J"
@@ -54,7 +56,8 @@ class SiteRequirements:
 
     gpu_memory_mb: int = DEFAULT_GPU_MEMORY_MB
     cuda_capability: tuple[int, int] = DEFAULT_CUDA_CAPABILITY
-    persistent_free_bytes: int = 8 * 1024**3
+    persistent_free_bytes: int = DEFAULT_PERSISTENT_FREE_BYTES
+    resume_persistent_free_bytes: int = DEFAULT_RESUME_PERSISTENT_FREE_BYTES
 
     def __post_init__(self) -> None:
         if self.gpu_memory_mb <= 0:
@@ -65,6 +68,22 @@ class SiteRequirements:
             raise Grid5000ConfigurationError(
                 "persistent_free_bytes must be non-negative"
             )
+        if self.resume_persistent_free_bytes < 0:
+            raise Grid5000ConfigurationError(
+                "resume_persistent_free_bytes must be non-negative"
+            )
+        if self.resume_persistent_free_bytes > self.persistent_free_bytes:
+            raise Grid5000ConfigurationError(
+                "resume_persistent_free_bytes cannot exceed persistent_free_bytes"
+            )
+
+    def for_checkpoint_continuation(self) -> SiteRequirements:
+        """Relax only storage headroom for a run with a verified checkpoint."""
+
+        return replace(
+            self,
+            persistent_free_bytes=self.resume_persistent_free_bytes,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -427,6 +446,8 @@ __all__ = [
     "DEFAULT_CUDA_CAPABILITY",
     "DEFAULT_GPU_MEMORY_MB",
     "DEFAULT_MAX_WORKERS",
+    "DEFAULT_PERSISTENT_FREE_BYTES",
+    "DEFAULT_RESUME_PERSISTENT_FREE_BYTES",
     "DEFAULT_SITES",
     "GpuResource",
     "SiteProbe",

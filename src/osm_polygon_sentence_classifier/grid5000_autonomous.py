@@ -393,7 +393,12 @@ class AutonomousRunController:
             remote.run(command)
         quota_result = remote.run(plan.quota_command[-1])
         quota = parse_quota_output(quota_result.stdout)
-        if quota.soft_headroom_bytes < MINIMUM_HOME_HEADROOM_BYTES:
+        minimum_headroom = (
+            self.config.requirements.resume_persistent_free_bytes
+            if plan.resume_from_checkpoint
+            else MINIMUM_HOME_HEADROOM_BYTES
+        )
+        if quota.soft_headroom_bytes < minimum_headroom:
             raise AutonomousRunError(
                 "Grid'5000 home soft quota has insufficient safe headroom"
             )
@@ -464,12 +469,17 @@ class AutonomousRunController:
         fallback_remote: Any,
         resume_from_checkpoint: bool = False,
     ) -> tuple[str, int, Any]:
+        requirements = (
+            self.config.requirements.for_checkpoint_continuation()
+            if resume_from_checkpoint
+            else self.config.requirements
+        )
         coordinator = ReplacementCoordinator(
             ReplacementContext(
                 run_id=self.config.identity.run_id,
                 source_commit=self._worker_source_commit(),
                 sites=self.config.sites,
-                requirements=self.config.requirements,
+                requirements=requirements,
                 max_workers=self.config.max_workers,
                 cleanup=self.config.cleanup,
                 poll_seconds=self.poll_seconds or 1.0,
@@ -603,15 +613,16 @@ class AutonomousRunController:
 
     def _continuation_probe(self, site: str) -> SiteProbe:
         del site
+        requirements = self.config.requirements.for_checkpoint_continuation()
         probes = tuple(
             self.probe_sites(
                 sites=self.config.sites,
-                requirements=self.config.requirements,
+                requirements=requirements,
                 max_workers=self.config.max_workers,
             )
         )
         try:
-            return select_site(probes, requirements=self.config.requirements)
+            return select_site(probes, requirements=requirements)
         except RuntimeError as error:
             raise AutonomousRunError(
                 "no compatible Grid'5000 site is available for checkpoint continuation"
@@ -964,6 +975,9 @@ class AutonomousRunController:
                     "gpu_memory_mb": self.config.requirements.gpu_memory_mb,
                     "cuda_capability": list(self.config.requirements.cuda_capability),
                     "persistent_free_bytes": self.config.requirements.persistent_free_bytes,
+                    "resume_persistent_free_bytes": (
+                        self.config.requirements.resume_persistent_free_bytes
+                    ),
                 },
             },
         )

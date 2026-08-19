@@ -77,7 +77,9 @@ training, publication, tracking, and Grid'5000 orchestration:
   preflight; it never moves SSH, OAR, policy, quota, Hub, or cleanup into the
   container. `grid5000_sites.py` probes all configured frontends from
   `oarnodes -J`, records CPU architecture, and includes `cpuarch='x86_64'` in
-  generated GPU requests. `grid5000_remote.py` stages exact clean checkouts and
+  generated GPU requests. Fresh allocations require the full persistent
+  headroom reserve; verified checkpoint continuations use the smaller
+  continuation reserve. `grid5000_remote.py` stages exact clean checkouts and
   marker-owned data, and recognizes both single-file and sharded checkpoint
   weights when verifying continuation evidence. `grid5000_checkpointing.py`
   owns bounded checkpoint-evidence probes and retry timing, while
