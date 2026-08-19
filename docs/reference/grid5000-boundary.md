@@ -60,7 +60,8 @@ worker rechecks the assigned device and the executability of `uv`, using the
    `$HOME/.cache`. When
 the optional project wheel directory exists at
 `$HOME/.cache/osm-polygon-sentence-classifier/wheels`, it is exposed through
-`UV_FIND_LINKS` so pre-staged locked Linux wheels are reused as well.
+the launcher, copied to node-local scratch, and used to install the locked
+Linux wheel without repeated reads from home storage.
 `--container-image` is explicit, the host-side controller instead checks the
 requested Docker/Podman runtime and image on the node, then mounts the clean
 checkout read-only and the managed run root read-write into the non-root image.

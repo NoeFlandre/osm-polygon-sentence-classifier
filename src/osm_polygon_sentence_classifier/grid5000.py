@@ -500,11 +500,15 @@ class Grid5000Plan:
             '"$uv_bin" --version >/dev/null 2>&1 || '
             '{ echo "uv is not executable on compute-node architecture $cpu_architecture" >&2; exit 78; }; '
             'if [ -d "$HOME/.cache/osm-polygon-sentence-classifier/wheels" ]; '
-            'then "$uv_bin" venv "$UV_PROJECT_ENVIRONMENT" --allow-existing '
+            'then torch_wheel="$(find '
+            '"$HOME/.cache/osm-polygon-sentence-classifier/wheels" '
+            '-maxdepth 1 -type f -name "torch-*.whl" -print -quit)"; '
+            'if [ -n "$torch_wheel" ]; then '
+            'cp "$torch_wheel" "$runtime_root/torch.whl"; '
+            '"$uv_bin" venv "$UV_PROJECT_ENVIRONMENT" --allow-existing '
             "--no-python-downloads >/dev/null; "
             '"$uv_bin" pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" '
-            "--no-index --no-deps --find-links "
-            '"$HOME/.cache/osm-polygon-sentence-classifier/wheels" torch; '
+            '--no-index --no-deps --find-links "$runtime_root" torch; fi; '
             "fi && "
             'exec "$uv_bin" ' + worker_command
         )

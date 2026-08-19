@@ -255,11 +255,15 @@ def test_worker_command_builds_the_runtime_on_node_local_scratch() -> None:
     )
     assert (
         'if [ -d "$HOME/.cache/osm-polygon-sentence-classifier/wheels" ]; then '
+        'torch_wheel="$(find "$HOME/.cache/osm-polygon-sentence-classifier/wheels" '
+        '-maxdepth 1 -type f -name "torch-*.whl" -print -quit)"; '
+        'if [ -n "$torch_wheel" ]; then '
+        'cp "$torch_wheel" "$runtime_root/torch.whl"; '
         '"$uv_bin" venv "$UV_PROJECT_ENVIRONMENT" --allow-existing '
         "--no-python-downloads >/dev/null; "
         '"$uv_bin" pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" '
         "--no-index --no-deps --find-links "
-        '"$HOME/.cache/osm-polygon-sentence-classifier/wheels" torch; '
+        '"$runtime_root" torch; fi; '
         "fi" in command
     )
     assert '"$TMPDIR"' not in command
