@@ -131,8 +131,13 @@ uv run grid5000-place-relevance-v2 run \
 ```
 
 The V2 baseline publishes its protocol and aggregate data audit under
-`studies/place-relevance-v2/`. Its separate ablation study publishes a 13-run
-registry under `studies/place-relevance-v2-ablations/`; see the
+`studies/place-relevance-v2/`. V2 uses a separate public
+[Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-v2-trackio)
+and [metric Bucket](https://huggingface.co/buckets/NoeFlandre/osm-polygon-sentence-classifier-v2-trackio-data),
+so V1 and V2 dashboards are not mixed. Each short continuation is a clearly
+named Trackio segment; this prevents reset steps from being plotted as a false
+spike. Its separate ablation study publishes a 13-run registry under
+`studies/place-relevance-v2-ablations/`; see the
 [V2 ablation guide](place-relevance-v2-ablations.md) for the exact command and
 selection rule.
 If that limit is exhausted after a complete checkpoint was retained, use

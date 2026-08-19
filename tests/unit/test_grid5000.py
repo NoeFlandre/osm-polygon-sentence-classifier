@@ -710,7 +710,7 @@ def test_worker_runs_training_only_after_preflight(tmp_path: Path) -> None:
     assert received["checkpoint_identity"] == identity.canonical_payload
 
 
-def test_worldwide_worker_keeps_one_trackio_run_name_across_allocations(
+def test_worldwide_worker_names_each_allocation_segment_separately(
     tmp_path: Path,
 ) -> None:
     training_config = TrainingConfig(
@@ -767,7 +767,10 @@ def test_worldwide_worker_keeps_one_trackio_run_name_across_allocations(
     )
 
     assert isinstance(received["config"], TrainingConfig)
-    assert received["config"].run_name == training_config.run_name  # type: ignore[union-attr]
+    assert received["config"].run_name == (
+        f"{training_config.run_name} | run-{identity.run_id[:8]} "
+        "| segment-from-0000 | oar-12345"
+    )  # type: ignore[union-attr]
 
 
 def test_worker_requires_a_complete_checkpoint_for_continuation(

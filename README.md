@@ -118,6 +118,13 @@ seven screening runs plus six finalist replications and publishes under
 `studies/place-relevance-v2-ablations/` with Trackio project
 `place-relevance-v2-ablations`:
 
+V2 uses its own public [Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-v2-trackio)
+and [metric Bucket](https://huggingface.co/buckets/NoeFlandre/osm-polygon-sentence-classifier-v2-trackio-data);
+the V1 dashboard is not used for V2. Each short allocation is logged as a
+named segment containing the immutable run ID, starting checkpoint, and OAR job
+ID. This keeps a Trainer restart from drawing a false line across reset local
+steps; the segment is operational evidence, not a new experiment.
+
 ```bash
 uv run grid5000-place-relevance-v2 ablations \
   --source-commit "$(git rev-parse HEAD)" \
@@ -139,10 +146,12 @@ it is not an OAR job ID. A run's `checkpoints/step-N/` directories are complete
 resumable Trainer checkpoints, while its `final/` directory is the terminal
 model. The Hub study `results.json` contains the complete scalar metrics and
 `study.json` contains the pinned protocol and provenance.
-V2 uses the stable name `place-relevance-v2|baseline|seed-42`; its
-`studies/place-relevance-v2/` registry also contains `data-audit.json`.
+V2 uses the logical name `place-relevance-v2|baseline|seed-42`; each allocation
+segment appends `| run-<run-id> | segment-from-<step> | oar-<job-id>` in Trackio.
+Its `studies/place-relevance-v2/` registry also contains `data-audit.json`.
 V2 ablation runs use
-`place-relevance-v2-ablations|<ablation-id>|seed-<seed>` and are catalogued in
+`place-relevance-v2-ablations|<ablation-id>|seed-<seed>` plus the same
+allocation-segment suffix and are catalogued in
 `studies/place-relevance-v2-ablations/`.
 
 ## Data and model repositories
@@ -160,14 +169,14 @@ published beneath `experiments/<experiment>/run-<run-id>/final/`, and every
 complete checkpoint is published beneath that run's permanent
 `checkpoints/step-N/` directory.
 The model repository and free static Trackio Space/Bucket are provisioned as
-public destinations. The checkpoint upload is queued in order and drained
-before final publication; older checkpoint snapshots remain available for
-inspection. On network-backed Grid'5000 storage, Trackio JSONL fragments are
-imported before each static snapshot so the public dashboard contains the
-recorded metrics. Short Grid'5000 continuations receive names containing the
-experiment, immutable run ID, starting checkpoint, and OAR job ID. Those
-scheduler segment names are operational labels; the public study run name
-remains stable across continuations.
+public destinations. V1 and V2 use separate Trackio destinations. The
+checkpoint upload is queued in order and drained before final publication;
+older checkpoint snapshots remain available for inspection. On network-backed
+Grid'5000 storage, Trackio JSONL fragments are imported before each static
+snapshot so the public dashboard contains the recorded metrics. Short
+Grid'5000 continuations receive names containing the experiment, immutable run
+ID, starting checkpoint, and OAR job ID. These segment names prevent metrics
+from different Trainer processes being plotted as one continuous series.
 
 Run the audit only when the pinned dataset review is explicitly authorized:
 

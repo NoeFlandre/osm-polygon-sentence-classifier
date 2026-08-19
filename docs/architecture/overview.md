@@ -28,8 +28,10 @@ training, publication, tracking, and Grid'5000 orchestration:
   it uses an 80/10/10 polygon split and a one-epoch budget derived from the
   clean train count.
 - `tracking.py` builds Trackio project, managed-directory, static-Space, and
-  Bucket settings. It provisions the free static Space and does not deploy a
-  Gradio service; normal configuration does not import or start Trackio.
+  Bucket settings. V1 and worldwide V2 projects resolve to separate public
+  static Spaces and Buckets. It provisions the free static Space and does not
+  deploy a Gradio service; normal configuration does not import or start
+  Trackio.
 - `training.py` adapts the clean iterator to lazy split-specific Trainer
   records and wires a Hugging Face sequence-classification Trainer. The pure
   evaluation and model-card metric helpers live in `training_metrics.py`, so

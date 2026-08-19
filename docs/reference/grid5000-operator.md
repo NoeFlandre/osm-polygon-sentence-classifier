@@ -44,11 +44,14 @@ at batch size 8. Validation runs at each logical epoch end; the held-out test
 set is evaluated once after training. The public study files include the exact
 aggregate audit and are written beneath `studies/place-relevance-v2/`.
 
-V2 uses the stable Trackio project `place-relevance-v2` and run name
-`place-relevance-v2|baseline|seed-42`, so checkpoint continuations extend one
-logical public run instead of creating one run per OAR allocation. Its default
-continuation bound is 40; all replacements remain sequential and policy
-checked.
+V2 uses the separate public [Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-v2-trackio)
+and [metric Bucket](https://huggingface.co/buckets/NoeFlandre/osm-polygon-sentence-classifier-v2-trackio-data),
+never the V1 dashboard. The logical run name is
+`place-relevance-v2|baseline|seed-42`; every short allocation adds its immutable
+run ID, starting checkpoint, and OAR job ID as a segment suffix. Segments are
+deliberately separate so a new Trainer process cannot connect reset local steps
+to the previous process and create a false spike. Its default continuation
+bound is 40; all replacements remain sequential and policy checked.
 
 ### Worldwide V2 ablations
 

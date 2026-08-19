@@ -11,6 +11,10 @@ TRACKING_SUBDIRECTORY = Path("tracking")
 TRACKIO_SPACE_ID = "NoeFlandre/osm-polygon-sentence-classifier-trackio"
 TRACKIO_STATIC_SPACE_ID = TRACKIO_SPACE_ID
 TRACKIO_BUCKET_ID = "NoeFlandre/osm-polygon-sentence-classifier-trackio-data"
+V2_TRACKIO_SPACE_ID = "NoeFlandre/osm-polygon-sentence-classifier-v2-trackio"
+V2_TRACKIO_STATIC_SPACE_ID = V2_TRACKIO_SPACE_ID
+V2_TRACKIO_BUCKET_ID = "NoeFlandre/osm-polygon-sentence-classifier-v2-trackio-data"
+V2_TRACKIO_PROJECTS = frozenset({"place-relevance-v2", "place-relevance-v2-ablations"})
 
 
 class TrackingError(RuntimeError):
@@ -46,6 +50,14 @@ def settings_for(
         raise TrackingError("Trackio project must be a non-empty string")
     if "\n" in effective_project or "\r" in effective_project:
         raise TrackingError("Trackio project must be a single-line string")
+    if effective_project in V2_TRACKIO_PROJECTS:
+        return TrackioSettings(
+            project=effective_project,
+            directory=directory,
+            space_id=V2_TRACKIO_SPACE_ID,
+            bucket_id=V2_TRACKIO_BUCKET_ID,
+            static_space_id=V2_TRACKIO_STATIC_SPACE_ID,
+        )
     return TrackioSettings(project=effective_project, directory=directory)
 
 
@@ -223,6 +235,10 @@ __all__ = [
     "TRACKING_SUBDIRECTORY",
     "TrackingError",
     "TrackioSettings",
+    "V2_TRACKIO_BUCKET_ID",
+    "V2_TRACKIO_PROJECTS",
+    "V2_TRACKIO_SPACE_ID",
+    "V2_TRACKIO_STATIC_SPACE_ID",
     "ensure_trackio_resources",
     "restore_static_project_snapshot",
     "settings_for",

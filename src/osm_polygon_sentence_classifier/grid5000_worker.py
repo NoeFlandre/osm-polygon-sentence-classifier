@@ -67,15 +67,11 @@ class WorkerFacts:
 def _trackio_segment_run_name(
     base_name: str,
     *,
-    task_name: str,
     run_id: str,
     starting_step: int,
     job_id: int,
 ) -> str:
-    """Name one allocation segment while preserving the V2 logical run."""
-
-    if task_name == "place-relevance-v2":
-        return base_name
+    """Name one allocation segment without joining reset metric series."""
 
     return (
         f"{base_name} | run-{run_id[:8]} | "
@@ -343,7 +339,6 @@ def _run_training_worker(
         effective_config,
         run_name=_trackio_segment_run_name(
             effective_config.run_name,
-            task_name=identity.task_name,
             run_id=identity.run_id,
             starting_step=checkpoint.global_step if checkpoint is not None else 0,
             job_id=worker_facts.job_id,

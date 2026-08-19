@@ -11,6 +11,9 @@ from osm_polygon_sentence_classifier.tracking import (
     TRACKIO_BUCKET_ID,
     TRACKIO_SPACE_ID,
     TRACKIO_STATIC_SPACE_ID,
+    V2_TRACKIO_BUCKET_ID,
+    V2_TRACKIO_SPACE_ID,
+    V2_TRACKIO_STATIC_SPACE_ID,
     TrackingError,
     TrackioSettings,
     ensure_trackio_resources,
@@ -44,6 +47,25 @@ def test_settings_for_uses_an_explicit_study_project_when_requested() -> None:
     assert settings.project == "landuse-ablation-study-v1"
     assert settings.space_id == TRACKIO_SPACE_ID
     assert settings.bucket_id == TRACKIO_BUCKET_ID
+
+
+def test_settings_for_separates_worldwide_v2_from_the_v1_dashboard() -> None:
+    settings = settings_for(ProjectConfig(), project="place-relevance-v2")
+
+    assert settings.space_id == V2_TRACKIO_SPACE_ID
+    assert settings.static_space_id == V2_TRACKIO_STATIC_SPACE_ID
+    assert settings.bucket_id == V2_TRACKIO_BUCKET_ID
+
+
+def test_settings_for_separates_worldwide_v2_ablations_from_the_v1_dashboard() -> None:
+    settings = settings_for(
+        ProjectConfig(),
+        project="place-relevance-v2-ablations",
+    )
+
+    assert settings.space_id == V2_TRACKIO_SPACE_ID
+    assert settings.static_space_id == V2_TRACKIO_STATIC_SPACE_ID
+    assert settings.bucket_id == V2_TRACKIO_BUCKET_ID
 
 
 def test_settings_for_rejects_an_explicit_empty_project_name() -> None:
