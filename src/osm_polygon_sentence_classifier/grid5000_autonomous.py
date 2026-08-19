@@ -66,6 +66,7 @@ from .grid5000_state import (
     LegacyAmbiguousStateError,
     RunPhase,
 )
+from .huggingface_http import configure_huggingface_http
 from .publication import ensure_model_repository
 from .tracking import ensure_trackio_resources, settings_for
 from .training import TrainingConfig
@@ -299,6 +300,7 @@ class AutonomousRunController:
         if self.hub_api is not None:
             return self.hub_api
         try:
+            configure_huggingface_http()
             import huggingface_hub
 
             self.hub_api = huggingface_hub.HfApi()

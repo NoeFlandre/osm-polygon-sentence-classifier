@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .checkpointing import CheckpointInfo, find_complete_checkpoint
+from .huggingface_http import configure_huggingface_http
 from .publication import _model_artifact_prefix
 
 _CHECKPOINT_ROOT_PATTERN = re.compile(
@@ -66,6 +67,7 @@ def _canonical_json(value: object) -> str:
 
 def _default_api() -> Any:
     try:
+        configure_huggingface_http()
         return import_module("huggingface_hub").HfApi()
     except Exception as error:
         raise HubCheckpointError(
@@ -75,6 +77,7 @@ def _default_api() -> Any:
 
 def _default_manifest_loader(repository_id: str, path: str) -> Path:
     try:
+        configure_huggingface_http()
         hub = import_module("huggingface_hub")
         download = getattr(hub, "hf_hub_download", None)
         if not callable(download):
@@ -206,6 +209,7 @@ def restore_published_checkpoint(
     if checkpoint is None:
         raise HubCheckpointError("no complete published checkpoint matches the run")
     try:
+        configure_huggingface_http()
         hub = import_module("huggingface_hub")
         download = getattr(hub, "snapshot_download", None)
         if not callable(download):

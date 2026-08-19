@@ -14,6 +14,7 @@ from typing import Protocol, cast
 
 from .checkpointing import CheckpointError, find_complete_checkpoint
 from .config import SOURCE_DATASET_ID, TARGET_MODEL_REPOSITORY_ID
+from .huggingface_http import configure_huggingface_http
 
 
 class ModelPublicationError(RuntimeError):
@@ -101,6 +102,7 @@ def _require_non_blank(value: object, field: str) -> str:
 
 def _default_hub_api() -> _HubApiProtocol:
     try:
+        configure_huggingface_http()
         hub = import_module("huggingface_hub")
         return cast(_HubApiProtocol, hub.HfApi())
     except Exception as error:

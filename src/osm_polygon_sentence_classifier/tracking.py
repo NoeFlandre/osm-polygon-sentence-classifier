@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ProjectConfig
+from .huggingface_http import configure_huggingface_http
 from .paths import resolve_managed_path
 
 TRACKING_SUBDIRECTORY = Path("tracking")
@@ -71,6 +72,7 @@ def ensure_trackio_resources(
     try:
         api = hub_api
         if api is None:
+            configure_huggingface_http()
             hub = import_module("huggingface_hub")
             api = hub.HfApi()
         api.create_repo(
@@ -121,6 +123,7 @@ def restore_static_project_snapshot(settings: TrackioSettings) -> None:
                 settings.directory / f"{project_stem}_traces.parquet",
             ),
         ]
+        configure_huggingface_http()
         hub = import_module("huggingface_hub")
         download = getattr(hub, "download_bucket_files", None)
         if not callable(download):

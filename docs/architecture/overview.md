@@ -32,6 +32,9 @@ training, publication, tracking, and Grid'5000 orchestration:
   static Spaces and Buckets. It provisions the free static Space and does not
   deploy a Gradio service; normal configuration does not import or start
   Trackio.
+- `huggingface_http.py` configures the shared Hub client to use IPv4 with a
+  bounded connection timeout. Upload and download streams remain unbounded so
+  large checkpoints are not cut off by a short request timeout.
 - `training.py` adapts the clean iterator to lazy split-specific Trainer
   records and wires a Hugging Face sequence-classification Trainer. The pure
   evaluation and model-card metric helpers live in `training_metrics.py`, so

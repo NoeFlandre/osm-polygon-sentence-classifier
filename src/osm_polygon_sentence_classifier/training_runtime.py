@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from . import training_metrics as _training_metrics
+from .huggingface_http import configure_huggingface_http
 from .tracking import TrackioSettings
 from .training_freezing import TrainingError
 from .training_publication import make_checkpoint_manifest_callback
@@ -215,6 +216,7 @@ def load_checkpoint_publication_api() -> Any:
     """Load the Hub API only when checkpoint publication is explicitly enabled."""
 
     try:
+        configure_huggingface_http()
         hub = cast(Any, import_module("huggingface_hub"))
         return hub.HfApi()
     except Exception as error:
