@@ -45,6 +45,17 @@ def test_queued_job_without_a_forecast_is_eligible_for_one_trial() -> None:
     assert should_seek_replacement(status, now=now)
 
 
+def test_past_due_queued_forecast_is_eligible_for_replacement() -> None:
+    now = datetime(2026, 8, 5, 10, 0, tzinfo=UTC)
+    status = JobStatus(
+        job_id=1,
+        state=JobState.QUEUED,
+        scheduled_start="2026-08-05 09:55:00",
+    )
+
+    assert should_seek_replacement(status, now=now)
+
+
 def test_running_job_is_not_replaced() -> None:
     now = datetime(2026, 8, 5, 10, 0, tzinfo=UTC)
 

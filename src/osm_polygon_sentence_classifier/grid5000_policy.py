@@ -55,7 +55,8 @@ def should_seek_replacement(
 
     OAR may leave ``scheduled_start`` unset while a job remains queued. That is
     not evidence of an imminent start, so the controller treats it as eligible
-    for one bounded replacement round. Trial candidates use
+    for one bounded replacement round. A forecast that has already passed is
+    also stale evidence while the job is still queued. Trial candidates use
     :func:`forecast_exceeds_immediate_window` instead, which preserves their
     full observation window when their own forecast is unknown.
     """
@@ -66,10 +67,11 @@ def should_seek_replacement(
         raise ValueError("immediate_start_limit must be positive")
     if status.state is not JobState.QUEUED:
         return False
+    local_now = now.astimezone(GRID5000_TIMEZONE)
     forecast = _forecast_datetime(status.scheduled_start)
     if forecast is None:
         return True
-    return forecast > now.astimezone(GRID5000_TIMEZONE) + immediate_start_limit
+    return forecast <= local_now or forecast > local_now + immediate_start_limit
 
 
 @dataclass(frozen=True, slots=True)
