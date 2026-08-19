@@ -243,12 +243,16 @@ def test_worker_command_builds_the_runtime_on_node_local_scratch() -> None:
         in command
     )
     assert (
-        'runtime_root="${TMPDIR:-/tmp}/osm-polygon-sentence-classifier-${OAR_JOB_ID}"'
+        'runtime_root="${TMPDIR:-/tmp}/osm-polygon-sentence-classifier-${USER:-unknown}"'
         in command
     )
     assert 'mkdir -p "$runtime_root"' in command
     assert 'export UV_PROJECT_ENVIRONMENT="$runtime_root/environment"' in command
     assert "grid5000/environment" not in command
+    assert (
+        'if ! "$UV_PROJECT_ENVIRONMENT/bin/python" -c "import torch" '
+        ">/dev/null 2>&1; then " in command
+    )
     assert (
         'export UV_CACHE_DIR="$HOME/.cache/osm-polygon-sentence-classifier/uv"'
         in command

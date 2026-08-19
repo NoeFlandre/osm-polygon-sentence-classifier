@@ -479,7 +479,9 @@ class Grid5000Plan:
             f'"$HOME/{REMOTE_DATA_SUBDIRECTORY}/{REMOTE_RUNS_SUBDIRECTORY}/'
             f'{self.identity.run_id}"'
         )
-        runtime_root = '"${TMPDIR:-/tmp}/osm-polygon-sentence-classifier-${OAR_JOB_ID}"'
+        runtime_root = (
+            '"${TMPDIR:-/tmp}/osm-polygon-sentence-classifier-${USER:-unknown}"'
+        )
         worker_command += ' --remote-data-root "$remote_run_root"'
         if self.resume_from_checkpoint:
             worker_command += " --require-checkpoint"
@@ -499,6 +501,8 @@ class Grid5000Plan:
             'test -x "$uv_bin"; '
             '"$uv_bin" --version >/dev/null 2>&1 || '
             '{ echo "uv is not executable on compute-node architecture $cpu_architecture" >&2; exit 78; }; '
+            'if ! "$UV_PROJECT_ENVIRONMENT/bin/python" -c "import torch" '
+            ">/dev/null 2>&1; then "
             'if [ -d "$HOME/.cache/osm-polygon-sentence-classifier/wheels" ]; '
             'then torch_wheel="$(find '
             '"$HOME/.cache/osm-polygon-sentence-classifier/wheels" '
@@ -510,7 +514,7 @@ class Grid5000Plan:
             'UV_NO_CACHE=1 "$uv_bin" pip install --python '
             '"$UV_PROJECT_ENVIRONMENT/bin/python" '
             '--no-index --no-deps --find-links "$runtime_root" torch; fi; '
-            "fi && "
+            "fi; fi && "
             'exec "$uv_bin" ' + worker_command
         )
 
