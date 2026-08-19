@@ -47,11 +47,11 @@ aggregate audit and are written beneath `studies/place-relevance-v2/`.
 V2 uses the separate public [Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-v2-trackio)
 and [metric Bucket](https://huggingface.co/buckets/NoeFlandre/osm-polygon-sentence-classifier-v2-trackio-data),
 never the V1 dashboard. The logical run name is
-`place-relevance-v2|baseline|seed-42`; every short allocation adds its immutable
-run ID, starting checkpoint, and OAR job ID as a segment suffix. Segments are
-deliberately separate so a new Trainer process cannot connect reset local steps
-to the previous process and create a false spike. Its default continuation
-bound is 40; all replacements remain sequential and policy checked.
+`place-relevance-v2|baseline|seed-42`; every short allocation resumes that same
+logical Trackio run. Its immutable run ID, starting checkpoint, and OAR job ID
+are recorded as operational metadata, not added to the public run name. Its
+default continuation bound is 40; all replacements remain sequential and
+policy checked.
 
 ### Worldwide V2 ablations
 
@@ -245,9 +245,10 @@ generated credential-free README containing pinned
 identity, safe configuration, progress, and scalar metrics. The ordered Hub
 queue is drained before the final model publication; older remote checkpoint
 snapshots remain available. The repository root is documentation only; final
-model files live in the same run's `final/` directory. Trackio names each short
-allocation segment with the experiment, run ID, starting checkpoint, and OAR
-job ID so continuations are distinguishable in the public dashboard.
+model files live in the same run's `final/` directory. Trackio keeps one logical
+run per ablation across short allocations; the run registry and artifact paths
+retain the experiment, run ID, starting checkpoint, and OAR job ID for
+operational traceability.
 
 After a successful terminal job, the controller validates the manifest
 identity, verifies the recorded model commit and Trackio Space through the Hub,

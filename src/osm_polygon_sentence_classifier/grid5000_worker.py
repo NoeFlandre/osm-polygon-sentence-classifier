@@ -8,7 +8,7 @@ import os
 import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 from typing import Any, cast
@@ -62,21 +62,6 @@ class WorkerFacts:
     job_id: int
     source_commit: str
     cuda_device_name: str
-
-
-def _trackio_segment_run_name(
-    base_name: str,
-    *,
-    run_id: str,
-    starting_step: int,
-    job_id: int,
-) -> str:
-    """Name one allocation segment without joining reset metric series."""
-
-    return (
-        f"{base_name} | run-{run_id[:8]} | "
-        f"segment-from-{starting_step:04d} | oar-{job_id}"
-    )
 
 
 CudaProbe = Callable[[], tuple[bool, int, str, tuple[int, int]]]
@@ -281,7 +266,7 @@ def _run_training_worker(
     )
     effective_environment = os.environ if environ is None else environ
     _require_worker_hugging_face_auth(effective_config, effective_environment)
-    worker_facts = validate_compute_node(
+    validate_compute_node(
         expected_source_commit=checkout_source_commit or identity.source_commit,
         checkout=checkout,
         environ=effective_environment,
@@ -335,17 +320,8 @@ def _run_training_worker(
                 raise WorkerError(
                     "no complete local or published checkpoint is available for continuation"
                 ) from error
-    trackio_config = replace(
-        effective_config,
-        run_name=_trackio_segment_run_name(
-            effective_config.run_name,
-            run_id=identity.run_id,
-            starting_step=checkpoint.global_step if checkpoint is not None else 0,
-            job_id=worker_facts.job_id,
-        ),
-    )
     return train(
-        config=trackio_config,
+        config=effective_config,
         project_config=project_config,
         resume_from_checkpoint=checkpoint.path if checkpoint is not None else None,
         checkpoint_identity=identity.canonical_payload,

@@ -699,10 +699,7 @@ def test_worker_runs_training_only_after_preflight(tmp_path: Path) -> None:
 
     assert result is expected_result
     assert isinstance(received["config"], TrainingConfig)
-    assert received["config"].run_name == (
-        f"{training_config.run_name} | run-{identity.run_id[:8]} "
-        "| segment-from-0000 | oar-12345"
-    )
+    assert received["config"].run_name == training_config.run_name
     assert received["project_config"] == ProjectConfig.for_remote_root(
         Path.home() / "training-data"
     )
@@ -710,7 +707,7 @@ def test_worker_runs_training_only_after_preflight(tmp_path: Path) -> None:
     assert received["checkpoint_identity"] == identity.canonical_payload
 
 
-def test_worldwide_worker_names_each_allocation_segment_separately(
+def test_worldwide_worker_keeps_one_logical_trackio_run_name(
     tmp_path: Path,
 ) -> None:
     training_config = TrainingConfig(
@@ -767,10 +764,7 @@ def test_worldwide_worker_names_each_allocation_segment_separately(
     )
 
     assert isinstance(received["config"], TrainingConfig)
-    assert received["config"].run_name == (
-        f"{training_config.run_name} | run-{identity.run_id[:8]} "
-        "| segment-from-0000 | oar-12345"
-    )  # type: ignore[union-attr]
+    assert received["config"].run_name == training_config.run_name  # type: ignore[union-attr]
 
 
 def test_worker_requires_a_complete_checkpoint_for_continuation(
@@ -1038,7 +1032,7 @@ def test_worker_passes_the_latest_checkpoint_to_training(
     assert received["resume_from_checkpoint"] == checkpoint
     assert received["checkpoint_identity"] == identity.canonical_payload
     assert isinstance(received["config"], TrainingConfig)
-    assert received["config"].run_name.endswith("| segment-from-0012 | oar-12345")
+    assert received["config"].run_name == training_config.run_name
 
 
 def test_worker_requires_hugging_face_auth_before_publishing_or_tracking(

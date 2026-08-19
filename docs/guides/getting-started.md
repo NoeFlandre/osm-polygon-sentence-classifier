@@ -63,9 +63,11 @@ snapshot to the free public [Trackio Space](https://huggingface.co/spaces/NoeFla
 through its dedicated Bucket after each complete checkpoint and final
 publication. On network-backed Grid'5000 storage, append-only Trackio fragments
 are imported into the project database before each snapshot, and the final
-snapshot closes the active run first. Short continuation jobs are named with
-the experiment, run ID, starting checkpoint, and OAR job ID. Evaluation logs
-include accuracy, precision, recall, and F1. The model README is generated from
+snapshot closes the active run first. Short continuation jobs reuse the same
+stable Trackio run name, so each ablation has one public logical run; the
+experiment, run ID, checkpoint, and OAR job ID remain in the registry and
+artifact paths. Evaluation logs include accuracy, precision, recall, and F1.
+The model README is generated from
 safe run metadata, evaluation metrics, and checkpoint progress at each
 checkpoint and final publication. Checkpoint Hub uploads are queued in order
 and completed before the final model publication; older checkpoint snapshots
@@ -134,9 +136,9 @@ The V2 baseline publishes its protocol and aggregate data audit under
 `studies/place-relevance-v2/`. V2 uses a separate public
 [Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-v2-trackio)
 and [metric Bucket](https://huggingface.co/buckets/NoeFlandre/osm-polygon-sentence-classifier-v2-trackio-data),
-so V1 and V2 dashboards are not mixed. Each short continuation is a clearly
-named Trackio segment; this prevents reset steps from being plotted as a false
-spike. Its separate ablation study publishes a 13-run registry under
+so V1 and V2 dashboards are not mixed. Each short continuation is a resumed
+part of the same logical run, rather than a new Trackio run. Its separate
+ablation study publishes a 13-run registry under
 `studies/place-relevance-v2-ablations/`; see the
 [V2 ablation guide](place-relevance-v2-ablations.md) for the exact command and
 selection rule.
