@@ -507,7 +507,8 @@ class Grid5000Plan:
             'cp "$torch_wheel" "$runtime_root/"; '
             '"$uv_bin" venv "$UV_PROJECT_ENVIRONMENT" --allow-existing '
             "--no-python-downloads >/dev/null; "
-            '"$uv_bin" pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" '
+            'UV_NO_CACHE=1 "$uv_bin" pip install --python '
+            '"$UV_PROJECT_ENVIRONMENT/bin/python" '
             '--no-index --no-deps --find-links "$runtime_root" torch; fi; '
             "fi && "
             'exec "$uv_bin" ' + worker_command
