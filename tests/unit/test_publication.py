@@ -565,6 +565,32 @@ def test_repository_readme_registers_the_worldwide_v2_study() -> None:
     assert "place-relevance-v2" in readme
 
 
+def test_repository_readme_registers_separate_v1_and_v2_trackio_dashboards() -> None:
+    readme = render_repository_readme(
+        identity={
+            "task_name": "place-relevance-v2",
+            "run_id": "a" * 20,
+            "model_name_or_path": "jhu-clsp/mmBERT-small",
+            "model_revision": "b" * 40,
+            "training_config": {
+                "run_name": "place-relevance-v2|baseline|seed-42",
+                "artifact_namespace": "studies/place-relevance-v2/baseline",
+            },
+        }
+    )
+
+    assert (
+        "https://huggingface.co/spaces/NoeFlandre/"
+        "osm-polygon-sentence-classifier-trackio"
+    ) in readme
+    assert (
+        "https://huggingface.co/spaces/NoeFlandre/"
+        "osm-polygon-sentence-classifier-v2-trackio"
+    ) in readme
+    assert "V1 landuse" in readme
+    assert "V2 place relevance" in readme
+
+
 def test_checkpoint_publication_rejects_an_incomplete_snapshot_before_hub_call(
     tmp_path: Path,
 ) -> None:

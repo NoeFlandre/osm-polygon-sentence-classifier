@@ -15,6 +15,12 @@ from typing import Protocol, cast
 from .checkpointing import CheckpointError, find_complete_checkpoint
 from .config import SOURCE_DATASET_ID, TARGET_MODEL_REPOSITORY_ID
 from .huggingface_http import configure_huggingface_http
+from .tracking import (
+    TRACKIO_BUCKET_ID,
+    TRACKIO_SPACE_ID,
+    V2_TRACKIO_BUCKET_ID,
+    V2_TRACKIO_SPACE_ID,
+)
 
 
 class ModelPublicationError(RuntimeError):
@@ -302,7 +308,7 @@ def render_repository_readme(
         else None
     )
     tracking_line = (
-        f"- Trackio dashboard: [{trackio_space_id}]({trackio_link})\n"
+        f"- Current run Trackio dashboard: [{trackio_space_id}]({trackio_link})\n"
         if trackio_link is not None
         else ""
     )
@@ -342,6 +348,13 @@ def render_repository_readme(
         "(studies/place-relevance-v2-ablations/study.json).\n"
         "- Ablation results: [`studies/place-relevance-v2-ablations/results.json`]"
         "(studies/place-relevance-v2-ablations/results.json).\n\n"
+        "## Experiment tracking\n\n"
+        f"- V1 landuse: [{TRACKIO_SPACE_ID}]"
+        f"(https://huggingface.co/spaces/{TRACKIO_SPACE_ID}).\n"
+        f"  Static data bucket: `{TRACKIO_BUCKET_ID}`.\n"
+        f"- V2 place relevance: [{V2_TRACKIO_SPACE_ID}]"
+        f"(https://huggingface.co/spaces/{V2_TRACKIO_SPACE_ID}).\n"
+        f"  Static data bucket: `{V2_TRACKIO_BUCKET_ID}`.\n\n"
         "## Training identity\n\n"
         f"- Task: `{task_name}`\n"
         f"- Task description: {task_label}\n"

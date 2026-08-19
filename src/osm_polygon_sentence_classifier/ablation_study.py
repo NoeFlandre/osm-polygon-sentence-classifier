@@ -31,7 +31,11 @@ from .grid5000_autonomous import (
 )
 from .grid5000_sites import DEFAULT_SITES, SiteRequirements
 from .grid5000_state import RunPhase
-from .tracking import TRACKIO_BUCKET_ID, TRACKIO_STATIC_SPACE_ID
+from .tracking import (
+    TRACKIO_BUCKET_ID,
+    TRACKIO_STATIC_SPACE_ID,
+    V2_TRACKIO_STATIC_SPACE_ID,
+)
 from .training import (
     DEFAULT_MODEL_NAME,
     ClassWeightMode,
@@ -689,11 +693,16 @@ def render_study_documents(
     if not isinstance(specification, Mapping) or not isinstance(fingerprint, str):
         raise AblationStudyError("ablation study state lacks its public specification")
     effective_protocol = protocol or landuse_ablation_protocol()
+    tracking_space_id = (
+        V2_TRACKIO_STATIC_SPACE_ID
+        if effective_protocol.task_name == "place-relevance-v2"
+        else TRACKIO_STATIC_SPACE_ID
+    )
     return render_public_documents(
         state,
         rows=_report_runs(state, protocol=effective_protocol),
         study_id=effective_protocol.study_id,
-        tracking_space_id=TRACKIO_STATIC_SPACE_ID,
+        tracking_space_id=tracking_space_id,
         study_title=effective_protocol.title,
         study_introduction=effective_protocol.introduction,
         evaluation_note=effective_protocol.evaluation_note,

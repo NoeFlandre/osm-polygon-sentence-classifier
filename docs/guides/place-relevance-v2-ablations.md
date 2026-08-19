@@ -54,7 +54,7 @@ after publication and completion evidence have been verified.
 - [Study report](https://huggingface.co/NoeFlandre/osm-polygon-sentence-classifier/blob/main/studies/place-relevance-v2-ablations/README.md)
 - [Protocol](https://huggingface.co/NoeFlandre/osm-polygon-sentence-classifier/blob/main/studies/place-relevance-v2-ablations/study.json)
 - [Results](https://huggingface.co/NoeFlandre/osm-polygon-sentence-classifier/blob/main/studies/place-relevance-v2-ablations/results.json)
-- [Trackio dashboard](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-trackio)
+- [Trackio dashboard](https://huggingface.co/spaces/NoeFlandre/osm-polygon-sentence-classifier-v2-trackio)
 
 Run names have the stable form
 `place-relevance-v2-ablations|<ablation-id>|seed-<seed>`. Scheduler job IDs

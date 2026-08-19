@@ -504,3 +504,12 @@ def test_worldwide_v2_report_uses_its_own_public_namespace() -> None:
         "held-out test set"
         in documents["studies/place-relevance-v2-ablations/README.md"]
     )
+    v2_readme = documents["studies/place-relevance-v2-ablations/README.md"]
+    assert (
+        "https://huggingface.co/spaces/NoeFlandre/"
+        "osm-polygon-sentence-classifier-v2-trackio"
+    ) in v2_readme
+    assert (
+        "https://huggingface.co/spaces/NoeFlandre/"
+        "osm-polygon-sentence-classifier-trackio"
+    ) not in v2_readme
