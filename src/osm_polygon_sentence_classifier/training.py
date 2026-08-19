@@ -86,6 +86,7 @@ class TrainingConfig:
     eval_strategy: Literal["steps", "epoch"] = "steps"
     save_steps: int = 100
     save_total_limit: int = 5
+    hub_checkpoint_steps: int = 1_000
     run_name: str = "landuse-mmbert-small-frozen-head"
     model_revision: str | None = None
     trainable_layers: TrainableLayers | None = None
@@ -221,10 +222,13 @@ def _validate_numeric_settings(config: TrainingConfig) -> None:
         "eval_steps",
         "save_steps",
         "save_total_limit",
+        "hub_checkpoint_steps",
     ):
         value = getattr(config, name)
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             raise TrainingError(f"{name} must be a positive integer")
+    if config.hub_checkpoint_steps % config.save_steps != 0:
+        raise TrainingError("hub_checkpoint_steps must be a multiple of save_steps")
     if (
         isinstance(config.learning_rate, bool)
         or not isinstance(config.learning_rate, (int, float))
@@ -670,6 +674,7 @@ def _train_classifier(
             ),
             tracking_settings=(tracking if training_config.sync_trackio else None),
             hub_api=checkpoint_hub_api,
+            hub_checkpoint_steps=training_config.hub_checkpoint_steps,
             class_weight_mode=training_config.class_weight_mode,
         )
         train_output = _training_runtime.run_trainer(trainer, resume_from_checkpoint)

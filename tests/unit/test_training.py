@@ -102,6 +102,18 @@ def test_training_config_is_frozen_and_uses_a_managed_relative_output() -> None:
         config.max_steps = 1  # type: ignore[misc]  # ty: ignore[invalid-assignment]
 
 
+def test_training_config_separates_local_and_hub_checkpoint_intervals() -> None:
+    config = TrainingConfig()
+
+    assert config.save_steps == 100
+    assert config.hub_checkpoint_steps == 1_000
+
+
+def test_training_config_rejects_misaligned_checkpoint_intervals() -> None:
+    with pytest.raises(TrainingError, match="multiple of save_steps"):
+        TrainingConfig(save_steps=300, hub_checkpoint_steps=1_000)
+
+
 def test_training_config_supports_epoch_evaluation_and_a_held_out_test_fraction() -> (
     None
 ):
@@ -839,6 +851,104 @@ def test_checkpoint_callback_writes_model_card_before_publication(
     assert sync_calls[0][1] == {"finalize": False}
 
 
+def test_checkpoint_callback_skips_non_interval_hub_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from osm_polygon_sentence_classifier import training_publication
+
+    checkpoint = tmp_path / "checkpoint-100"
+    checkpoint.mkdir()
+    for filename in (
+        "model.safetensors",
+        "optimizer.pt",
+        "scheduler.pt",
+        "rng_state.pth",
+    ):
+        (checkpoint / filename).write_bytes(b"checkpoint")
+    (checkpoint / "trainer_state.json").write_text(
+        '{"global_step": 100}', encoding="utf-8"
+    )
+    publication_calls: list[Path] = []
+    sync_calls: list[object] = []
+
+    monkeypatch.setattr(
+        training_publication,
+        "publish_checkpoint_directory",
+        lambda directory, *args, **kwargs: publication_calls.append(directory)
+        or object(),
+    )
+    monkeypatch.setattr(
+        training_publication,
+        "_sync_static_trackio",
+        lambda settings, **kwargs: sync_calls.append(settings),
+    )
+
+    training_publication.CheckpointManifestCallback(
+        {"run_id": "a" * 20, "model_revision": "b" * 40},
+        model_repository_id="owner/model",
+        hub_checkpoint_steps=1_000,
+        tracking_settings=cast(Any, object()),
+    ).on_save(
+        args=SimpleNamespace(output_dir=str(tmp_path)),
+        state=SimpleNamespace(global_step=100),
+        control=object(),
+    )
+
+    assert publication_calls == []
+    assert sync_calls == []
+    assert (checkpoint / "checkpoint-manifest.json").is_file()
+
+
+def test_checkpoint_callback_survives_a_hub_rate_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from osm_polygon_sentence_classifier import training_publication
+    from osm_polygon_sentence_classifier.publication import ModelPublicationError
+
+    checkpoint = tmp_path / "checkpoint-1000"
+    checkpoint.mkdir()
+    for filename in (
+        "model.safetensors",
+        "optimizer.pt",
+        "scheduler.pt",
+        "rng_state.pth",
+    ):
+        (checkpoint / filename).write_bytes(b"checkpoint")
+    (checkpoint / "trainer_state.json").write_text(
+        '{"global_step": 1000}', encoding="utf-8"
+    )
+
+    def rate_limited_publish(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        try:
+            raise RuntimeError("429 Too Many Requests: rate limit")
+        except RuntimeError as cause:
+            raise ModelPublicationError(
+                "Hugging Face checkpoint publication failed"
+            ) from cause
+
+    monkeypatch.setattr(
+        training_publication,
+        "publish_checkpoint_directory",
+        rate_limited_publish,
+    )
+
+    control = object()
+    result = training_publication.CheckpointManifestCallback(
+        {"run_id": "a" * 20, "model_revision": "b" * 40},
+        model_repository_id="owner/model",
+        hub_checkpoint_steps=1_000,
+    ).on_save(
+        args=SimpleNamespace(output_dir=str(tmp_path)),
+        state=SimpleNamespace(global_step=1000),
+        control=control,
+    )
+
+    assert result is control
+
+
 def test_checkpoint_callback_queues_hub_publication_until_training_end(
     tmp_path: Path,
 ) -> None:
@@ -1115,6 +1225,7 @@ def test_training_can_publish_the_final_model_and_sync_static_trackio(
     assert callback.tracking_settings is not None
     assert callback.tracking_settings.static_space_id == TRACKIO_STATIC_SPACE_ID
     assert callback.hub_api is checkpoint_hub_api
+    assert callback.hub_checkpoint_steps == 1_000
     assert result.model_publication is not None
     assert result.model_publication.commit_id == "d" * 40
     assert result.tracking_space_id == TRACKIO_STATIC_SPACE_ID

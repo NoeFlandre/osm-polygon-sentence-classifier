@@ -1,6 +1,7 @@
 from typing import Any
 
 import httpx
+import pytest
 
 from osm_polygon_sentence_classifier import huggingface_http
 
@@ -42,3 +43,17 @@ def test_huggingface_http_configuration_is_installed_once(monkeypatch) -> None:
     huggingface_http.configure_huggingface_http()
 
     assert calls == 1
+
+
+def test_rate_limit_detection_follows_exception_causes() -> None:
+    def raise_wrapped_rate_limit() -> None:
+        try:
+            raise RuntimeError("429 Too Many Requests")
+        except RuntimeError as cause:
+            raise RuntimeError("checkpoint publication failed") from cause
+
+    with pytest.raises(RuntimeError) as captured:
+        raise_wrapped_rate_limit()
+    assert huggingface_http.is_rate_limit_error(captured.value)
+
+    assert not huggingface_http.is_rate_limit_error(RuntimeError("network failed"))

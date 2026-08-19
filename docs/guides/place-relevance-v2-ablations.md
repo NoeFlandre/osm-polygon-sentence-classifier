@@ -48,6 +48,11 @@ The controller may move a run to another compatible site after a stale queue,
 but it never starts a replacement from scratch after a checkpoint exists. The
 default continuation bound is 40 per run. Remote per-run data is removed only
 after publication and completion evidence have been verified.
+Each worker saves a local Trainer checkpoint every 100 steps, while model and
+static Trackio publication happens every 1,000 steps. This keeps short-job
+continuations frequent without creating a Hub commit for every local save. A
+Hub rate-limit response does not discard the local checkpoint; the controller
+can continue from the newest verified publication.
 
 ## Public outputs
 

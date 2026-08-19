@@ -33,6 +33,11 @@ identity, safe training configuration, checkpoint progress, and scalar
 metrics at each published checkpoint and at final publication. Evaluation
 metrics include accuracy, precision, recall, positive-class F1, macro-F1,
 balanced accuracy, and class support.
+Trainer checkpoints are saved locally every 100 steps for safe continuation;
+only every 1,000-step checkpoint is published to the model repository and
+static Trackio by default. If the Hub rate limit is reached, local checkpoint
+writing continues and the next allocation can resume from the newest verified
+checkpoint.
 
 The clean iterator `iter_clean_training_examples` is the only permitted
 training-input boundary. The public iterator remains lazy until consumed, and

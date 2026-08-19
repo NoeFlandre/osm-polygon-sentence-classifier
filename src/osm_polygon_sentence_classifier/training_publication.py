@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from . import training_metrics as _training_metrics
 from .checkpointing import CheckpointError, write_checkpoint_manifest
+from .huggingface_http import is_rate_limit_error
 from .publication import (
     ModelPublicationError,
     publish_checkpoint_directory,
@@ -15,6 +17,8 @@ from .publication import (
 )
 from .tracking import TrackingError, TrackioSettings, sync_project_to_static_space
 from .training_freezing import TrainingError
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def write_model_card(
@@ -47,6 +51,12 @@ def _sync_static_trackio(
     try:
         sync_project_to_static_space(settings, finalize=finalize)
     except TrackingError as error:
+        if not finalize and is_rate_limit_error(error):
+            _LOGGER.warning(
+                "Trackio rate limit reached; retaining the local snapshot and "
+                "continuing without this checkpoint sync"
+            )
+            return
         raise TrainingError(failure_message) from error
 
 
@@ -61,13 +71,30 @@ class CheckpointManifestCallback:
         trackio_space_id: str | None = None,
         tracking_settings: TrackioSettings | None = None,
         hub_api: Any | None = None,
+        hub_checkpoint_steps: int = 1,
     ) -> None:
+        if (
+            isinstance(hub_checkpoint_steps, bool)
+            or not isinstance(hub_checkpoint_steps, int)
+            or hub_checkpoint_steps <= 0
+        ):
+            raise TrainingError("hub_checkpoint_steps must be a positive integer")
         self.identity = dict(identity)
         self.model_repository_id = model_repository_id
         self.trackio_space_id = trackio_space_id
         self.tracking_settings = tracking_settings
         self.hub_api = hub_api
+        self.hub_checkpoint_steps = hub_checkpoint_steps
         self._pending_publications: list[Any] = []
+        self._hub_rate_limited = False
+
+    def _mark_hub_rate_limited(self) -> None:
+        if not self._hub_rate_limited:
+            _LOGGER.warning(
+                "Hugging Face rate limit reached; retaining local checkpoints "
+                "and continuing without further checkpoint commits"
+            )
+        self._hub_rate_limited = True
 
     def on_init_end(self, args: Any, state: Any, control: Any, **kwargs: object) -> Any:
         del args, state, kwargs
@@ -80,6 +107,24 @@ class CheckpointManifestCallback:
         try:
             future.result()
         except Exception as error:
+            if is_rate_limit_error(error):
+                self._mark_hub_rate_limited()
+                return
+            raise TrainingError("checkpoint model publication failed") from error
+
+    def _publish_checkpoint(self, checkpoint: Path) -> None:
+        if self._hub_rate_limited:
+            return
+        try:
+            publish_checkpoint_directory(
+                checkpoint,
+                self.model_repository_id,
+                identity=self.identity,
+            )
+        except ModelPublicationError as error:
+            if is_rate_limit_error(error):
+                self._mark_hub_rate_limited()
+                return
             raise TrainingError("checkpoint model publication failed") from error
 
     def on_save(self, args: Any, state: Any, control: Any, **kwargs: object) -> Any:
@@ -96,7 +141,8 @@ class CheckpointManifestCallback:
             )
         except CheckpointError as error:
             raise TrainingError("checkpoint manifest could not be written") from error
-        if self.model_repository_id is not None:
+        remote_checkpoint = global_step % self.hub_checkpoint_steps == 0
+        if self.model_repository_id is not None and remote_checkpoint:
             checkpoint = Path(output_directory) / f"checkpoint-{global_step}"
             try:
                 write_model_card(
@@ -114,16 +160,7 @@ class CheckpointManifestCallback:
                     "checkpoint model card could not be written"
                 ) from error
             if self.hub_api is None:
-                try:
-                    publish_checkpoint_directory(
-                        checkpoint,
-                        self.model_repository_id,
-                        identity=self.identity,
-                    )
-                except ModelPublicationError as error:
-                    raise TrainingError(
-                        "checkpoint model publication failed"
-                    ) from error
+                self._publish_checkpoint(checkpoint)
             else:
                 run_as_future = getattr(self.hub_api, "run_as_future", None)
                 if not callable(run_as_future):
@@ -147,7 +184,7 @@ class CheckpointManifestCallback:
                     and len(self._pending_publications) >= save_total_limit
                 ):
                     self._wait_for_next_publication()
-        if self.tracking_settings is not None:
+        if self.tracking_settings is not None and remote_checkpoint:
             _sync_static_trackio(
                 self.tracking_settings,
                 failure_message="checkpoint Trackio static snapshot failed",
@@ -172,6 +209,7 @@ def make_checkpoint_manifest_callback(
     trackio_space_id: str | None = None,
     tracking_settings: TrackioSettings | None = None,
     hub_api: Any | None = None,
+    hub_checkpoint_steps: int = 1,
 ) -> Any:
     """Bind the checkpoint callback to an optional Trainer callback base."""
 
@@ -182,6 +220,7 @@ def make_checkpoint_manifest_callback(
             trackio_space_id=trackio_space_id,
             tracking_settings=tracking_settings,
             hub_api=hub_api,
+            hub_checkpoint_steps=hub_checkpoint_steps,
         )
     callback_type = type(
         "_BoundCheckpointManifestCallback",
@@ -194,6 +233,7 @@ def make_checkpoint_manifest_callback(
         trackio_space_id=trackio_space_id,
         tracking_settings=tracking_settings,
         hub_api=hub_api,
+        hub_checkpoint_steps=hub_checkpoint_steps,
     )
 
 

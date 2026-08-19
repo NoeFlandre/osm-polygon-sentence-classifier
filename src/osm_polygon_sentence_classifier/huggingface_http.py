@@ -40,4 +40,26 @@ def configure_huggingface_http() -> None:
     _configured = True
 
 
-__all__ = ["CONNECT_TIMEOUT_SECONDS", "configure_huggingface_http"]
+def is_rate_limit_error(error: BaseException) -> bool:
+    """Return whether an exception chain reports an HTTP/API rate limit."""
+
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current).lower()
+        if (
+            "429" in message
+            or "rate limit" in message
+            or "too many requests" in message
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+__all__ = [
+    "CONNECT_TIMEOUT_SECONDS",
+    "configure_huggingface_http",
+    "is_rate_limit_error",
+]

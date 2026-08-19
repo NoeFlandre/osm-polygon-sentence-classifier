@@ -103,6 +103,7 @@ def build_trainer(
     trackio_space_id: str | None = None,
     tracking_settings: TrackioSettings | None = None,
     hub_api: Any | None = None,
+    hub_checkpoint_steps: int = 1,
     class_weight_mode: ClassWeightMode | None = None,
 ) -> Any:
     """Construct the configured Trainer and optional checkpoint callback."""
@@ -124,6 +125,7 @@ def build_trainer(
                 trackio_space_id=trackio_space_id,
                 tracking_settings=tracking_settings,
                 hub_api=hub_api,
+                hub_checkpoint_steps=hub_checkpoint_steps,
             )
         ]
     trainer_type = dependencies.trainer
