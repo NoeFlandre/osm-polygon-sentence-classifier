@@ -504,7 +504,7 @@ class Grid5000Plan:
             '"$HOME/.cache/osm-polygon-sentence-classifier/wheels" '
             '-maxdepth 1 -type f -name "torch-*.whl" -print -quit)"; '
             'if [ -n "$torch_wheel" ]; then '
-            'cp "$torch_wheel" "$runtime_root/torch.whl"; '
+            'cp "$torch_wheel" "$runtime_root/"; '
             '"$uv_bin" venv "$UV_PROJECT_ENVIRONMENT" --allow-existing '
             "--no-python-downloads >/dev/null; "
             '"$uv_bin" pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" '
