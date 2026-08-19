@@ -480,7 +480,7 @@ class Grid5000Plan:
             f'{self.identity.run_id}"'
         )
         runtime_root = (
-            '"${TMPDIR:-/tmp}/osm-polygon-sentence-classifier-${USER:-unknown}"'
+            '"${TMPDIR:-/tmp}/osm-polygon-sentence-classifier-${USER:-unknown}-symlink"'
         )
         worker_command += ' --remote-data-root "$remote_run_root"'
         if self.resume_from_checkpoint:
@@ -493,6 +493,7 @@ class Grid5000Plan:
             'mkdir -p "$runtime_root" && '
             'export UV_PROJECT_ENVIRONMENT="$runtime_root/environment" && '
             'export UV_CACHE_DIR="$HOME/.cache/osm-polygon-sentence-classifier/uv" && '
+            "export UV_LINK_MODE=symlink && "
             'cpu_architecture="$(uname -m)"; '
             '[ "$cpu_architecture" = "x86_64" ] || '
             '{ echo "unsupported compute-node architecture: $cpu_architecture" >&2; exit 78; }; '
@@ -511,7 +512,7 @@ class Grid5000Plan:
             'cp "$torch_wheel" "$runtime_root/"; '
             '"$uv_bin" venv "$UV_PROJECT_ENVIRONMENT" --allow-existing '
             "--no-python-downloads >/dev/null; "
-            'UV_NO_CACHE=1 "$uv_bin" pip install --python '
+            'UV_LINK_MODE=copy UV_NO_CACHE=1 "$uv_bin" pip install --python '
             '"$UV_PROJECT_ENVIRONMENT/bin/python" '
             '--no-index --no-deps --find-links "$runtime_root" torch; fi; '
             "fi; fi && "

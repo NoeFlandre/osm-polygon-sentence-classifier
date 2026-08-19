@@ -243,7 +243,7 @@ def test_worker_command_builds_the_runtime_on_node_local_scratch() -> None:
         in command
     )
     assert (
-        'runtime_root="${TMPDIR:-/tmp}/osm-polygon-sentence-classifier-${USER:-unknown}"'
+        'runtime_root="${TMPDIR:-/tmp}/osm-polygon-sentence-classifier-${USER:-unknown}-symlink"'
         in command
     )
     assert 'mkdir -p "$runtime_root"' in command
@@ -257,6 +257,7 @@ def test_worker_command_builds_the_runtime_on_node_local_scratch() -> None:
         'export UV_CACHE_DIR="$HOME/.cache/osm-polygon-sentence-classifier/uv"'
         in command
     )
+    assert "export UV_LINK_MODE=symlink" in command
     assert (
         'if [ -d "$HOME/.cache/osm-polygon-sentence-classifier/wheels" ]; then '
         'torch_wheel="$(find "$HOME/.cache/osm-polygon-sentence-classifier/wheels" '
@@ -265,7 +266,7 @@ def test_worker_command_builds_the_runtime_on_node_local_scratch() -> None:
         'cp "$torch_wheel" "$runtime_root/"; '
         '"$uv_bin" venv "$UV_PROJECT_ENVIRONMENT" --allow-existing '
         "--no-python-downloads >/dev/null; "
-        'UV_NO_CACHE=1 "$uv_bin" pip install --python '
+        'UV_LINK_MODE=copy UV_NO_CACHE=1 "$uv_bin" pip install --python '
         '"$UV_PROJECT_ENVIRONMENT/bin/python" '
         "--no-index --no-deps --find-links "
         '"$runtime_root" torch; fi; '
