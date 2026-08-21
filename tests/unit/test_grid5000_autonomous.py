@@ -1407,7 +1407,9 @@ def test_controller_preserves_a_live_state_after_an_unexpected_error(
 
 def test_replacement_reuses_the_remote_that_submitted_the_trial(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    monkeypatch.setenv("HF_TOKEN", "hf_test_token")
     config = replace(_config(), sites=("nancy", "grenoble"), cleanup=False)
     fallback = _ReplacementRemote("nancy", "Waiting")
     candidate = _ReplacementRemote("grenoble", "Running")
