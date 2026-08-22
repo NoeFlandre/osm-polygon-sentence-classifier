@@ -1,10 +1,13 @@
+import builtins
 from collections.abc import Iterable, Mapping
-from dataclasses import FrozenInstanceError, is_dataclass
+from dataclasses import FrozenInstanceError, is_dataclass, replace
 from pathlib import Path
-from typing import cast, get_args
+from types import SimpleNamespace
+from typing import Any, cast, get_args
 
 import pytest
 
+import osm_polygon_sentence_classifier.dataset_loader as dataset_loader
 from osm_polygon_sentence_classifier.config import ProjectConfig
 from osm_polygon_sentence_classifier.dataset_contract import (
     LANDUSE_DATASET_CONTRACT,
@@ -76,6 +79,32 @@ def test_split_for_polygon_supports_a_deterministic_held_out_test_split() -> Non
     )
 
 
+def test_split_for_polygon_respects_exact_fraction_boundaries(monkeypatch) -> None:
+    class _Digest:
+        def digest(self) -> bytes:
+            return (1).to_bytes(8, byteorder="big") + b"unused"
+
+    monkeypatch.setattr(dataset_loader.hashlib, "sha256", lambda _value: _Digest())
+    boundary = 1 / 2**64
+
+    assert (
+        split_for_polygon(
+            "polygon-1",
+            validation_fraction=boundary,
+            test_fraction=0.1,
+        )
+        == "test"
+    )
+    assert (
+        split_for_polygon(
+            "polygon-1",
+            validation_fraction=0.0,
+            test_fraction=boundary,
+        )
+        == "train"
+    )
+
+
 @pytest.mark.parametrize(
     ("validation_fraction", "test_fraction"),
     [(-0.1, 0.1), (0.1, -0.1), (0.8, 0.3)],
@@ -83,7 +112,13 @@ def test_split_for_polygon_supports_a_deterministic_held_out_test_split() -> Non
 def test_split_for_polygon_rejects_invalid_three_way_fractions(
     validation_fraction: float, test_fraction: float
 ) -> None:
-    with pytest.raises(DatasetLoaderError, match="fractions"):
+    with pytest.raises(
+        DatasetLoaderError,
+        match=(
+            r"\Avalidation and test fractions must be finite, non-negative, "
+            r"and sum to at most 1\Z"
+        ),
+    ):
         split_for_polygon(
             "polygon-1",
             validation_fraction=validation_fraction,
@@ -91,19 +126,51 @@ def test_split_for_polygon_rejects_invalid_three_way_fractions(
         )
 
 
-@pytest.mark.parametrize("fraction", [-0.01, 1.01, float("nan"), float("inf")])
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(0.0, True), (1.0, True), (-0.1, False), (1.1, False)],
+)
+def test_split_fraction_validator_enforces_the_closed_unit_interval(
+    value: float, expected: bool
+) -> None:
+    assert dataset_loader._is_valid_fraction(value) is expected
+
+
+@pytest.mark.parametrize(
+    "fraction",
+    [-0.01, 1.01, float("nan"), float("inf"), True, False, "0.2", None],
+)
 def test_split_for_polygon_rejects_invalid_validation_fractions(
     fraction: float,
 ) -> None:
-    with pytest.raises(DatasetLoaderError, match="validation_fraction"):
+    with pytest.raises(
+        DatasetLoaderError,
+        match=r"\Avalidation_fraction must be a finite number between 0 and 1\Z",
+    ):
         split_for_polygon("polygon-1", validation_fraction=fraction)
+
+
+def test_split_for_polygon_accepts_zero_and_one_boundaries() -> None:
+    assert split_for_polygon("polygon-1", validation_fraction=0.0) == "train"
+    assert split_for_polygon("polygon-1", validation_fraction=1.0) == "validation"
+
+
+def test_split_for_polygon_accepts_fractions_that_sum_to_one() -> None:
+    assert split_for_polygon(
+        "polygon-1",
+        validation_fraction=0.5,
+        test_fraction=0.5,
+    ) in {"train", "validation", "test"}
 
 
 @pytest.mark.parametrize("polygon_id", ["", "   ", None, 123])
 def test_split_for_polygon_rejects_blank_or_non_string_ids(
     polygon_id: object,
 ) -> None:
-    with pytest.raises(DatasetLoaderError, match="polygon_id"):
+    with pytest.raises(
+        DatasetLoaderError,
+        match=r"\Apolygon_id must be a non-empty string\Z",
+    ):
         split_for_polygon(cast(str, polygon_id))
 
 
@@ -140,6 +207,51 @@ def test_iterator_assigns_all_sentences_from_one_polygon_to_one_split() -> None:
     examples = list(iter_training_examples(rows))
 
     assert {example.split for example in examples} in ({"train"}, {"validation"})
+
+
+def test_iterator_forwards_the_seed_to_split_assignment() -> None:
+    polygon_id = next(
+        f"polygon-{index}"
+        for index in range(100)
+        if split_for_polygon(f"polygon-{index}", validation_fraction=0.5, seed=42)
+        != split_for_polygon(f"polygon-{index}", validation_fraction=0.5, seed=43)
+    )
+
+    example = next(
+        iter_training_examples([_row(polygon_id=polygon_id)], validation_fraction=0.5)
+    )
+
+    assert example.split == split_for_polygon(
+        polygon_id,
+        validation_fraction=0.5,
+        seed=42,
+    )
+
+
+def test_iterator_preserves_polygon_id_and_forwards_a_non_default_seed() -> None:
+    polygon_id = next(
+        f"polygon-{index}"
+        for index in range(100)
+        if split_for_polygon(f"polygon-{index}", validation_fraction=0.5, seed=99)
+        != split_for_polygon(
+            f"polygon-{index}", validation_fraction=0.5, seed=cast(Any, None)
+        )
+    )
+
+    example = next(
+        iter_training_examples(
+            [_row(polygon_id=polygon_id)],
+            validation_fraction=0.5,
+            seed=99,
+        )
+    )
+
+    assert example.polygon_id == polygon_id
+    assert example.split == split_for_polygon(
+        polygon_id,
+        validation_fraction=0.5,
+        seed=99,
+    )
 
 
 @pytest.mark.parametrize("mutation", ["missing", "extra", "reordered"])
@@ -190,8 +302,25 @@ def test_iterator_rejects_invalid_identifiers(field: str, value: object) -> None
     row = _row()
     row[field] = value
 
-    with pytest.raises(DatasetLoaderError, match=field):
+    with pytest.raises(
+        DatasetLoaderError,
+        match=rf"\A{field} must be a non-empty string\Z",
+    ):
         list(iter_training_examples([row]))
+
+
+def test_training_label_error_preserves_the_exact_contract_message() -> None:
+    contract = replace(
+        LANDUSE_DATASET_CONTRACT,
+        supported_label_values=("maybe",),
+        training_label_values=("maybe",),
+    )
+
+    with pytest.raises(
+        DatasetLoaderError,
+        match=r"\Aunsupported training label: 'maybe'\Z",
+    ):
+        list(iter_training_examples([_row(label="maybe")], contract=contract))
 
 
 def test_training_examples_are_frozen_slotted_dataclasses() -> None:
@@ -407,10 +536,57 @@ def test_clean_iterator_preserves_each_trainable_row_without_a_usable_hash() -> 
 
     examples = list(iter_clean_training_examples(lambda: iter(rows)))
 
-    assert [example.sentence_id for example in examples] == [
-        "empty-hash",
-        "missing-hash",
+    assert [(example.sentence_id, example.label) for example in examples] == [
+        ("empty-hash", "no"),
+        ("missing-hash", "no"),
     ]
+
+
+def test_clean_iterator_forwards_the_seed_for_hashless_rows() -> None:
+    polygon_id = next(
+        f"polygon-{index}"
+        for index in range(100)
+        if split_for_polygon(f"polygon-{index}", validation_fraction=0.5, seed=42)
+        != split_for_polygon(
+            f"polygon-{index}", validation_fraction=0.5, seed=cast(Any, None)
+        )
+    )
+
+    example = next(
+        iter_clean_training_examples(
+            lambda: iter([_row(polygon_id=polygon_id)]),
+            validation_fraction=0.5,
+            seed=42,
+        )
+    )
+
+    assert example.split == split_for_polygon(
+        polygon_id,
+        validation_fraction=0.5,
+        seed=42,
+    )
+
+
+def test_clean_iterator_uses_the_default_seed_for_hashless_rows() -> None:
+    polygon_id = next(
+        f"polygon-{index}"
+        for index in range(100)
+        if split_for_polygon(f"polygon-{index}", validation_fraction=0.5, seed=42)
+        != split_for_polygon(f"polygon-{index}", validation_fraction=0.5, seed=43)
+    )
+
+    example = next(
+        iter_clean_training_examples(
+            lambda: iter([_row(polygon_id=polygon_id)]),
+            validation_fraction=0.5,
+        )
+    )
+
+    assert example.split == split_for_polygon(
+        polygon_id,
+        validation_fraction=0.5,
+        seed=42,
+    )
 
 
 def test_clean_iterator_rejects_a_malformed_row_in_the_first_pass() -> None:
@@ -456,7 +632,10 @@ def test_clean_iterator_rejects_a_reused_stream_from_rows_factory() -> None:
         calls += 1
         return shared
 
-    with pytest.raises(DatasetLoaderError, match="fresh stream"):
+    with pytest.raises(
+        DatasetLoaderError,
+        match=r"\Arows_factory must return a fresh stream on each call\Z",
+    ):
         list(iter_clean_training_examples(rows_factory))
 
     assert calls == 2
@@ -499,3 +678,80 @@ def test_load_streaming_rows_preserves_errors_from_the_injected_loader() -> None
         load_streaming_rows(load_dataset_fn=failing_load_dataset)
 
     assert caught.value is expected
+
+
+def test_load_streaming_rows_reports_a_missing_optional_dependency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_import = builtins.__import__
+
+    def missing_datasets(
+        name: str,
+        globals: Mapping[str, object] | None = None,
+        locals: Mapping[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> object:
+        if name == "datasets":
+            raise ModuleNotFoundError("datasets", name="datasets")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", missing_datasets)
+
+    with pytest.raises(
+        DatasetLoaderError,
+        match=r"\Athe optional 'datasets' dependency is required\Z",
+    ):
+        load_streaming_rows()
+
+
+def test_load_streaming_rows_uses_the_imported_optional_loader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+    streaming_rows: Iterable[Mapping[str, object]] = iter(())
+
+    def fake_load_dataset(**kwargs: object) -> Iterable[Mapping[str, object]]:
+        calls.append(kwargs)
+        return streaming_rows
+
+    original_import = builtins.__import__
+
+    def imported_datasets(
+        name: str,
+        globals: Mapping[str, object] | None = None,
+        locals: Mapping[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> object:
+        if name == "datasets":
+            return SimpleNamespace(load_dataset=fake_load_dataset)
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", imported_datasets)
+
+    assert load_streaming_rows() is streaming_rows
+    assert calls
+    assert calls[0]["streaming"] is True
+
+
+def test_load_streaming_rows_does_not_hide_an_unrelated_import_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_import = builtins.__import__
+
+    def broken_import(
+        name: str,
+        globals: Mapping[str, object] | None = None,
+        locals: Mapping[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> object:
+        if name == "datasets":
+            raise ModuleNotFoundError("broken dependency", name="other-package")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", broken_import)
+
+    with pytest.raises(ModuleNotFoundError, match="broken dependency"):
+        load_streaming_rows()

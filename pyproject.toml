@@ -52,9 +52,12 @@ docs = [
 
 [dependency-groups]
 dev = [
+    "coverage>=7,<8",
+    "mutmut>=3.7,<4",
     "pre-commit>=4,<5",
     "pytest>=8,<9",
     "ruff>=0.14,<0.15",
+    "radon>=6,<7",
     "ty>=0.0.65,<0.1",
 ]
 
@@ -101,3 +104,39 @@ known-first-party = ["osm_polygon_sentence_classifier"]
 
 [tool.ty.src]
 include = ["src", "tests"]
+
+[tool.mutmut]
+source_paths = ["src/osm_polygon_sentence_classifier"]
+# These patterns cover runtime-equivalent mutations only: typing casts have no
+# runtime semantics, JSON treats the falsey None forms like False, Python
+# treats UTF-8 codec names case-insensitively, and positive policy durations
+# make equality at a window boundary observationally equivalent here.
+# The checkpoint publication handle is initialized only to satisfy the local
+# annotation and is unconditionally replaced before any read.
+do_not_mutate_patterns = [
+    "\\bcast\\(",
+    "ensure_ascii=False",
+    "allow_nan=False",
+    '.encode("utf-8")',
+    '.encode("UTF-8")',
+    'getattr(run_state, "facts", {})',
+    'facts.get("completion", {})',
+    'record.get("metrics", {})',
+    'add_argument\(\s*"--checkout-commit",\s*default=None',
+    'if local < day_start:',
+    'if local < day_end:',
+    'checkpoint_hub_api = None',
+]
+also_copy = [
+    ".dockerignore",
+    ".github/",
+    ".gitignore",
+    ".pre-commit-config.yaml",
+    "CITATION.cff",
+    "CONTRIBUTING.md",
+    "Dockerfile",
+    "README.md",
+    "docs/",
+    "justfile",
+    "mkdocs.yml",
+]

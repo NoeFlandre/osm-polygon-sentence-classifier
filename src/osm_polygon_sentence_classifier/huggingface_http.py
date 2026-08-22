@@ -47,15 +47,17 @@ def is_rate_limit_error(error: BaseException) -> bool:
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        message = str(current).lower()
-        if (
-            "429" in message
-            or "rate limit" in message
-            or "too many requests" in message
-        ):
+        if _is_rate_limit_message(str(current)):
             return True
         current = current.__cause__ or current.__context__
     return False
+
+
+def _is_rate_limit_message(message: str) -> bool:
+    lowered = message.lower()
+    return any(
+        marker in lowered for marker in ("429", "rate limit", "too many requests")
+    )
 
 
 __all__ = [

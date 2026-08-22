@@ -80,64 +80,94 @@ class DatasetContract:
         """Require an exact, ordered, non-duplicated column sequence."""
 
         actual = tuple(columns)
-        seen: set[str] = set()
-        duplicates: list[str] = []
-        for column in actual:
-            if column in seen and column not in duplicates:
-                duplicates.append(column)
-            seen.add(column)
-        if duplicates:
-            raise DatasetContractError("duplicate columns: " + ", ".join(duplicates))
-
-        missing = tuple(
-            column for column in self.required_columns if column not in actual
-        )
-        if missing:
-            raise DatasetContractError(
-                "missing required columns: " + ", ".join(missing)
-            )
-
-        extra = tuple(
-            column for column in actual if column not in self.required_columns
-        )
-        if extra:
-            raise DatasetContractError("unexpected columns: " + ", ".join(extra))
-
-        if actual != self.required_columns:
-            raise DatasetContractError(
-                "required column order does not match the dataset contract"
-            )
+        _require_no_duplicate_columns(actual)
+        _require_exact_columns(actual, self.required_columns)
+        _require_column_order(actual, self.required_columns)
 
     def validate_row(self, row: Mapping[str, object]) -> None:
         """Validate required row keys and the contract's classification fields."""
 
-        missing = tuple(column for column in self.required_columns if column not in row)
-        if missing:
-            raise DatasetContractError(
-                "missing required row keys: " + ", ".join(missing)
-            )
+        _require_row_columns(row, self.required_columns)
+        _validate_region(row["region"], expected=self.region)
+        _validate_sentence(row["sentence_text_normalized"])
+        _validate_label(
+            row[self.label_column],
+            column=self.label_column,
+            supported_values=self.supported_label_values,
+        )
 
-        if self.region is not None and row["region"] != self.region:
-            raise DatasetContractError(
-                f"region must be {self.region!r}, got {row['region']!r}"
-            )
-        if self.region is None and (
-            not isinstance(row["region"], str) or not row["region"].strip()
-        ):
-            raise DatasetContractError("region must be a non-empty string")
 
-        normalized_sentence = row["sentence_text_normalized"]
-        if not isinstance(normalized_sentence, str) or not normalized_sentence.strip():
-            raise DatasetContractError(
-                "sentence_text_normalized must be a non-empty string"
-            )
+def _require_no_duplicate_columns(columns: tuple[str, ...]) -> None:
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for column in columns:
+        if column in seen and column not in duplicates:
+            duplicates.append(column)
+        seen.add(column)
+    if duplicates:
+        raise DatasetContractError("duplicate columns: " + ", ".join(duplicates))
 
-        label = row[self.label_column]
-        if label not in self.supported_label_values:
-            raise DatasetContractError(
-                f"{self.label_column} must be one of "
-                f"{self.supported_label_values!r}, got {label!r}"
-            )
+
+def _require_exact_columns(actual: tuple[str, ...], required: tuple[str, ...]) -> None:
+    _require_no_missing_columns(actual, required)
+    _require_no_extra_columns(actual, required)
+
+
+def _require_no_missing_columns(
+    actual: tuple[str, ...], required: tuple[str, ...]
+) -> None:
+    missing = tuple(column for column in required if column not in actual)
+    if missing:
+        raise DatasetContractError("missing required columns: " + ", ".join(missing))
+
+
+def _require_no_extra_columns(
+    actual: tuple[str, ...], required: tuple[str, ...]
+) -> None:
+    extra = tuple(column for column in actual if column not in required)
+    if extra:
+        raise DatasetContractError("unexpected columns: " + ", ".join(extra))
+
+
+def _require_column_order(actual: tuple[str, ...], required: tuple[str, ...]) -> None:
+    if actual != required:
+        raise DatasetContractError(
+            "required column order does not match the dataset contract"
+        )
+
+
+def _require_row_columns(row: Mapping[str, object], required: tuple[str, ...]) -> None:
+    missing = tuple(column for column in required if column not in row)
+    if missing:
+        raise DatasetContractError("missing required row keys: " + ", ".join(missing))
+
+
+def _validate_region(region: object, *, expected: str | None) -> None:
+    if expected is not None:
+        if region != expected:
+            raise DatasetContractError(f"region must be {expected!r}, got {region!r}")
+        return
+    if not isinstance(region, str) or not region.strip():
+        raise DatasetContractError("region must be a non-empty string")
+
+
+def _validate_sentence(sentence: object) -> None:
+    if not isinstance(sentence, str) or not sentence.strip():
+        raise DatasetContractError(
+            "sentence_text_normalized must be a non-empty string"
+        )
+
+
+def _validate_label(
+    label: object,
+    *,
+    column: str,
+    supported_values: tuple[str, ...],
+) -> None:
+    if label not in supported_values:
+        raise DatasetContractError(
+            f"{column} must be one of {supported_values!r}, got {label!r}"
+        )
 
 
 LANDUSE_DATASET_CONTRACT = DatasetContract(

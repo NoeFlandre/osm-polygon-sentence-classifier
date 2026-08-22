@@ -39,19 +39,9 @@ class ProjectConfig:
         root. It rejects traversal and roots outside ``Path.home()``.
         """
 
-        candidate = Path(data_root).expanduser()
-        if not candidate.is_absolute() or any(
-            part in (".", "..") for part in candidate.parts
-        ):
-            raise ConfigurationError("remote data root must be an absolute home path")
-        try:
-            root = candidate.resolve()
-            home = Path.home().resolve()
-        except RuntimeError as error:
-            raise ConfigurationError("remote data root cannot be resolved") from error
-        if root == Path("/") or not root.is_relative_to(home):
-            raise ConfigurationError("remote data root must be beneath the remote home")
-
+        candidate = _remote_root_candidate(data_root)
+        root, home = _resolved_remote_paths(candidate)
+        _require_remote_home_child(root, home)
         config = cls()
         object.__setattr__(config, "data_root", root)
         return config
@@ -71,6 +61,29 @@ class ProjectConfig:
     @property
     def target_model_repository_id(self) -> str:
         return TARGET_MODEL_REPOSITORY_ID
+
+
+def _remote_root_candidate(data_root: Path) -> Path:
+    candidate = Path(data_root).expanduser()
+    if not candidate.is_absolute():
+        raise ConfigurationError("remote data root must be an absolute home path")
+    if ".." in candidate.parts:
+        raise ConfigurationError("remote data root must be an absolute home path")
+    return candidate
+
+
+def _resolved_remote_paths(candidate: Path) -> tuple[Path, Path]:
+    try:
+        root = candidate.resolve()
+        home = Path.home().resolve()
+    except RuntimeError as error:
+        raise ConfigurationError("remote data root cannot be resolved") from error
+    return root, home
+
+
+def _require_remote_home_child(root: Path, home: Path) -> None:
+    if root == Path("/") or not root.is_relative_to(home):
+        raise ConfigurationError("remote data root must be beneath the remote home")
 
 
 _frozen_project_config_setattr = ProjectConfig.__setattr__

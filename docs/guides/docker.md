@@ -17,8 +17,9 @@ just docker-smoke
 ```
 
 The smoke test uses no network and no project-data mount. The default image
-command is `grid5000_worker --help`; it does not audit, train, publish, or
-submit a job. `UV_VERSION` and the Python image tag are explicit in
+command is `python -m osm_polygon_sentence_classifier.grid5000_worker --help`;
+it does not audit, train, publish, or submit a job. `UV_VERSION` and the Python
+image tag are explicit in
 `Dockerfile`; its `linux/amd64` Python base image is pinned by digest. Debian
 package versions are resolved from that base image's configured package mirror
 at build time, so retain the built image digest as the deployment artifact.

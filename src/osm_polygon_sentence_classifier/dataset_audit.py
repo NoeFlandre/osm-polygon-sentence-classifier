@@ -224,45 +224,44 @@ class _AuditAccumulator:
         self.total_rows = 0
         self.trainable_rows = 0
 
-    def consume(self, row_number: int, row: Mapping[str, object]) -> None:
+    def _validate_row(self, row_number: int, row: Mapping[str, object]) -> None:
         try:
             self.contract.validate_columns(row.keys())
             self.contract.validate_row(row)
         except DatasetContractError as error:
             raise _wrap_contract_error(row_number, error) from error
 
+    def _validated_polygon_id(
+        self,
+        row_number: int,
+        row: Mapping[str, object],
+    ) -> str:
         try:
             _require_identifier("sentence_id", row["sentence_id"])
-            polygon_id = _require_identifier("polygon_id", row["polygon_id"])
+            return _require_identifier("polygon_id", row["polygon_id"])
         except ValueError as error:
             raise DatasetAuditError(f"row {row_number}: {error}") from error
 
-        if polygon_id not in self.polygon_splits:
-            try:
-                self.polygon_splits[polygon_id] = split_for_polygon(
-                    polygon_id,
-                    validation_fraction=self.validation_fraction,
-                    seed=self.seed,
-                )
-            except ValueError as error:
-                raise DatasetAuditError(f"row {row_number}: {error}") from error
+    def _polygon_split(self, row_number: int, polygon_id: str) -> DatasetSplit:
+        if polygon_id in self.polygon_splits:
+            return self.polygon_splits[polygon_id]
+        try:
+            row_split = split_for_polygon(
+                polygon_id,
+                validation_fraction=self.validation_fraction,
+                seed=self.seed,
+            )
+        except ValueError as error:
+            raise DatasetAuditError(f"row {row_number}: {error}") from error
+        self.polygon_splits[polygon_id] = row_split
+        return row_split
 
-        row_split = self.polygon_splits[polygon_id]
-        label = _counter_key(row[self.contract.label_column])
+    def _record_row_counts(self, row_split: DatasetSplit, label: str) -> None:
         self.label_counts[label] += 1
         self.split_row_counts[row_split] += 1
         self.total_rows += 1
 
-        if label not in self.training_label_set:
-            return
-
-        self.trainable_rows += 1
-        self.trainable_polygons.add(polygon_id)
-        self.trainable_label_counts[row_split][label] += 1
-        self.language_counts[_counter_key(row["language"])] += 1
-        self.source_counts[_counter_key(row["source"])] += 1
-        text = cast(str, row["sentence_text_normalized"])
-        text_length = len(text)
+    def _record_text_length(self, text_length: int) -> None:
         self.text_length_count += 1
         self.text_length_total += text_length
         self.text_length_min = (
@@ -275,53 +274,139 @@ class _AuditAccumulator:
             if self.text_length_max is None
             else max(self.text_length_max, text_length)
         )
-        self.polygon_labels.setdefault(polygon_id, set()).add(label)
 
+    def _record_sentence_hash(
+        self,
+        row: Mapping[str, object],
+        polygon_id: str,
+        row_split: DatasetSplit,
+        label: str,
+    ) -> None:
         sentence_content_hash = row.get("sentence_content_hash")
-        if isinstance(sentence_content_hash, str) and sentence_content_hash:
-            self.hash_counts[sentence_content_hash] += 1
-            self.hash_polygons.setdefault(sentence_content_hash, set()).add(polygon_id)
-            self.hash_labels.setdefault(sentence_content_hash, set()).add(label)
-            self.hash_splits.setdefault(sentence_content_hash, set()).add(row_split)
+        if not isinstance(sentence_content_hash, str) or not sentence_content_hash:
+            return
+        self.hash_counts[sentence_content_hash] += 1
+        self.hash_polygons.setdefault(sentence_content_hash, set()).add(polygon_id)
+        self.hash_labels.setdefault(sentence_content_hash, set()).add(label)
+        self.hash_splits.setdefault(sentence_content_hash, set()).add(row_split)
 
-    def result(self) -> AuditResult:
-        """Build the immutable report and split manifest after the stream ends."""
+    def _record_trainable_row(
+        self,
+        row: Mapping[str, object],
+        polygon_id: str,
+        row_split: DatasetSplit,
+        label: str,
+    ) -> None:
+        self.trainable_rows += 1
+        self.trainable_polygons.add(polygon_id)
+        self.trainable_label_counts[row_split][label] += 1
+        self.language_counts[_counter_key(row["language"])] += 1
+        self.source_counts[_counter_key(row["source"])] += 1
+        text = cast(str, row["sentence_text_normalized"])
+        self._record_text_length(len(text))
+        self.polygon_labels.setdefault(polygon_id, set()).add(label)
+        self._record_sentence_hash(row, polygon_id, row_split, label)
 
+    def _count_polygon_splits(self) -> None:
         for row_split in self.polygon_splits.values():
             self.split_polygon_counts[row_split] += 1
 
-        duplicate_hash_groups = sum(count > 1 for count in self.hash_counts.values())
-        duplicate_rows_beyond_first = sum(
-            count - 1 for count in self.hash_counts.values() if count > 1
+    def _duplicate_metrics(self) -> tuple[int, int, int, int, int, int]:
+        duplicate_hash_groups, duplicate_rows_beyond_first = self._hash_metrics()
+        cross_polygon_duplicate_groups = self._cross_polygon_duplicate_groups()
+        mixed_label_polygons = self._mixed_label_polygons()
+        cross_split_duplicate_groups = self._cross_split_duplicate_groups()
+        conflicting_content_hash_groups = self._conflicting_hash_groups()
+        return (
+            duplicate_hash_groups,
+            duplicate_rows_beyond_first,
+            cross_polygon_duplicate_groups,
+            mixed_label_polygons,
+            cross_split_duplicate_groups,
+            conflicting_content_hash_groups,
         )
-        cross_polygon_duplicate_groups = sum(
-            count > 1 and len(self.hash_polygons[content_hash]) > 1
-            for content_hash, count in self.hash_counts.items()
+
+    def _hash_metrics(self) -> tuple[int, int]:
+        return (
+            sum(count > 1 for count in self.hash_counts.values()),
+            sum(count - 1 for count in self.hash_counts.values()),
         )
-        mixed_label_polygons = sum(
+
+    def _cross_polygon_duplicate_groups(self) -> int:
+        return sum(
+            len(self.hash_polygons[content_hash]) > 1
+            for content_hash in self.hash_counts
+        )
+
+    def _mixed_label_polygons(self) -> int:
+        return sum(
             labels.issuperset(self.training_label_set)
             for labels in self.polygon_labels.values()
         )
-        cross_split_duplicate_groups = sum(
+
+    def _cross_split_duplicate_groups(self) -> int:
+        return sum(
             splits.issuperset({"train", "validation"})
             for splits in self.hash_splits.values()
         )
-        conflicting_content_hash_groups = sum(
+
+    def _conflicting_hash_groups(self) -> int:
+        return sum(
             labels.issuperset(self.training_label_set)
             for labels in self.hash_labels.values()
         )
 
+    def _review_reasons(
+        self,
+        *,
+        conflicting_content_hash_groups: int,
+        cross_split_duplicate_groups: int,
+    ) -> set[str]:
         review_reasons: set[str] = set()
         if conflicting_content_hash_groups:
             review_reasons.add("content_hash_label_conflicts")
         if cross_split_duplicate_groups:
             review_reasons.add("cross_split_duplicate_groups")
+        review_reasons.update(self._missing_label_reasons())
+        return review_reasons
+
+    def _missing_label_reasons(self) -> set[str]:
+        reasons: set[str] = set()
         for row_split in ("train", "validation"):
             if any(
                 self.trainable_label_counts[row_split][label] == 0
                 for label in self.contract.training_label_values
             ):
-                review_reasons.add(f"{row_split}_split_missing_label")
+                reasons.add(f"{row_split}_split_missing_label")
+        return reasons
+
+    def consume(self, row_number: int, row: Mapping[str, object]) -> None:
+        self._validate_row(row_number, row)
+        polygon_id = self._validated_polygon_id(row_number, row)
+        row_split = self._polygon_split(row_number, polygon_id)
+        label = _counter_key(row[self.contract.label_column])
+        self._record_row_counts(row_split, label)
+        if label not in self.training_label_set:
+            return
+        self._record_trainable_row(row, polygon_id, row_split, label)
+
+    def result(self) -> AuditResult:
+        """Build the immutable report and split manifest after the stream ends."""
+
+        self._count_polygon_splits()
+        duplicate_metrics = self._duplicate_metrics()
+        (
+            duplicate_hash_groups,
+            duplicate_rows_beyond_first,
+            cross_polygon_duplicate_groups,
+            mixed_label_polygons,
+            cross_split_duplicate_groups,
+            conflicting_content_hash_groups,
+        ) = duplicate_metrics
+        review_reasons = self._review_reasons(
+            conflicting_content_hash_groups=conflicting_content_hash_groups,
+            cross_split_duplicate_groups=cross_split_duplicate_groups,
+        )
 
         reasons = tuple(sorted(review_reasons))
         report = AuditReport(
@@ -396,6 +481,23 @@ def _directory_fd_supported() -> bool:
     )
 
 
+def _open_child_directory(
+    component: str,
+    *,
+    parent_fd: int,
+    flags: int,
+    create: bool,
+) -> int:
+    try:
+        return os.open(component, flags, dir_fd=parent_fd)
+    except FileNotFoundError:
+        if not create:
+            raise
+        with suppress(FileExistsError):
+            os.mkdir(component, 0o777, dir_fd=parent_fd)
+        return os.open(component, flags, dir_fd=parent_fd)
+
+
 def _open_directory_no_follow(path: Path, *, create: bool) -> int:
     """Open every directory component without following symlinks."""
 
@@ -407,22 +509,12 @@ def _open_directory_no_follow(path: Path, *, create: bool) -> int:
     directory_fd = os.open(absolute_path.anchor, directory_flags)
     try:
         for component in absolute_path.parts[1:]:
-            try:
-                child_fd = os.open(
-                    component,
-                    directory_flags,
-                    dir_fd=directory_fd,
-                )
-            except FileNotFoundError:
-                if not create:
-                    raise
-                with suppress(FileExistsError):
-                    os.mkdir(component, 0o777, dir_fd=directory_fd)
-                child_fd = os.open(
-                    component,
-                    directory_flags,
-                    dir_fd=directory_fd,
-                )
+            child_fd = _open_child_directory(
+                component,
+                parent_fd=directory_fd,
+                flags=directory_flags,
+                create=create,
+            )
             os.close(directory_fd)
             directory_fd = child_fd
         return directory_fd

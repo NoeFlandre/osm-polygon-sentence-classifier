@@ -40,6 +40,7 @@ from .grid5000_oar import (
 )
 from .grid5000_policy import (
     SHORT_TRIAL_WALLTIME_SECONDS,
+    QueuedReplacementDecision,
     ReplacementCandidate,
     decide_queued_replacement,
     policy_type_for,
@@ -107,33 +108,60 @@ class AutonomousRunConfig:
     cleanup: bool = True
 
     def __post_init__(self) -> None:
-        if not self.sites:
-            raise AutonomousRunError("at least one Grid'5000 site is required")
-        if self.walltime_seconds <= 0:
-            raise AutonomousRunError("walltime_seconds must be positive")
-        if self.policy_type not in {"auto", "day", "night"}:
-            raise AutonomousRunError("policy_type must be auto, day, or night")
-        if self.max_workers <= 0:
-            raise AutonomousRunError("max_workers must be positive")
-        if (
-            isinstance(self.max_continuations, bool)
-            or not isinstance(self.max_continuations, int)
-            or self.max_continuations <= 0
-        ):
-            raise AutonomousRunError("max_continuations must be positive")
-        if (
-            self.worker_source_commit is not None
-            and _SOURCE_COMMIT_PATTERN.fullmatch(self.worker_source_commit) is None
-        ):
-            raise AutonomousRunError("worker_source_commit must be a pinned revision")
-        try:
-            _validate_container_settings(self.container_image, self.container_runtime)
-        except Grid5000ConfigurationError as error:
-            raise AutonomousRunError(str(error)) from error
-        if self.training_config.model_name_or_path != self.identity.model_name_or_path:
-            raise AutonomousRunError("training model does not match run identity")
-        if self.training_config.model_revision != self.identity.model_revision:
-            raise AutonomousRunError("training revision does not match run identity")
+        _validate_autonomous_limits(self)
+        _validate_worker_source_commit(self.worker_source_commit)
+        _validate_autonomous_container(self.container_image, self.container_runtime)
+        _validate_autonomous_identity(self.training_config, self.identity)
+
+
+def _validate_autonomous_limits(config: AutonomousRunConfig) -> None:
+    if not config.sites:
+        raise AutonomousRunError("at least one Grid'5000 site is required")
+    if config.walltime_seconds <= 0:
+        raise AutonomousRunError("walltime_seconds must be positive")
+    if config.policy_type not in {"auto", "day", "night"}:
+        raise AutonomousRunError("policy_type must be auto, day, or night")
+    if config.max_workers <= 0:
+        raise AutonomousRunError("max_workers must be positive")
+    _validate_max_continuations(config.max_continuations)
+
+
+def _validate_max_continuations(value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise AutonomousRunError("max_continuations must be positive")
+
+
+def _validate_worker_source_commit(value: str | None) -> None:
+    if value is not None and _SOURCE_COMMIT_PATTERN.fullmatch(value) is None:
+        raise AutonomousRunError("worker_source_commit must be a pinned revision")
+
+
+def _validate_autonomous_container(
+    container_image: str | None, container_runtime: ContainerRuntime
+) -> None:
+    try:
+        _validate_container_settings(container_image, container_runtime)
+    except Grid5000ConfigurationError as error:
+        raise AutonomousRunError(str(error)) from error
+
+
+def _validate_autonomous_identity(
+    training_config: TrainingConfig, identity: Grid5000RunIdentity
+) -> None:
+    if training_config.model_name_or_path != identity.model_name_or_path:
+        raise AutonomousRunError("training model does not match run identity")
+    if training_config.model_revision != identity.model_revision:
+        raise AutonomousRunError("training revision does not match run identity")
+
+
+def _validate_persisted_container_image(value: object) -> None:
+    if value is not None and not isinstance(value, str):
+        raise AutonomousRunError("persisted container image is invalid")
+
+
+def _validate_persisted_container_runtime(value: object) -> None:
+    if value not in {"auto", "docker", "podman"}:
+        raise AutonomousRunError("persisted container runtime is invalid")
 
 
 def _local_hugging_face_token(environ: Mapping[str, str] | None = None) -> str:
@@ -173,10 +201,6 @@ def _continuation_facts(
         "worker_source_commit": worker_source_commit,
         "continuation_pending": continuation_pending,
     }
-    if continuation_reason is not None:
-        facts["continuation_reason"] = continuation_reason
-    if last_terminal_job_id is not None:
-        facts["last_terminal_job_id"] = last_terminal_job_id
     facts.update(
         {
             "replacement_attempted": False,
@@ -185,13 +209,42 @@ def _continuation_facts(
             "replacement_last_attempt_at": None,
         }
     )
-    if resume_from_checkpoint is not None:
-        facts["resume_from_checkpoint"] = resume_from_checkpoint
-    if scheduler_command is not None:
-        facts["scheduler_command"] = list(scheduler_command)
-    if requested_policy_type is not None:
-        facts["requested_policy_type"] = requested_policy_type
+    _add_optional_continuation_facts(
+        facts,
+        continuation_reason=continuation_reason,
+        last_terminal_job_id=last_terminal_job_id,
+        resume_from_checkpoint=resume_from_checkpoint,
+        scheduler_command=scheduler_command,
+        requested_policy_type=requested_policy_type,
+    )
     return facts
+
+
+def _add_optional_continuation_facts(
+    facts: dict[str, object],
+    *,
+    continuation_reason: str | None,
+    last_terminal_job_id: int | None,
+    resume_from_checkpoint: bool | None,
+    scheduler_command: Sequence[str] | None,
+    requested_policy_type: PolicyType | None,
+) -> None:
+    _set_optional_fact(facts, "continuation_reason", continuation_reason)
+    _set_optional_fact(facts, "last_terminal_job_id", last_terminal_job_id)
+    _set_optional_fact(facts, "resume_from_checkpoint", resume_from_checkpoint)
+    _set_optional_fact(
+        facts,
+        "scheduler_command",
+        list(scheduler_command) if scheduler_command is not None else None,
+    )
+    _set_optional_fact(facts, "requested_policy_type", requested_policy_type)
+
+
+def _set_optional_fact(
+    facts: dict[str, object], key: str, value: object | None
+) -> None:
+    if value is not None:
+        facts[key] = value
 
 
 def _replacement_attempt_count_for_job(
@@ -204,10 +257,15 @@ def _replacement_attempt_count_for_job(
         or facts.get("replacement_attempted_job_id") != job_id
     ):
         return 0
-    raw_count = facts.get("replacement_attempt_count", 0)
-    if isinstance(raw_count, bool) or not isinstance(raw_count, int) or raw_count < 0:
+    return _validated_replacement_attempt_count(
+        facts.get("replacement_attempt_count", 0)
+    )
+
+
+def _validated_replacement_attempt_count(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise AutonomousRunError("durable replacement attempt count is invalid")
-    return raw_count
+    return value
 
 
 def _replacement_retry_due_for_job(
@@ -218,25 +276,59 @@ def _replacement_retry_due_for_job(
 ) -> bool:
     """Return whether another bounded replacement probe may start."""
 
-    if now.tzinfo is None or now.utcoffset() is None:
-        raise ValueError("now must be timezone-aware")
+    _validate_timezone(now)
     attempt_count = _replacement_attempt_count_for_job(facts, job_id=job_id)
     if attempt_count == 0:
         return True
+    last_attempt = _last_replacement_attempt(facts)
+    if last_attempt is None:
+        return True
+
+    return now >= last_attempt + REPLACEMENT_RETRY_INTERVAL
+
+
+def _validate_timezone(value: datetime) -> None:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("now must be timezone-aware")
+
+
+def _last_replacement_attempt(facts: Mapping[str, object]) -> datetime | None:
     raw_timestamp = facts.get("replacement_last_attempt_at")
     if raw_timestamp is None:
         # State written before the retry fields existed is safe to upgrade on
         # the next explicit resume; the new attempt records the durable time.
-        return True
+        return None
     if not isinstance(raw_timestamp, str):
         raise AutonomousRunError("durable replacement timestamp is invalid")
+    return _parse_replacement_timestamp(raw_timestamp)
+
+
+def _parse_replacement_timestamp(raw_timestamp: str) -> datetime:
     try:
-        last_attempt = datetime.fromisoformat(raw_timestamp.replace("Z", "+00:00"))
+        last_attempt = datetime.fromisoformat(raw_timestamp)
     except ValueError as error:
         raise AutonomousRunError("durable replacement timestamp is invalid") from error
-    if last_attempt.tzinfo is None or last_attempt.utcoffset() is None:
+    if last_attempt.tzinfo is None:
         raise AutonomousRunError("durable replacement timestamp is invalid")
-    return now >= last_attempt + REPLACEMENT_RETRY_INTERVAL
+    return last_attempt
+
+
+def _validated_failed_run_count(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise AutonomousRunError("failed run continuation evidence is invalid")
+    return value
+
+
+def _validated_failed_run_limit(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise AutonomousRunError("failed run continuation evidence is invalid")
+    return value
+
+
+def _validated_continuation_count(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise AutonomousRunError("durable continuation count is invalid")
+    return value
 
 
 class AutonomousRunController:
@@ -279,9 +371,24 @@ class AutonomousRunController:
         job_id: int | None | object = _UNSET,
         facts: Mapping[str, object] | None = None,
     ) -> AutonomousRunState:
+        updated = self._transition_state(current, phase, site, job_id, facts)
+        self.state.save(updated)
+        self.state.append_event(current.run_id, phase.value, facts or {})
+        location, job = self._transition_location(updated)
+        self.emit(f"run {current.run_id}: phase={phase.value}{location}{job}")
+        return updated
+
+    @staticmethod
+    def _transition_state(
+        current: AutonomousRunState,
+        phase: RunPhase,
+        site: str | None | object,
+        job_id: int | None | object,
+        facts: Mapping[str, object] | None,
+    ) -> AutonomousRunState:
         merged = dict(current.facts or {})
         merged.update(facts or {})
-        updated = AutonomousRunState(
+        return AutonomousRunState(
             run_id=current.run_id,
             phase=phase,
             identity=current.identity,
@@ -289,12 +396,12 @@ class AutonomousRunController:
             job_id=current.job_id if job_id is _UNSET else cast(int | None, job_id),
             facts=merged,
         )
-        self.state.save(updated)
-        self.state.append_event(current.run_id, phase.value, facts or {})
-        location = f" site={updated.site}" if updated.site is not None else ""
-        job = f" job={updated.job_id}" if updated.job_id is not None else ""
-        self.emit(f"run {current.run_id}: phase={phase.value}{location}{job}")
-        return updated
+
+    @staticmethod
+    def _transition_location(state: AutonomousRunState) -> tuple[str, str]:
+        location = f" site={state.site}" if state.site is not None else ""
+        job = f" job={state.job_id}" if state.job_id is not None else ""
+        return location, job
 
     def _hub(self) -> Any:
         if self.hub_api is not None:
@@ -385,10 +492,10 @@ class AutonomousRunController:
         self.emit(
             f"{plan.allocation.site}: running checkout, policy, and quota preflight"
         )
-        for command, _label in (
-            (plan.remote_checkout_command[-1], "remote checkout"),
-            (plan.policy_site_command[-1], "site policy"),
-            (plan.policy_total_command[-1], "total policy"),
+        for command in (
+            plan.remote_checkout_command[-1],
+            plan.policy_site_command[-1],
+            plan.policy_total_command[-1],
         ):
             remote.run(command)
         quota_result = remote.run(plan.quota_command[-1])
@@ -409,6 +516,13 @@ class AutonomousRunController:
 
     def _verify_completion(self, remote: Any, manifest: Mapping[str, object]) -> None:
         training = self.config.training_config
+        self._verify_completion_identity(manifest)
+        if training.publish_to_hub:
+            self._verify_model_publication(manifest)
+        if training.sync_trackio:
+            self._verify_tracking_space(manifest)
+
+    def _verify_completion_identity(self, manifest: Mapping[str, object]) -> None:
         expected_identity = {
             "run_id": self.config.identity.run_id,
             "source_commit": self.config.identity.source_commit,
@@ -419,35 +533,47 @@ class AutonomousRunController:
         for field, expected in expected_identity.items():
             if manifest.get(field) != expected:
                 raise AutonomousRunError(f"completion manifest {field} is invalid")
-        publication = manifest.get("model_publication")
-        if training.publish_to_hub:
-            if not isinstance(publication, Mapping):
-                raise AutonomousRunError(
-                    "completed worker did not report a model publication"
-                )
-            repository = publication.get("repository_id")
-            commit_id = publication.get("commit_id")
-            if (
-                not isinstance(repository, str)
-                or not isinstance(commit_id, str)
-                or len(commit_id) != 40
-            ):
-                raise AutonomousRunError("model publication facts are invalid")
-            if repository != ProjectConfig().target_model_repository_id:
-                raise AutonomousRunError("model publication repository is invalid")
-            api = self._hub()
-            api.model_info(repo_id=repository, revision=commit_id)
-        if training.sync_trackio:
-            tracking_space = manifest.get("tracking_space_id")
-            settings = settings_for(
-                ProjectConfig(),
-                project=training.tracking_project,
+
+    def _verify_model_publication(self, manifest: Mapping[str, object]) -> None:
+        repository, commit_id = self._validated_model_publication(
+            manifest.get("model_publication")
+        )
+        self._hub().model_info(repo_id=repository, revision=commit_id)
+
+    def _validated_model_publication(self, value: object) -> tuple[str, str]:
+        if not isinstance(value, Mapping):
+            raise AutonomousRunError(
+                "completed worker did not report a model publication"
             )
-            if tracking_space != settings.static_space_id:
-                raise AutonomousRunError(
-                    "completed worker reported the wrong Trackio Space"
-                )
-            self._hub().space_info(repo_id=settings.static_space_id)
+        publication = cast(Mapping[str, object], value)
+        repository, commit_id = self._publication_values(publication)
+        if repository != ProjectConfig().target_model_repository_id:
+            raise AutonomousRunError("model publication repository is invalid")
+        return repository, commit_id
+
+    @staticmethod
+    def _publication_values(value: Mapping[str, object]) -> tuple[str, str]:
+        repository = value.get("repository_id")
+        commit_id = value.get("commit_id")
+        if (
+            not isinstance(repository, str)
+            or not isinstance(commit_id, str)
+            or len(commit_id) != 40
+        ):
+            raise AutonomousRunError("model publication facts are invalid")
+        return repository, commit_id
+
+    def _verify_tracking_space(self, manifest: Mapping[str, object]) -> None:
+        tracking_space = manifest.get("tracking_space_id")
+        settings = settings_for(
+            ProjectConfig(),
+            project=self.config.training_config.tracking_project,
+        )
+        if tracking_space != settings.static_space_id:
+            raise AutonomousRunError(
+                "completed worker reported the wrong Trackio Space"
+            )
+        self._hub().space_info(repo_id=settings.static_space_id)
 
     def _candidate_list(
         self,
@@ -517,12 +643,49 @@ class AutonomousRunController:
         now = _now()
         facts = dict(current.facts or {})
         attempt_count = _replacement_attempt_count_for_job(facts, job_id=job_id)
+        decision = self._queued_replacement_decision(
+            status,
+            site=site,
+            job_id=job_id,
+            now=now,
+            facts=facts,
+            attempt_count=attempt_count,
+        )
+        if decision.action == "fail":
+            return self._fail_queued_job(
+                current,
+                site=site,
+                job_id=job_id,
+                remote=remote,
+                decision=decision,
+            )
+        if decision.action == "wait":
+            return current, site, job_id, remote
+        return self._replace_queued_job(
+            current,
+            site=site,
+            job_id=job_id,
+            remote=remote,
+            facts=facts,
+            decision=decision,
+        )
+
+    def _queued_replacement_decision(
+        self,
+        status: JobStatus,
+        *,
+        site: str,
+        job_id: int,
+        now: datetime,
+        facts: Mapping[str, object],
+        attempt_count: int,
+    ) -> QueuedReplacementDecision:
         retry_due = False
         if attempt_count < MAX_REPLACEMENT_ATTEMPTS and should_seek_replacement(
             status, now=now
         ):
             retry_due = _replacement_retry_due_for_job(facts, job_id=job_id, now=now)
-        decision = decide_queued_replacement(
+        return decide_queued_replacement(
             status,
             site=site,
             job_id=job_id,
@@ -531,22 +694,42 @@ class AutonomousRunController:
             retry_due=retry_due,
             max_attempts=MAX_REPLACEMENT_ATTEMPTS,
         )
-        if decision.action == "fail":
-            message = cast(str, decision.message)
-            self.emit(f"{message}; canceling stale fallback")
-            OarClient(remote).cancel(job_id)
-            return self._continue_after_incomplete(
-                current,
-                site=site,
-                job_id=job_id,
-                remote=remote,
-                reason=message,
-                failure_message=message,
-            )
-        if decision.action == "wait":
-            return current, site, job_id, remote
-        attempt_count = cast(int, decision.attempt_count)
-        attempt_timestamp = cast(str, decision.attempt_timestamp)
+
+    def _fail_queued_job(
+        self,
+        current: AutonomousRunState,
+        *,
+        site: str,
+        job_id: int,
+        remote: Any,
+        decision: QueuedReplacementDecision,
+    ) -> AutonomousRunState:
+        message = cast(str, decision.message)
+        self.emit(f"{message}; canceling stale fallback")
+        OarClient(remote).cancel(job_id)
+        return self._continue_after_incomplete(
+            current,
+            site=site,
+            job_id=job_id,
+            remote=remote,
+            reason=message,
+            failure_message=message,
+        )
+
+    def _replace_queued_job(
+        self,
+        current: AutonomousRunState,
+        *,
+        site: str,
+        job_id: int,
+        remote: Any,
+        facts: Mapping[str, object],
+        decision: QueuedReplacementDecision,
+    ) -> tuple[AutonomousRunState, str, int, Any]:
+        if decision.attempt_count is None or decision.attempt_timestamp is None:
+            raise AutonomousRunError("replacement decision is missing attempt metadata")
+        attempt_count = decision.attempt_count
+        attempt_timestamp = decision.attempt_timestamp
         self.emit(
             f"{site} job {job_id}: replacement round "
             f"{attempt_count}/{MAX_REPLACEMENT_ATTEMPTS}"
@@ -572,23 +755,40 @@ class AutonomousRunController:
             RunPhase.QUEUED,
             site=replacement_site,
             job_id=replacement_job,
-            facts=(
-                {
-                    "replacement_attempted": True,
-                    "replacement_attempted_job_id": job_id,
-                    "replacement_attempt_count": attempt_count,
-                    "replacement_last_attempt_at": attempt_timestamp,
-                }
-                if replacement_site == site and replacement_job == job_id
-                else {
-                    "replacement_attempted": False,
-                    "replacement_attempted_job_id": None,
-                    "replacement_attempt_count": 0,
-                    "replacement_last_attempt_at": None,
-                }
+            facts=self._replacement_state_facts(
+                replacement_site,
+                replacement_job,
+                site=site,
+                job_id=job_id,
+                attempt_count=attempt_count,
+                attempt_timestamp=attempt_timestamp,
             ),
         )
         return current, replacement_site, replacement_job, replacement_remote
+
+    @staticmethod
+    def _replacement_state_facts(
+        replacement_site: str,
+        replacement_job: int,
+        *,
+        site: str,
+        job_id: int,
+        attempt_count: int,
+        attempt_timestamp: str,
+    ) -> dict[str, object]:
+        if replacement_site == site and replacement_job == job_id:
+            return {
+                "replacement_attempted": True,
+                "replacement_attempted_job_id": job_id,
+                "replacement_attempt_count": attempt_count,
+                "replacement_last_attempt_at": attempt_timestamp,
+            }
+        return {
+            "replacement_attempted": False,
+            "replacement_attempted_job_id": None,
+            "replacement_attempt_count": 0,
+            "replacement_last_attempt_at": None,
+        }
 
     def _fail_terminal(
         self,
@@ -637,8 +837,26 @@ class AutonomousRunController:
         allow_failed_status: bool,
     ) -> bool:
         """Probe checkpoint evidence with bounded retries for SSH outages."""
+        local_ready = self._probe_local_checkpoint(
+            remote,
+            site=site,
+            job_id=job_id,
+            allow_failed_status=allow_failed_status,
+        )
+        if local_ready:
+            return True
+        return self._probe_published_checkpoint(site=site, job_id=job_id)
+
+    def _probe_local_checkpoint(
+        self,
+        remote: Any,
+        *,
+        site: str,
+        job_id: int,
+        allow_failed_status: bool,
+    ) -> bool:
         try:
-            local_ready = probe_complete_checkpoint(
+            return probe_complete_checkpoint(
                 remote,
                 run_id=self.config.identity.run_id,
                 output_subdirectory=self.config.training_config.output_subdirectory,
@@ -656,8 +874,8 @@ class AutonomousRunController:
             if error.__cause__ is not None:
                 raise AutonomousRunError(str(error)) from error.__cause__
             raise AutonomousRunError(str(error)) from error
-        if local_ready:
-            return True
+
+    def _probe_published_checkpoint(self, *, site: str, job_id: int) -> bool:
         if not self.config.training_config.publish_to_hub:
             return False
         try:
@@ -688,13 +906,7 @@ class AutonomousRunController:
         failure_message: str | None = None,
     ) -> AutonomousRunState:
         facts = dict(current.facts or {})
-        raw_count = facts.get("continuation_count", 0)
-        if (
-            isinstance(raw_count, bool)
-            or not isinstance(raw_count, int)
-            or raw_count < 0
-        ):
-            raise AutonomousRunError("durable continuation count is invalid")
+        raw_count = _validated_continuation_count(facts.get("continuation_count", 0))
         if raw_count >= self.config.max_continuations:
             return self._fail_terminal(
                 current,
@@ -710,6 +922,36 @@ class AutonomousRunController:
             f"{site} job {job_id}: checking checkpoint evidence before "
             f"continuation {raw_count + 1}/{self.config.max_continuations}"
         )
+        self._require_continuation_checkpoint(
+            current,
+            site=site,
+            job_id=job_id,
+            remote=remote,
+            failure_message=failure_message,
+        )
+        self.emit(f"{site} job {job_id}: complete checkpoint found")
+        probe, remote, plan = self._prepare_continuation(
+            current, site=site, remote=remote
+        )
+        return self._submit_continuation(
+            current,
+            probe=probe,
+            remote=remote,
+            plan=plan,
+            raw_count=raw_count,
+            reason=reason,
+            last_terminal_job_id=job_id,
+        )
+
+    def _require_continuation_checkpoint(
+        self,
+        current: AutonomousRunState,
+        *,
+        site: str,
+        job_id: int,
+        remote: Any,
+        failure_message: str | None,
+    ) -> None:
         try:
             checkpoint_ready = self._has_complete_checkpoint(
                 remote,
@@ -718,7 +960,7 @@ class AutonomousRunController:
                 allow_failed_status=current.phase is RunPhase.FAILED,
             )
         except AutonomousRunError as error:
-            return self._fail_terminal(
+            self._fail_terminal(
                 current,
                 site=site,
                 job_id=job_id,
@@ -726,14 +968,21 @@ class AutonomousRunController:
                 message=str(error),
             )
         if not checkpoint_ready:
-            return self._fail_terminal(
+            self._fail_terminal(
                 current,
                 site=site,
                 job_id=job_id,
                 remote=remote,
                 message=failure_message or "job ended without a complete checkpoint",
             )
-        self.emit(f"{site} job {job_id}: complete checkpoint found")
+
+    def _prepare_continuation(
+        self,
+        current: AutonomousRunState,
+        *,
+        site: str,
+        remote: Any,
+    ) -> tuple[SiteProbe, Any, Grid5000Plan]:
         probe = self._continuation_probe(site)
         if probe.name != site:
             self.emit(
@@ -752,6 +1001,19 @@ class AutonomousRunController:
             remote.install_hugging_face_token(token)
         plan = self._build_plan(probe, resume_from_checkpoint=True)
         self._preflight(remote, plan)
+        return probe, remote, plan
+
+    def _submit_continuation(
+        self,
+        current: AutonomousRunState,
+        *,
+        probe: SiteProbe,
+        remote: Any,
+        plan: Grid5000Plan,
+        raw_count: int,
+        reason: str,
+        last_terminal_job_id: int,
+    ) -> AutonomousRunState:
         pending = self._transition(
             current,
             RunPhase.SUBMITTING,
@@ -763,7 +1025,7 @@ class AutonomousRunController:
                 worker_source_commit=self.config.worker_source_commit,
                 continuation_pending=True,
                 continuation_reason=reason,
-                last_terminal_job_id=job_id,
+                last_terminal_job_id=last_terminal_job_id,
                 requested_policy_type=self.config.policy_type,
             ),
         )
@@ -795,7 +1057,7 @@ class AutonomousRunController:
         remote: Any,
     ) -> AutonomousRunState:
         reason = f"job ended as {status.state.value}; exit_code={status.exit_code}"
-        if status.state is not JobState.TERMINATED or status.exit_code not in {None, 0}:
+        if self._terminal_job_failed(status):
             return self._continue_after_incomplete(
                 current,
                 site=site,
@@ -803,6 +1065,28 @@ class AutonomousRunController:
                 remote=remote,
                 reason=reason,
             )
+        return self._complete_terminal_job(
+            current,
+            site=site,
+            job_id=job_id,
+            remote=remote,
+        )
+
+    @staticmethod
+    def _terminal_job_failed(status: JobStatus) -> bool:
+        return status.state is not JobState.TERMINATED or status.exit_code not in {
+            None,
+            0,
+        }
+
+    def _complete_terminal_job(
+        self,
+        current: AutonomousRunState,
+        *,
+        site: str,
+        job_id: int,
+        remote: Any,
+    ) -> AutonomousRunState:
         try:
             self.emit(f"{site} job {job_id}: verifying completion manifest")
             manifest = remote.read_completion(self.config.identity.run_id)
@@ -838,64 +1122,104 @@ class AutonomousRunController:
         """Extend only a failed run whose checkpoint limit was exhausted."""
 
         facts = dict(current.facts or {})
-        raw_count = facts.get("continuation_count")
-        raw_limit = facts.get("max_continuations")
-        if (
-            isinstance(raw_count, bool)
-            or not isinstance(raw_count, int)
-            or raw_count < 0
-            or isinstance(raw_limit, bool)
-            or not isinstance(raw_limit, int)
-            or raw_limit <= 0
-        ):
-            raise AutonomousRunError("failed run continuation evidence is invalid")
-        expected_error = (
-            f"job ended without completion after {raw_count} checkpoint continuations"
-        )
-        recoverable_checkpoint_failure = (
-            facts.get("error") == "job ended without a complete checkpoint"
-            and raw_count < self.config.max_continuations
-        )
-        stale_queued_failure = (
-            isinstance(facts.get("error"), str)
-            and _STALE_QUEUE_ERROR_PATTERN.fullmatch(cast(str, facts["error"]))
-            is not None
-            and raw_count < self.config.max_continuations
-        )
-        exhausted = raw_count == raw_limit and facts.get("error") == expected_error
-        if not (recoverable_checkpoint_failure or stale_queued_failure or exhausted):
-            raise AutonomousRunError("run is not resumable from phase failed")
-        if exhausted and self.config.max_continuations <= raw_limit:
-            raise AutonomousRunError(
-                f"failed run exhausted {raw_limit} checkpoint continuations; "
-                f"resume with --max-continuations greater than {raw_limit}"
-            )
-        if current.site is None or current.job_id is None:
-            raise AutonomousRunError("failed run lacks its last Grid'5000 job")
+        raw_count, raw_limit = self._failed_run_counts(facts)
+        self._validate_failed_run_resume(facts, raw_count, raw_limit)
+        site, job_id = self._failed_run_location(current)
 
-        remote = self.remote_factory(current.site)
+        remote = self.remote_factory(site)
         self._active_remote = remote
-        try:
-            status = OarClient(remote).status(current.job_id)
-        except Exception as error:
-            raise AutonomousRunError(
-                "previous Grid'5000 job status could not be verified"
-            ) from error
+        status = self._previous_job_status(remote, job_id)
         if is_live_state(status.state):
             raise AutonomousRunError(
                 "failed run still has an active Grid'5000 job; refusing a duplicate"
             )
         self.emit(
             f"run {current.run_id}: extending from the retained checkpoint "
-            f"after job {current.job_id}"
+            f"after job {job_id}"
         )
         return self._continue_after_incomplete(
             current,
-            site=current.site,
-            job_id=current.job_id,
+            site=site,
+            job_id=job_id,
             remote=remote,
             reason="explicit continuation extension",
         )
+
+    @staticmethod
+    def _failed_run_counts(facts: Mapping[str, object]) -> tuple[int, int]:
+        return (
+            _validated_failed_run_count(facts.get("continuation_count")),
+            _validated_failed_run_limit(facts.get("max_continuations")),
+        )
+
+    def _validate_failed_run_resume(
+        self,
+        facts: Mapping[str, object],
+        raw_count: int,
+        raw_limit: int,
+    ) -> None:
+        exhausted = self._failed_run_is_exhausted(facts, raw_count, raw_limit)
+        if not self._failed_run_is_resumable(facts, raw_count, exhausted):
+            raise AutonomousRunError("run is not resumable from phase failed")
+        if exhausted and self.config.max_continuations <= raw_limit:
+            raise AutonomousRunError(
+                f"failed run exhausted {raw_limit} checkpoint continuations; "
+                f"resume with --max-continuations greater than {raw_limit}"
+            )
+
+    def _failed_run_is_resumable(
+        self,
+        facts: Mapping[str, object],
+        raw_count: int,
+        exhausted: bool,
+    ) -> bool:
+        return (
+            self._recoverable_checkpoint_failure(facts, raw_count)
+            or self._stale_queued_failure(facts, raw_count)
+            or exhausted
+        )
+
+    @staticmethod
+    def _failed_run_is_exhausted(
+        facts: Mapping[str, object], raw_count: int, raw_limit: int
+    ) -> bool:
+        expected_error = (
+            f"job ended without completion after {raw_count} checkpoint continuations"
+        )
+        return facts.get("error") == expected_error and raw_count == raw_limit
+
+    def _recoverable_checkpoint_failure(
+        self, facts: Mapping[str, object], raw_count: int
+    ) -> bool:
+        return (
+            facts.get("error") == "job ended without a complete checkpoint"
+            and raw_count < self.config.max_continuations
+        )
+
+    def _stale_queued_failure(
+        self, facts: Mapping[str, object], raw_count: int
+    ) -> bool:
+        error = facts.get("error")
+        return (
+            isinstance(error, str)
+            and _STALE_QUEUE_ERROR_PATTERN.fullmatch(error) is not None
+            and raw_count < self.config.max_continuations
+        )
+
+    @staticmethod
+    def _failed_run_location(current: AutonomousRunState) -> tuple[str, int]:
+        if current.site is None or current.job_id is None:
+            raise AutonomousRunError("failed run lacks its last Grid'5000 job")
+        return current.site, current.job_id
+
+    @staticmethod
+    def _previous_job_status(remote: Any, job_id: int) -> JobStatus:
+        try:
+            return OarClient(remote).status(job_id)
+        except Exception as error:
+            raise AutonomousRunError(
+                "previous Grid'5000 job status could not be verified"
+            ) from error
 
     def _monitor(
         self,
@@ -903,10 +1227,7 @@ class AutonomousRunController:
         *,
         remote: Any,
     ) -> AutonomousRunState:
-        if state.site is None or state.job_id is None:
-            raise AutonomousRunError("submitted state lacks site or job ID")
-        site = state.site
-        job_id = state.job_id
+        site, job_id = self._monitor_location(state)
         current_remote = remote
         oar = OarClient(current_remote)
         current = state
@@ -917,41 +1238,78 @@ class AutonomousRunController:
         while True:
             status = oar.status(job_id)
             self.emit(f"{site} job {job_id}: {format_job_status(status)}")
-            if status.state is JobState.QUEUED:
-                queued_result = self._handle_queued_status(
-                    current,
-                    status=status,
-                    site=site,
-                    job_id=job_id,
-                    remote=current_remote,
-                )
-                if isinstance(queued_result, AutonomousRunState):
-                    return queued_result
-                current, site, job_id, current_remote = queued_result
+            result = self._monitor_status(
+                current,
+                status=status,
+                site=site,
+                job_id=job_id,
+                remote=current_remote,
+            )
+            if isinstance(result, AutonomousRunState):
+                return result
+            if result is not None:
+                current, site, job_id, current_remote = result
                 oar = OarClient(current_remote)
-            elif status.state is JobState.RUNNING:
-                if current.phase in {RunPhase.SUBMITTED, RunPhase.QUEUED}:
-                    current = self._transition(
-                        current,
-                        RunPhase.RUNNING,
-                        site=site,
-                        job_id=job_id,
-                        facts={"node": status.node or ""},
-                    )
-            elif status.state in {
-                JobState.TERMINATED,
-                JobState.ERROR,
-                JobState.MISSING,
-            }:
-                return self._handle_terminal_status(
-                    current,
-                    status=status,
-                    site=site,
-                    job_id=job_id,
-                    remote=current_remote,
-                )
             if self.poll_seconds:
                 self.sleeper(self.poll_seconds)
+
+    @staticmethod
+    def _monitor_location(state: AutonomousRunState) -> tuple[str, int]:
+        if state.site is None or state.job_id is None:
+            raise AutonomousRunError("submitted state lacks site or job ID")
+        return state.site, state.job_id
+
+    def _monitor_status(
+        self,
+        current: AutonomousRunState,
+        *,
+        status: JobStatus,
+        site: str,
+        job_id: int,
+        remote: Any,
+    ) -> tuple[AutonomousRunState, str, int, Any] | AutonomousRunState | None:
+        if status.state is JobState.QUEUED:
+            return self._handle_queued_status(
+                current,
+                status=status,
+                site=site,
+                job_id=job_id,
+                remote=remote,
+            )
+        if status.state is JobState.RUNNING:
+            updated = self._running_state(current, status, site=site, job_id=job_id)
+            return None if updated is None else (updated, site, job_id, remote)
+        if status.state in {
+            JobState.TERMINATED,
+            JobState.ERROR,
+            JobState.MISSING,
+        }:
+            return self._handle_terminal_status(
+                current,
+                status=status,
+                site=site,
+                job_id=job_id,
+                remote=remote,
+            )
+        return None
+
+    def _running_state(
+        self,
+        current: AutonomousRunState,
+        status: JobStatus,
+        *,
+        site: str,
+        job_id: int,
+    ) -> AutonomousRunState | None:
+        if current.phase in {RunPhase.SUBMITTED, RunPhase.QUEUED}:
+            return self._transition(
+                current,
+                RunPhase.RUNNING,
+                site=site,
+                job_id=job_id,
+                facts={"node": status.node or ""},
+            )
+        return None
 
     def _fresh_run(self) -> AutonomousRunState:
         state = AutonomousRunState(
@@ -1056,6 +1414,9 @@ class AutonomousRunController:
             self._validate_persisted_container_settings(current)
         if current.phase is RunPhase.COMPLETED:
             return current
+        return self._resume_loaded_phase(current)
+
+    def _resume_loaded_phase(self, current: AutonomousRunState) -> AutonomousRunState:
         if current.phase is RunPhase.SUBMITTING:
             raise AutonomousRunError(
                 "submission is ambiguous; inspect scheduler state before retrying"
@@ -1080,18 +1441,23 @@ class AutonomousRunController:
         facts = dict(current.facts or {})
         persisted_image = facts.get("container_image")
         persisted_runtime = facts.get("container_runtime", "auto")
-        if persisted_image is not None and not isinstance(persisted_image, str):
-            raise AutonomousRunError("persisted container image is invalid")
-        if persisted_runtime not in {"auto", "docker", "podman"}:
-            raise AutonomousRunError("persisted container runtime is invalid")
-        if (
-            persisted_image != self.config.container_image
-            or persisted_runtime != self.config.container_runtime
-        ):
+        _validate_persisted_container_image(persisted_image)
+        _validate_persisted_container_runtime(persisted_runtime)
+        if self._container_settings_differ(persisted_image, persisted_runtime):
             raise AutonomousRunError(
                 "container settings differ from the persisted run; "
                 "start a new run instead"
             )
+
+    def _container_settings_differ(
+        self: AutonomousRunController,
+        persisted_image: object,
+        persisted_runtime: object,
+    ) -> bool:
+        return (
+            persisted_image != self.config.container_image
+            or persisted_runtime != self.config.container_runtime
+        )
 
     def _record_unexpected_failure(self, error: Exception) -> None:
         current = self.state.load(self.config.identity.run_id)

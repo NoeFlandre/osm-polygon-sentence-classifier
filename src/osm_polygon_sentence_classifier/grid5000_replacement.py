@@ -48,18 +48,38 @@ def replacement_candidates(
 
     candidates: list[ReplacementCandidate] = []
     for probe in probes:
-        if probe.name == fallback_site:
-            continue
-        if (
-            not probe.reachable
-            or not probe.idle_compatible(requirements)
-            or probe.persistent_free_bytes < requirements.persistent_free_bytes
-        ):
-            continue
-        allocation = choose_allocation(probe.resources, requirements=requirements)
-        if allocation is not None:
-            candidates.append(ReplacementCandidate(probe.name, allocation))
+        candidate = _replacement_candidate(
+            probe,
+            fallback_site=fallback_site,
+            requirements=requirements,
+        )
+        if candidate is not None:
+            candidates.append(candidate)
     return tuple(sorted(candidates, key=lambda item: item.site))
+
+
+def _replacement_candidate(
+    probe: SiteProbe,
+    *,
+    fallback_site: str,
+    requirements: SiteRequirements,
+) -> ReplacementCandidate | None:
+    if probe.name == fallback_site:
+        return None
+    if not _probe_can_replace(probe, requirements):
+        return None
+    allocation = choose_allocation(probe.resources, requirements=requirements)
+    return (
+        ReplacementCandidate(probe.name, allocation) if allocation is not None else None
+    )
+
+
+def _probe_can_replace(probe: SiteProbe, requirements: SiteRequirements) -> bool:
+    return (
+        probe.reachable
+        and probe.idle_compatible(requirements)
+        and probe.persistent_free_bytes >= requirements.persistent_free_bytes
+    )
 
 
 class ReplacementCoordinator:

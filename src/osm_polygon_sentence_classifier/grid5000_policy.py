@@ -34,14 +34,18 @@ def policy_type_for(now: datetime, *, walltime_seconds: int) -> str:
     if walltime_seconds <= 0:
         raise ValueError("walltime_seconds must be positive")
     local = now.astimezone(GRID5000_TIMEZONE)
-    if local.weekday() < 5:
-        duration = timedelta(seconds=walltime_seconds)
-        day_start = local.replace(hour=9, minute=0, second=0, microsecond=0)
-        day_end = local.replace(hour=19, minute=0, second=0, microsecond=0)
-        if local < day_start:
-            return "night" if local + duration <= day_start else "day"
-        if local < day_end:
-            return "day" if local + duration <= day_end else "night"
+    if local.weekday() >= 5:
+        return "night"
+    return _weekday_policy_type(local, timedelta(seconds=walltime_seconds))
+
+
+def _weekday_policy_type(local: datetime, duration: timedelta) -> str:
+    day_start = local.replace(hour=9, minute=0, second=0, microsecond=0)
+    day_end = local.replace(hour=19, minute=0, second=0, microsecond=0)
+    if local < day_start:
+        return "night" if local + duration <= day_start else "day"
+    if local < day_end:
+        return "day" if local + duration <= day_end else "night"
     return "night"
 
 
@@ -67,8 +71,15 @@ def should_seek_replacement(
         raise ValueError("immediate_start_limit must be positive")
     if status.state is not JobState.QUEUED:
         return False
-    local_now = now.astimezone(GRID5000_TIMEZONE)
     forecast = _forecast_datetime(status.scheduled_start)
+    return _forecast_is_outside_window(forecast, now, immediate_start_limit)
+
+
+def _forecast_is_outside_window(
+    forecast: datetime | None,
+    local_now: datetime,
+    immediate_start_limit: timedelta,
+) -> bool:
     if forecast is None:
         return True
     return forecast <= local_now or forecast > local_now + immediate_start_limit
@@ -127,15 +138,19 @@ def forecast_exceeds_immediate_window(
 ) -> bool:
     """Return whether a replacement trial is known to be too late."""
 
-    if (
-        status.state is not JobState.QUEUED
-        or _forecast_datetime(status.scheduled_start) is None
-    ):
+    if not _has_queued_forecast(status):
         return False
     return should_seek_replacement(
         status,
         now=now,
         immediate_start_limit=immediate_start_limit,
+    )
+
+
+def _has_queued_forecast(status: JobStatus) -> bool:
+    return (
+        status.state is JobState.QUEUED
+        and _forecast_datetime(status.scheduled_start) is not None
     )
 
 
@@ -172,48 +187,111 @@ def attempt_immediate_replacement(
 ) -> ReplacementOutcome:
     """Try candidates sequentially and keep whichever allocation starts first."""
 
-    if fallback_job_id <= 0:
-        raise ValueError("fallback_job_id must be positive")
-    if trial_seconds <= 0 or poll_seconds <= 0:
-        raise ValueError("trial_seconds and poll_seconds must be positive")
+    _validate_replacement_arguments(
+        fallback_job_id,
+        trial_seconds=trial_seconds,
+        poll_seconds=poll_seconds,
+    )
     for candidate in candidates:
-        trial_job_id = submit(candidate)
-        deadline = monotonic() + trial_seconds
-        while monotonic() < deadline:
-            fallback = status(fallback_site, fallback_job_id)
-            if fallback.state is JobState.RUNNING:
-                cancel(candidate.site, trial_job_id)
-                return ReplacementOutcome(
-                    site=fallback_site,
-                    job_id=fallback_job_id,
-                    replaced=False,
-                )
-            observed = status(candidate.site, trial_job_id)
-            if observed.state is JobState.RUNNING:
-                cancel(fallback_site, fallback_job_id)
-                return ReplacementOutcome(
-                    site=candidate.site,
-                    job_id=trial_job_id,
-                    replaced=True,
-                )
-            if observed.state in {
-                JobState.TERMINATED,
-                JobState.ERROR,
-                JobState.MISSING,
-            } or forecast_exceeds_immediate_window(
-                observed,
-                now=wall_clock(),
-            ):
-                cancel(candidate.site, trial_job_id)
-                break
-            sleep(min(poll_seconds, max(0.0, deadline - monotonic())))
-        else:
-            cancel(candidate.site, trial_job_id)
+        outcome = _try_replacement_candidate(
+            candidate,
+            fallback_site=fallback_site,
+            fallback_job_id=fallback_job_id,
+            submit=submit,
+            status=status,
+            cancel=cancel,
+            sleep=sleep,
+            monotonic=monotonic,
+            wall_clock=wall_clock,
+            trial_seconds=trial_seconds,
+            poll_seconds=poll_seconds,
+        )
+        if outcome is not None:
+            return outcome
     return ReplacementOutcome(
         site=fallback_site,
         job_id=fallback_job_id,
         replaced=False,
     )
+
+
+def _validate_replacement_arguments(
+    fallback_job_id: int,
+    *,
+    trial_seconds: float,
+    poll_seconds: float,
+) -> None:
+    if fallback_job_id <= 0:
+        raise ValueError("fallback_job_id must be positive")
+    if trial_seconds <= 0 or poll_seconds <= 0:
+        raise ValueError("trial_seconds and poll_seconds must be positive")
+
+
+def _try_replacement_candidate(
+    candidate: ReplacementCandidate,
+    *,
+    fallback_site: str,
+    fallback_job_id: int,
+    submit: Callable[[ReplacementCandidate], int],
+    status: Callable[[str, int], JobStatus],
+    cancel: Callable[[str, int], None],
+    sleep: Callable[[float], None],
+    monotonic: Callable[[], float],
+    wall_clock: Callable[[], datetime],
+    trial_seconds: float,
+    poll_seconds: float,
+) -> ReplacementOutcome | None:
+    trial_job_id = submit(candidate)
+    deadline = monotonic() + trial_seconds
+    while monotonic() < deadline:
+        outcome, observed = _observe_replacement_candidate(
+            candidate,
+            trial_job_id=trial_job_id,
+            fallback_site=fallback_site,
+            fallback_job_id=fallback_job_id,
+            status=status,
+            cancel=cancel,
+        )
+        if outcome is not None:
+            return outcome
+        assert observed is not None
+        if _candidate_should_stop(observed, wall_clock):
+            cancel(candidate.site, trial_job_id)
+            return None
+        sleep(min(poll_seconds, max(0.0, deadline - monotonic())))
+    cancel(candidate.site, trial_job_id)
+    return None
+
+
+def _observe_replacement_candidate(
+    candidate: ReplacementCandidate,
+    *,
+    trial_job_id: int,
+    fallback_site: str,
+    fallback_job_id: int,
+    status: Callable[[str, int], JobStatus],
+    cancel: Callable[[str, int], None],
+) -> tuple[ReplacementOutcome | None, JobStatus | None]:
+    fallback = status(fallback_site, fallback_job_id)
+    if fallback.state is JobState.RUNNING:
+        cancel(candidate.site, trial_job_id)
+        return ReplacementOutcome(fallback_site, fallback_job_id, False), None
+    observed = status(candidate.site, trial_job_id)
+    if observed.state is JobState.RUNNING:
+        cancel(fallback_site, fallback_job_id)
+        return ReplacementOutcome(candidate.site, trial_job_id, True), observed
+    return None, observed
+
+
+def _candidate_should_stop(
+    observed: JobStatus,
+    wall_clock: Callable[[], datetime],
+) -> bool:
+    return observed.state in {
+        JobState.TERMINATED,
+        JobState.ERROR,
+        JobState.MISSING,
+    } or forecast_exceeds_immediate_window(observed, now=wall_clock())
 
 
 __all__ = [

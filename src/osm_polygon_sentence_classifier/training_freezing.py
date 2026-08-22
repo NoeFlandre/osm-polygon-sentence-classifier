@@ -29,6 +29,18 @@ def configure_trainable_layers(
 def _freeze_encoder_for_head_training(model: Any) -> None:
     """Freeze the encoder while leaving its classification head trainable."""
 
+    parameters, head_parameters, classifier_parameters = _head_training_parameters(
+        model
+    )
+    _set_requires_grad(parameters(), False)
+    if callable(head_parameters):
+        _set_requires_grad(head_parameters(), True)
+    _set_requires_grad(classifier_parameters(), True)
+
+
+def _head_training_parameters(
+    model: Any,
+) -> tuple[Any, Any, Any]:
     parameters = getattr(model, "parameters", None)
     head = getattr(model, "head", None)
     classifier = getattr(model, "classifier", None)
@@ -42,14 +54,12 @@ def _freeze_encoder_for_head_training(model: Any) -> None:
         raise TrainingError(
             "model must expose a parameters() method and classifier head"
         )
+    return parameters, head_parameters, classifier_parameters
 
-    for parameter in parameters():
-        parameter.requires_grad = False
-    if callable(head_parameters):
-        for parameter in head_parameters():
-            parameter.requires_grad = True
-    for parameter in classifier_parameters():
-        parameter.requires_grad = True
+
+def _set_requires_grad(parameters: Any, requires_grad: bool) -> None:
+    for parameter in parameters:
+        parameter.requires_grad = requires_grad
 
 
 def _encoder_layers(model: Any) -> Sequence[Any]:
@@ -62,17 +72,26 @@ def _encoder_layers(model: Any) -> Sequence[Any]:
         getattr(model, "layers", None),
     )
     for candidate in candidates:
-        if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes)):
-            return candidate
-        # torch.nn.ModuleList is ordered and sliceable, but it does not register
-        # as collections.abc.Sequence at runtime.
-        if (
-            not isinstance(candidate, (str, bytes, Mapping))
-            and callable(getattr(candidate, "__len__", None))
-            and callable(getattr(candidate, "__getitem__", None))
-        ):
-            return cast(Sequence[Any], candidate)
+        layers = _ordered_layers(candidate)
+        if layers is not None:
+            return layers
     raise TrainingError("model does not expose ordered encoder layers")
+
+
+def _ordered_layers(candidate: Any) -> Sequence[Any] | None:
+    # torch.nn.ModuleList is ordered and sliceable, but it does not register
+    # as collections.abc.Sequence at runtime.
+    if _is_indexable_candidate(candidate):
+        return cast(Sequence[Any], candidate)
+    return None
+
+
+def _is_indexable_candidate(candidate: Any) -> bool:
+    return (
+        not isinstance(candidate, (str, bytes, Mapping))
+        and callable(getattr(candidate, "__len__", None))
+        and callable(getattr(candidate, "__getitem__", None))
+    )
 
 
 def _configure_last_two_layers(model: Any) -> None:

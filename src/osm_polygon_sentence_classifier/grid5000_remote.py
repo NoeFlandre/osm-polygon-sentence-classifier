@@ -90,6 +90,101 @@ def _validate_revision(revision: str) -> None:
         raise ValueError("source_commit must be forty lowercase hexadecimal characters")
 
 
+def _checkpoint_identity_json(identity: Mapping[str, object]) -> str:
+    try:
+        return json.dumps(
+            dict(identity),
+            allow_nan=False,
+            sort_keys=True,
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError("checkpoint identity must be JSON-compatible") from error
+
+
+def _safe_output_relative_path(output_subdirectory: str | Path) -> PurePosixPath:
+    relative = PurePosixPath(str(output_subdirectory))
+    if relative.is_absolute():
+        raise ValueError("output_subdirectory must be a safe relative path")
+    if not relative.parts:
+        raise ValueError("output_subdirectory must be a safe relative path")
+    if any(part in {"", ".", ".."} for part in relative.parts):
+        raise ValueError("output_subdirectory must be a safe relative path")
+    return relative
+
+
+def _checkpoint_probe_command(
+    run_id: str,
+    relative: PurePosixPath,
+    identity_json: str,
+    allow_failed_status: bool,
+) -> str:
+    root = f'"$HOME/{REMOTE_DATA_SUBDIRECTORY}/{REMOTE_RUNS_SUBDIRECTORY}/{run_id}"'
+    output = f'"$root/{"/".join(relative.parts)}"'
+    run_marker = shlex.quote(f'"run_id":"{run_id}"')
+    identity_marker = shlex.quote(f'"identity": {identity_json}')
+    return f"""
+set -euo pipefail
+root={root}
+output={output}
+marker="$root/.operator-managed.json"
+[ -d "$root" ] && [ ! -L "$root" ]
+[ -f "$marker" ] && [ ! -L "$marker" ]
+grep -Fq {run_marker} "$marker"
+if {str(allow_failed_status).lower()}; then
+  grep -Eq '"status":"(active|failed)"' "$marker"
+else
+  grep -Fq '"status":"active"' "$marker"
+fi
+if [ ! -d "$output" ] || [ -L "$output" ]; then
+  printf 'CHECKPOINT_MISSING\n'
+  exit 0
+fi
+ready=false
+for checkpoint in "$output"/checkpoint-*; do
+  [ -d "$checkpoint" ] && [ ! -L "$checkpoint" ] || continue
+  [ -f "$checkpoint/checkpoint-manifest.json" ] && [ ! -L "$checkpoint/checkpoint-manifest.json" ] || continue
+  grep -Fq {identity_marker} "$checkpoint/checkpoint-manifest.json" || continue
+  [ -f "$checkpoint/trainer_state.json" ] && [ ! -L "$checkpoint/trainer_state.json" ] || continue
+  [ -f "$checkpoint/optimizer.pt" ] && [ ! -L "$checkpoint/optimizer.pt" ] || continue
+  [ -f "$checkpoint/scheduler.pt" ] && [ ! -L "$checkpoint/scheduler.pt" ] || continue
+  [ -f "$checkpoint/rng_state.pth" ] && [ ! -L "$checkpoint/rng_state.pth" ] || continue
+  sharded_weight=false
+  for weight in \
+    "$checkpoint"/model-[0-9][0-9][0-9][0-9][0-9]-of-[0-9][0-9][0-9][0-9][0-9].safetensors \
+    "$checkpoint"/pytorch_model-[0-9][0-9][0-9][0-9][0-9]-of-[0-9][0-9][0-9][0-9][0-9].bin
+  do
+    if [ -f "$weight" ] && [ ! -L "$weight" ]; then
+      sharded_weight=true
+      break
+    fi
+  done
+  if {{ [ -f "$checkpoint/model.safetensors" ] && [ ! -L "$checkpoint/model.safetensors" ]; }} \
+    || {{ [ -f "$checkpoint/pytorch_model.bin" ] && [ ! -L "$checkpoint/pytorch_model.bin" ]; }} \
+    || "$sharded_weight"; then
+    ready=true
+    break
+  fi
+done
+if "$ready"; then
+  printf 'CHECKPOINT_READY\n'
+else
+  printf 'CHECKPOINT_MISSING\n'
+fi
+""".strip()
+
+
+def _parse_completion_payload(stdout: str, run_id: str) -> dict[str, object]:
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError as error:
+        raise Grid5000ExecutionError(
+            "remote completion manifest is not valid JSON"
+        ) from error
+    if not isinstance(payload, Mapping) or payload.get("run_id") != run_id:
+        raise Grid5000ExecutionError("remote completion manifest identity is invalid")
+    return dict(payload)
+
+
 class Grid5000Remote:
     """Operate on one frontend through bounded, auditable SSH commands."""
 
@@ -262,17 +357,7 @@ printf 'HF_AUTH_INSTALLED\n'
             f'{run_id}/completion.json"'
         )
         result = self.run(f"test -f {path} && cat {path}")
-        try:
-            payload = json.loads(result.stdout)
-        except json.JSONDecodeError as error:
-            raise Grid5000ExecutionError(
-                "remote completion manifest is not valid JSON"
-            ) from error
-        if not isinstance(payload, Mapping) or payload.get("run_id") != run_id:
-            raise Grid5000ExecutionError(
-                "remote completion manifest identity is invalid"
-            )
-        return dict(payload)
+        return _parse_completion_payload(result.stdout, run_id)
 
     def has_complete_checkpoint(
         self,
@@ -291,74 +376,14 @@ printf 'HF_AUTH_INSTALLED\n'
         _validate_run_id(run_id)
         if not isinstance(allow_failed_status, bool):
             raise ValueError("allow_failed_status must be a boolean")
-        try:
-            identity_json = json.dumps(
-                dict(identity),
-                allow_nan=False,
-                sort_keys=True,
-            )
-        except (TypeError, ValueError) as error:
-            raise ValueError("checkpoint identity must be JSON-compatible") from error
-        relative = PurePosixPath(str(output_subdirectory))
-        if (
-            relative.is_absolute()
-            or not relative.parts
-            or any(part in {"", ".", ".."} for part in relative.parts)
-        ):
-            raise ValueError("output_subdirectory must be a safe relative path")
-        root = f'"$HOME/{REMOTE_DATA_SUBDIRECTORY}/{REMOTE_RUNS_SUBDIRECTORY}/{run_id}"'
-        output = f'"$root/{"/".join(relative.parts)}"'
-        run_marker = shlex.quote(f'"run_id":"{run_id}"')
-        identity_marker = shlex.quote(f'"identity": {identity_json}')
-        command = f"""
-set -euo pipefail
-root={root}
-output={output}
-marker="$root/.operator-managed.json"
-[ -d "$root" ] && [ ! -L "$root" ]
-[ -f "$marker" ] && [ ! -L "$marker" ]
-grep -Fq {run_marker} "$marker"
-if {str(allow_failed_status).lower()}; then
-  grep -Eq '"status":"(active|failed)"' "$marker"
-else
-  grep -Fq '"status":"active"' "$marker"
-fi
-if [ ! -d "$output" ] || [ -L "$output" ]; then
-  printf 'CHECKPOINT_MISSING\n'
-  exit 0
-fi
-ready=false
-for checkpoint in "$output"/checkpoint-*; do
-  [ -d "$checkpoint" ] && [ ! -L "$checkpoint" ] || continue
-  [ -f "$checkpoint/checkpoint-manifest.json" ] && [ ! -L "$checkpoint/checkpoint-manifest.json" ] || continue
-  grep -Fq {identity_marker} "$checkpoint/checkpoint-manifest.json" || continue
-  [ -f "$checkpoint/trainer_state.json" ] && [ ! -L "$checkpoint/trainer_state.json" ] || continue
-  [ -f "$checkpoint/optimizer.pt" ] && [ ! -L "$checkpoint/optimizer.pt" ] || continue
-  [ -f "$checkpoint/scheduler.pt" ] && [ ! -L "$checkpoint/scheduler.pt" ] || continue
-  [ -f "$checkpoint/rng_state.pth" ] && [ ! -L "$checkpoint/rng_state.pth" ] || continue
-  sharded_weight=false
-  for weight in \
-    "$checkpoint"/model-[0-9][0-9][0-9][0-9][0-9]-of-[0-9][0-9][0-9][0-9][0-9].safetensors \
-    "$checkpoint"/pytorch_model-[0-9][0-9][0-9][0-9][0-9]-of-[0-9][0-9][0-9][0-9][0-9].bin
-  do
-    if [ -f "$weight" ] && [ ! -L "$weight" ]; then
-      sharded_weight=true
-      break
-    fi
-  done
-  if {{ [ -f "$checkpoint/model.safetensors" ] && [ ! -L "$checkpoint/model.safetensors" ]; }} \
-    || {{ [ -f "$checkpoint/pytorch_model.bin" ] && [ ! -L "$checkpoint/pytorch_model.bin" ]; }} \
-    || "$sharded_weight"; then
-    ready=true
-    break
-  fi
-done
-if "$ready"; then
-  printf 'CHECKPOINT_READY\n'
-else
-  printf 'CHECKPOINT_MISSING\n'
-fi
-""".strip()
+        identity_json = _checkpoint_identity_json(identity)
+        relative = _safe_output_relative_path(output_subdirectory)
+        command = _checkpoint_probe_command(
+            run_id,
+            relative,
+            identity_json,
+            allow_failed_status,
+        )
         result = self.run(command)
         if "CHECKPOINT_READY" in result.stdout:
             return True

@@ -1,3 +1,4 @@
+import re
 from dataclasses import is_dataclass
 
 import pytest
@@ -206,20 +207,56 @@ def test_validate_columns_accepts_the_required_schema_in_order() -> None:
 @pytest.mark.parametrize(
     ("columns", "expected_message"),
     [
-        (REQUIRED_COLUMNS[:-1], "missing required columns"),
-        (REQUIRED_COLUMNS + ("unexpected",), "unexpected columns"),
-        (REORDERED_COLUMNS, "required column order"),
+        (REQUIRED_COLUMNS[:-1], "missing required columns: label_evidence"),
+        (REQUIRED_COLUMNS + ("unexpected",), "unexpected columns: unexpected"),
+        (
+            REORDERED_COLUMNS,
+            "required column order does not match the dataset contract",
+        ),
         (
             REQUIRED_COLUMNS[:-1] + (REQUIRED_COLUMNS[-2], REQUIRED_COLUMNS[-1]),
-            "duplicate columns",
+            "duplicate columns: polygon_reason",
         ),
     ],
 )
 def test_validate_columns_rejects_schema_mismatches(
     columns: tuple[str, ...], expected_message: str
 ) -> None:
-    with pytest.raises(DatasetContractError, match=expected_message):
+    with pytest.raises(
+        DatasetContractError,
+        match=rf"\A{re.escape(expected_message)}\Z",
+    ):
         LANDUSE_DATASET_CONTRACT.validate_columns(columns)
+
+
+def test_validate_columns_reports_all_duplicate_missing_and_extra_names() -> None:
+    with pytest.raises(
+        DatasetContractError,
+        match=r"\Aduplicate columns: sentence_id, polygon_id\Z",
+    ):
+        LANDUSE_DATASET_CONTRACT.validate_columns(
+            REQUIRED_COLUMNS + ("sentence_id", "polygon_id")
+        )
+
+    with pytest.raises(
+        DatasetContractError,
+        match=r"\Amissing required columns: polygon_reason, label_evidence\Z",
+    ):
+        LANDUSE_DATASET_CONTRACT.validate_columns(
+            tuple(
+                column
+                for column in REQUIRED_COLUMNS
+                if column not in {"label_evidence", "polygon_reason"}
+            )
+        )
+
+    with pytest.raises(
+        DatasetContractError,
+        match=r"\Aunexpected columns: extra_a, extra_b\Z",
+    ):
+        LANDUSE_DATASET_CONTRACT.validate_columns(
+            REQUIRED_COLUMNS + ("extra_a", "extra_b")
+        )
 
 
 @pytest.mark.parametrize("label", ["no", "yes", "uncertain"])
@@ -233,19 +270,43 @@ def test_validate_row_accepts_supported_labels(label: str) -> None:
 def test_validate_row_requires_the_contract_keys() -> None:
     row = _valid_row()
     del row["sentence_text_raw"]
+    del row["sentence_id"]
 
-    with pytest.raises(DatasetContractError, match="sentence_text_raw"):
+    with pytest.raises(
+        DatasetContractError,
+        match=r"\Amissing required row keys: sentence_id, sentence_text_raw\Z",
+    ):
         LANDUSE_DATASET_CONTRACT.validate_row(row)
 
 
 @pytest.mark.parametrize(
     ("field", "value", "expected_message"),
     [
-        ("region", "iran", "region"),
-        ("sentence_text_normalized", "", "sentence_text_normalized"),
-        ("sentence_text_normalized", "   ", "sentence_text_normalized"),
-        ("sentence_text_normalized", None, "sentence_text_normalized"),
-        ("landuse_relevance", "maybe", "landuse_relevance"),
+        (
+            "region",
+            "iran",
+            "region must be 'afghanistan', got 'iran'",
+        ),
+        (
+            "sentence_text_normalized",
+            "",
+            "sentence_text_normalized must be a non-empty string",
+        ),
+        (
+            "sentence_text_normalized",
+            "   ",
+            "sentence_text_normalized must be a non-empty string",
+        ),
+        (
+            "sentence_text_normalized",
+            None,
+            "sentence_text_normalized must be a non-empty string",
+        ),
+        (
+            "landuse_relevance",
+            "maybe",
+            "landuse_relevance must be one of ('no', 'yes', 'uncertain'), got 'maybe'",
+        ),
     ],
 )
 def test_validate_row_rejects_values_outside_the_contract(
@@ -254,7 +315,10 @@ def test_validate_row_rejects_values_outside_the_contract(
     row = _valid_row()
     row[field] = value
 
-    with pytest.raises(DatasetContractError, match=expected_message):
+    with pytest.raises(
+        DatasetContractError,
+        match=rf"\A{re.escape(expected_message)}\Z",
+    ):
         LANDUSE_DATASET_CONTRACT.validate_row(row)
 
 
@@ -299,3 +363,23 @@ def test_worldwide_v2_contract_accepts_any_non_blank_region() -> None:
     )
 
     assert WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT.validate_row(row) is None
+
+
+@pytest.mark.parametrize("region", [None, "", "   ", 42])
+def test_worldwide_v2_contract_rejects_blank_or_non_string_regions(
+    region: object,
+) -> None:
+    row = dict.fromkeys(WORLDWIDE_REQUIRED_COLUMNS)
+    row.update(
+        {
+            "region": region,
+            "sentence_text_normalized": "A physical description.",
+            "place_relevance": "yes",
+        }
+    )
+
+    with pytest.raises(
+        DatasetContractError,
+        match=r"\Aregion must be a non-empty string\Z",
+    ):
+        WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT.validate_row(row)

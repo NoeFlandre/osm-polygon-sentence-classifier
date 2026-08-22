@@ -153,12 +153,16 @@ def _canonical_training_config(
         raise Grid5000ConfigurationError(
             "training_config must be a JSON object"
         ) from error
-    if not isinstance(normalized, dict) or any(
-        not isinstance(key, str) for key in normalized
-    ):
-        raise Grid5000ConfigurationError("training_config must be a JSON object")
+    _validate_normalized_training_config(normalized)
     canonical = _canonical_json(normalized)
     return canonical, normalized
+
+
+def _validate_normalized_training_config(normalized: object) -> None:
+    if not isinstance(normalized, dict):
+        raise Grid5000ConfigurationError("training_config must be a JSON object")
+    if any(not isinstance(key, str) for key in normalized):
+        raise Grid5000ConfigurationError("training_config must be a JSON object")
 
 
 def _require_revision(name: str, value: object) -> str:
@@ -186,6 +190,17 @@ def _validate_container_settings(
     container_image: str | None,
     container_runtime: ContainerRuntime,
 ) -> None:
+    _validate_container_runtime(container_runtime)
+    if container_image is None:
+        if container_runtime != "auto":
+            raise Grid5000ConfigurationError(
+                "container_runtime requires an explicit container_image"
+            )
+        return
+    _validate_container_image(container_image)
+
+
+def _validate_container_runtime(container_runtime: object) -> None:
     if not isinstance(container_runtime, str) or container_runtime not in {
         "auto",
         "docker",
@@ -194,12 +209,9 @@ def _validate_container_settings(
         raise Grid5000ConfigurationError(
             "container_runtime must be auto, docker, or podman"
         )
-    if container_image is None:
-        if container_runtime != "auto":
-            raise Grid5000ConfigurationError(
-                "container_runtime requires an explicit container_image"
-            )
-        return
+
+
+def _validate_container_image(container_image: str) -> None:
     image = _require_non_empty("container_image", container_image)
     if not _CONTAINER_IMAGE_PATTERN.fullmatch(image):
         raise Grid5000ConfigurationError(
@@ -275,39 +287,64 @@ class Grid5000RunIdentity:
     def from_payload(cls, payload: Mapping[str, object]) -> Grid5000RunIdentity:
         """Reconstruct and validate an identity persisted in durable state."""
 
-        try:
-            source_commit = payload["source_commit"]
-            dataset_revision = payload["dataset_revision"]
-            model_name_or_path = payload["model_name_or_path"]
-            model_revision = payload["model_revision"]
-            training_config = payload["training_config"]
-            task_name = payload.get("task_name", "landuse")
-        except KeyError as error:
-            raise Grid5000StateError(
-                "durable state has an incomplete run identity"
-            ) from error
-        if (
-            not isinstance(source_commit, str)
-            or not isinstance(dataset_revision, str)
-            or not isinstance(model_name_or_path, str)
-            or not isinstance(model_revision, str)
-            or not isinstance(task_name, str)
-            or not isinstance(training_config, Mapping)
-        ):
-            raise Grid5000StateError("durable state has an invalid run identity")
+        values = _identity_payload_values(payload)
+        (
+            source_commit,
+            dataset_revision,
+            model_name_or_path,
+            model_revision,
+            task_name,
+            training_config,
+        ) = _validated_identity_payload_values(values)
         try:
             return cls(
                 source_commit=source_commit,
                 dataset_revision=dataset_revision,
                 model_name_or_path=model_name_or_path,
                 model_revision=model_revision,
-                training_config=cast(Mapping[str, object], training_config),
+                training_config=training_config,
                 task_name=task_name,
             )
         except Grid5000ConfigurationError as error:
             raise Grid5000StateError(
                 "durable state has an invalid run identity"
             ) from error
+
+
+def _identity_payload_values(
+    payload: Mapping[str, object],
+) -> tuple[object, object, object, object, object, object]:
+    try:
+        return (
+            payload["source_commit"],
+            payload["dataset_revision"],
+            payload["model_name_or_path"],
+            payload["model_revision"],
+            payload.get("task_name", "landuse"),
+            payload["training_config"],
+        )
+    except KeyError as error:
+        raise Grid5000StateError(
+            "durable state has an incomplete run identity"
+        ) from error
+
+
+def _validated_identity_payload_values(
+    values: tuple[object, object, object, object, object, object],
+) -> tuple[str, str, str, str, str, Mapping[str, object]]:
+    if not all(isinstance(value, str) for value in values[:5]):
+        raise Grid5000StateError("durable state has an invalid run identity")
+    training_config = values[5]
+    if not isinstance(training_config, Mapping):
+        raise Grid5000StateError("durable state has an invalid run identity")
+    return (
+        cast(str, values[0]),
+        cast(str, values[1]),
+        cast(str, values[2]),
+        cast(str, values[3]),
+        cast(str, values[4]),
+        cast(Mapping[str, object], training_config),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,46 +360,7 @@ class Grid5000Allocation:
     resource_property: str | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.site, str) or _SITE_PATTERN.fullmatch(self.site) is None:
-            raise Grid5000ConfigurationError(
-                "site must be a lowercase Grid'5000 site name"
-            )
-        if self.queue not in {"default", "production"}:
-            raise Grid5000ConfigurationError("queue must be 'default' or 'production'")
-        if self.resource_type not in {"standard", "exotic"}:
-            raise Grid5000ConfigurationError(
-                "resource_type must be 'standard' or 'exotic'"
-            )
-        if self.policy_type not in {"day", "night"}:
-            raise Grid5000ConfigurationError("policy_type must be 'day' or 'night'")
-        if (
-            isinstance(self.gpu_count, bool)
-            or not isinstance(self.gpu_count, int)
-            or self.gpu_count != 1
-        ):
-            raise Grid5000ConfigurationError("gpu_count must be exactly 1")
-        if (
-            isinstance(self.walltime_seconds, bool)
-            or not isinstance(self.walltime_seconds, int)
-            or self.walltime_seconds <= 0
-            or self.walltime_seconds > MAX_WALLTIME_SECONDS
-        ):
-            raise Grid5000ConfigurationError(
-                "walltime_seconds must be between 1 second and 12 hours"
-            )
-        if (
-            self.policy_type == "day"
-            and self.walltime_seconds > MAX_DAY_WALLTIME_SECONDS
-        ):
-            raise Grid5000ConfigurationError(
-                "day policy walltime_seconds must be at most one hour"
-            )
-        if self.resource_property is not None and (
-            _RESOURCE_PROPERTY_PATTERN.fullmatch(self.resource_property) is None
-        ):
-            raise Grid5000ConfigurationError(
-                "resource_property must be a generated GPU capability filter"
-            )
+        _validate_allocation_values(self)
 
     @property
     def walltime(self) -> str:
@@ -377,21 +375,95 @@ class Grid5000Allocation:
 
         if not worker_command or "\n" in worker_command or "\r" in worker_command:
             raise Grid5000ConfigurationError("worker_command must be a single line")
-        command: list[str] = ["oarsub", "-q", self.queue]
-        if self.resource_property is not None:
-            command.extend(("-p", self.resource_property))
-        if self.resource_type == "exotic":
-            command.extend(("-t", self.resource_type))
-        command.extend(
-            (
-                "-t",
-                self.policy_type,
-                "-l",
-                f"gpu={self.gpu_count},walltime={self.walltime}",
-                worker_command,
-            )
+        return _scheduler_arguments(self, worker_command)
+
+
+def _validate_allocation_values(allocation: Grid5000Allocation) -> None:
+    _validate_allocation_site(allocation.site)
+    _validate_allocation_modes(allocation.queue, allocation.resource_type)
+    _validate_allocation_policy(allocation.policy_type)
+    _validate_allocation_gpu_count(allocation.gpu_count)
+    _validate_allocation_walltime(allocation.walltime_seconds, allocation.policy_type)
+    _validate_resource_property(allocation.resource_property)
+
+
+def _validate_allocation_site(site: object) -> None:
+    if not isinstance(site, str) or _SITE_PATTERN.fullmatch(site) is None:
+        raise Grid5000ConfigurationError("site must be a lowercase Grid'5000 site name")
+
+
+def _validate_allocation_modes(queue: object, resource_type: object) -> None:
+    if queue not in {"default", "production"}:
+        raise Grid5000ConfigurationError("queue must be 'default' or 'production'")
+    if resource_type not in {"standard", "exotic"}:
+        raise Grid5000ConfigurationError("resource_type must be 'standard' or 'exotic'")
+
+
+def _validate_allocation_policy(policy_type: object) -> None:
+    if policy_type not in {"day", "night"}:
+        raise Grid5000ConfigurationError("policy_type must be 'day' or 'night'")
+
+
+def _validate_allocation_gpu_count(gpu_count: object) -> None:
+    if isinstance(gpu_count, bool) or not isinstance(gpu_count, int) or gpu_count != 1:
+        raise Grid5000ConfigurationError("gpu_count must be exactly 1")
+
+
+def _validate_allocation_walltime(
+    walltime_seconds: object, policy_type: object
+) -> None:
+    _validate_walltime_range(walltime_seconds)
+    _validate_day_walltime(walltime_seconds, policy_type)
+
+
+def _validate_walltime_range(walltime_seconds: object) -> None:
+    if (
+        isinstance(walltime_seconds, bool)
+        or not isinstance(walltime_seconds, int)
+        or walltime_seconds <= 0
+        or walltime_seconds > MAX_WALLTIME_SECONDS
+    ):
+        raise Grid5000ConfigurationError(
+            "walltime_seconds must be between 1 second and 12 hours"
         )
-        return tuple(command)
+
+
+def _validate_day_walltime(walltime_seconds: object, policy_type: object) -> None:
+    seconds = cast(int, walltime_seconds)
+    if policy_type == "day" and seconds > MAX_DAY_WALLTIME_SECONDS:
+        raise Grid5000ConfigurationError(
+            "day policy walltime_seconds must be at most one hour"
+        )
+
+
+def _validate_resource_property(resource_property: object) -> None:
+    if resource_property is not None and (
+        not isinstance(resource_property, str)
+        or _RESOURCE_PROPERTY_PATTERN.fullmatch(resource_property) is None
+    ):
+        raise Grid5000ConfigurationError(
+            "resource_property must be a generated GPU capability filter"
+        )
+
+
+def _scheduler_arguments(
+    allocation: Grid5000Allocation, worker_command: str
+) -> tuple[str, ...]:
+    command: list[str] = ["oarsub", "-q", allocation.queue]
+    if allocation.resource_property is not None:
+        command.extend(("-p", allocation.resource_property))
+    if allocation.resource_type == "exotic":
+        command.extend(("-t", allocation.resource_type))
+    command.extend(
+        (
+            "-t",
+            allocation.policy_type,
+            "-l",
+            f"gpu={allocation.gpu_count},walltime={allocation.walltime}",
+            worker_command,
+        )
+    )
+    return tuple(command)
 
 
 def _ssh_argv(site: str, remote_command: str) -> tuple[str, ...]:
@@ -726,17 +798,21 @@ def parse_quota_output(output: str) -> QuotaUsage:
         match = _QUOTA_ROW_PATTERN.match(line)
         if match is None:
             continue
-        used_kib = int(match.group("used"))
-        soft_kib = int(match.group("soft"))
-        hard_kib = int(match.group("hard"))
-        if soft_kib <= 0 or hard_kib < soft_kib:
-            raise Grid5000ConfigurationError("home quota limits are invalid")
-        return QuotaUsage(
-            used_bytes=used_kib * 1024,
-            soft_limit_bytes=soft_kib * 1024,
-            hard_limit_bytes=hard_kib * 1024,
-        )
+        return _quota_usage_from_match(match)
     raise Grid5000ConfigurationError("home quota output has no usable data row")
+
+
+def _quota_usage_from_match(match: re.Match[str]) -> QuotaUsage:
+    used_kib = int(match.group("used"))
+    soft_kib = int(match.group("soft"))
+    hard_kib = int(match.group("hard"))
+    if soft_kib <= 0 or hard_kib < soft_kib:
+        raise Grid5000ConfigurationError("home quota limits are invalid")
+    return QuotaUsage(
+        used_bytes=used_kib * 1024,
+        soft_limit_bytes=soft_kib * 1024,
+        hard_limit_bytes=hard_kib * 1024,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -750,24 +826,13 @@ class Grid5000State:
     submission_command: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.phase not in ("submitting", "submitted"):
-            raise Grid5000StateError("durable state has an unsupported phase")
-        if not self.scheduler_command or any(
-            not isinstance(value, str) for value in self.scheduler_command
-        ):
-            raise Grid5000StateError("durable state has no scheduler command")
-        if not self.submission_command:
-            object.__setattr__(self, "submission_command", self.scheduler_command)
-        elif any(not isinstance(value, str) for value in self.submission_command):
-            raise Grid5000StateError("durable state submission command is invalid")
-        if self.phase == "submitting" and self.job_id is not None:
-            raise Grid5000StateError("submitting state cannot contain a job ID")
-        if self.phase == "submitted" and (
-            isinstance(self.job_id, bool)
-            or not isinstance(self.job_id, int)
-            or self.job_id <= 0
-        ):
-            raise Grid5000StateError("submitted state must contain one positive job ID")
+        _validate_grid_state_phase(self.phase)
+        _validate_grid_state_scheduler_command(self.scheduler_command)
+        submission_command = _normalized_submission_command(
+            self.scheduler_command, self.submission_command
+        )
+        object.__setattr__(self, "submission_command", submission_command)
+        _validate_grid_state_job(self.phase, self.job_id)
 
     def to_dict(self) -> dict[str, object]:
         """Return the state document written to disk."""
@@ -782,39 +847,105 @@ class Grid5000State:
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, object]) -> Grid5000State:
-        try:
-            identity_payload = payload["identity"]
-            scheduler_command = payload["scheduler_command"]
-            phase = payload["phase"]
-            job_id = payload["job_id"]
-        except KeyError as error:
-            raise Grid5000StateError("durable state is incomplete") from error
-        if not isinstance(identity_payload, Mapping):
-            raise Grid5000StateError("durable state identity is invalid")
-        if not isinstance(scheduler_command, list) or any(
-            not isinstance(value, str) for value in scheduler_command
-        ):
-            raise Grid5000StateError("durable state scheduler command is invalid")
-        submission_command = payload.get("submission_command", scheduler_command)
-        if not isinstance(submission_command, list) or any(
-            not isinstance(value, str) for value in submission_command
-        ):
-            raise Grid5000StateError("durable state submission command is invalid")
-        if not isinstance(phase, str) or phase not in ("submitting", "submitted"):
-            raise Grid5000StateError("durable state phase is invalid")
-        if job_id is not None and (
-            isinstance(job_id, bool) or not isinstance(job_id, int)
-        ):
-            raise Grid5000StateError("durable state job ID is invalid")
-        return cls(
-            identity=Grid5000RunIdentity.from_payload(
-                cast(Mapping[str, object], identity_payload)
-            ),
-            phase=phase,
-            scheduler_command=tuple(cast(str, value) for value in scheduler_command),
-            job_id=cast(int | None, job_id),
-            submission_command=tuple(cast(str, value) for value in submission_command),
+        identity_payload, scheduler_command, phase, job_id = _state_payload_fields(
+            payload
         )
+        identity_payload = _validate_state_identity_payload(identity_payload)
+        submission_command = payload.get("submission_command", scheduler_command)
+        scheduler_command = _validate_state_command_payload(
+            scheduler_command, "durable state scheduler command is invalid"
+        )
+        submission_command = _validate_state_command_payload(
+            submission_command, "durable state submission command is invalid"
+        )
+        phase = _validate_state_phase_payload(phase)
+        job_id = _validate_state_job_payload(job_id)
+        return cls(
+            identity=Grid5000RunIdentity.from_payload(identity_payload),
+            phase=phase,
+            scheduler_command=tuple(scheduler_command),
+            job_id=job_id,
+            submission_command=tuple(submission_command),
+        )
+
+
+def _validate_grid_state_phase(phase: object) -> None:
+    if phase not in ("submitting", "submitted"):
+        raise Grid5000StateError("durable state has an unsupported phase")
+
+
+def _validate_grid_state_scheduler_command(command: tuple[str, ...]) -> None:
+    if not command or any(not isinstance(value, str) for value in command):
+        raise Grid5000StateError("durable state has no scheduler command")
+
+
+def _normalized_submission_command(
+    scheduler_command: tuple[str, ...], submission_command: tuple[str, ...]
+) -> tuple[str, ...]:
+    if not submission_command:
+        return scheduler_command
+    if any(not isinstance(value, str) for value in submission_command):
+        raise Grid5000StateError("durable state submission command is invalid")
+    return submission_command
+
+
+def _validate_grid_state_job(phase: object, job_id: object) -> None:
+    _validate_submitting_job(phase, job_id)
+    _validate_submitted_job(phase, job_id)
+
+
+def _validate_submitting_job(phase: object, job_id: object) -> None:
+    if phase == "submitting" and job_id is not None:
+        raise Grid5000StateError("submitting state cannot contain a job ID")
+
+
+def _validate_submitted_job(phase: object, job_id: object) -> None:
+    if phase == "submitted" and (
+        isinstance(job_id, bool) or not isinstance(job_id, int) or job_id <= 0
+    ):
+        raise Grid5000StateError("submitted state must contain one positive job ID")
+
+
+def _state_payload_fields(
+    payload: Mapping[str, object],
+) -> tuple[object, object, object, object]:
+    try:
+        return (
+            payload["identity"],
+            payload["scheduler_command"],
+            payload["phase"],
+            payload["job_id"],
+        )
+    except KeyError as error:
+        raise Grid5000StateError("durable state is incomplete") from error
+
+
+def _validate_state_identity_payload(
+    identity_payload: object,
+) -> Mapping[str, object]:
+    if not isinstance(identity_payload, Mapping):
+        raise Grid5000StateError("durable state identity is invalid")
+    return cast(Mapping[str, object], identity_payload)
+
+
+def _validate_state_command_payload(command: object, message: str) -> list[str]:
+    if not isinstance(command, list) or any(
+        not isinstance(value, str) for value in command
+    ):
+        raise Grid5000StateError(message)
+    return cast(list[str], command)
+
+
+def _validate_state_phase_payload(phase: object) -> Grid5000Phase:
+    if not isinstance(phase, str) or phase not in ("submitting", "submitted"):
+        raise Grid5000StateError("durable state phase is invalid")
+    return phase
+
+
+def _validate_state_job_payload(job_id: object) -> int | None:
+    if job_id is not None and (isinstance(job_id, bool) or not isinstance(job_id, int)):
+        raise Grid5000StateError("durable state job ID is invalid")
+    return cast(int | None, job_id)
 
 
 def _check_managed_mode(path: Path, expected: int, message: str) -> None:
@@ -877,9 +1008,7 @@ class Grid5000StateStore:
     def _state_path(self, run_id: str) -> Path:
         return self._run_directory(run_id) / "state.json"
 
-    def load(self, run_id: str) -> Grid5000State | None:
-        """Load one state document, rejecting ambiguous filesystem state."""
-
+    def _load_run_directory(self, run_id: str) -> Path | None:
         self._validate_run_id(run_id)
         _reject_symlink_components(self.root)
         if self.root.is_symlink():
@@ -892,21 +1021,46 @@ class Grid5000StateStore:
         _check_managed_mode(
             run_directory, 0o700, "run state directory permissions are unsafe"
         )
+        return run_directory
+
+    @staticmethod
+    def _read_state_document(run_directory: Path) -> Mapping[str, object]:
         lock_path = run_directory / ".intent.lock"
+        Grid5000StateStore._require_no_submission_intent(lock_path)
+        state_path = run_directory / "state.json"
+        Grid5000StateStore._require_readable_state_document(state_path)
+        return Grid5000StateStore._read_state_payload(state_path)
+
+    @staticmethod
+    def _require_no_submission_intent(lock_path: Path) -> None:
         if lock_path.exists() or lock_path.is_symlink():
             raise Grid5000StateError("submission state is ambiguous")
-        state_path = run_directory / "state.json"
+
+    @staticmethod
+    def _require_readable_state_document(state_path: Path) -> None:
         if not state_path.exists() or state_path.is_symlink():
             raise Grid5000StateError("run state document is missing or unsafe")
         _check_managed_mode(
             state_path, 0o600, "run state document permissions are unsafe"
         )
+
+    @staticmethod
+    def _read_state_payload(state_path: Path) -> Mapping[str, object]:
         try:
             payload = json.loads(state_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise Grid5000StateError("run state document cannot be read") from error
         if not isinstance(payload, Mapping):
             raise Grid5000StateError("run state document must be an object")
+        return cast(Mapping[str, object], payload)
+
+    def load(self, run_id: str) -> Grid5000State | None:
+        """Load one state document, rejecting ambiguous filesystem state."""
+
+        run_directory = self._load_run_directory(run_id)
+        if run_directory is None:
+            return None
+        payload = self._read_state_document(run_directory)
         state = Grid5000State.from_dict(payload)
         if state.identity.run_id != run_id:
             raise Grid5000StateError("run state identity does not match its directory")
@@ -953,13 +1107,16 @@ class Grid5000StateStore:
     def create_submitting(self, state: Grid5000State) -> None:
         """Claim a run ID and write its pre-submit intent exactly once."""
 
-        if state.phase != "submitting":
-            raise Grid5000StateError("submission intent must be in submitting phase")
+        _require_submitting_state(state)
         run_directory = self._ensure_run_directory(state.identity.run_id)
         state_path = run_directory / "state.json"
         lock_path = run_directory / ".intent.lock"
-        if state_path.exists() or state_path.is_symlink():
-            raise Grid5000StateError("run already has durable submission state")
+        _require_unclaimed_submission(state_path, lock_path)
+        self._write_submission_intent(run_directory, lock_path, state)
+
+    def _write_submission_intent(
+        self, run_directory: Path, lock_path: Path, state: Grid5000State
+    ) -> None:
         try:
             descriptor = os.open(
                 lock_path,
@@ -978,6 +1135,18 @@ class Grid5000StateStore:
             raise Grid5000StateError(
                 "submission intent cannot be recorded securely"
             ) from error
+
+
+def _require_submitting_state(state: Grid5000State) -> None:
+    if state.phase != "submitting":
+        raise Grid5000StateError("submission intent must be in submitting phase")
+
+
+def _require_unclaimed_submission(state_path: Path, lock_path: Path) -> None:
+    if state_path.exists() or state_path.is_symlink():
+        raise Grid5000StateError("run already has durable submission state")
+    if lock_path.exists() or lock_path.is_symlink():
+        raise Grid5000StateError("submission state is ambiguous")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1036,13 +1205,25 @@ class Grid5000Operator:
 
         if not execute:
             return Grid5000Submission(plan=self.plan, executed=False)
+        return self._submit_guarded()
 
+    def _submit_guarded(self) -> Grid5000Submission:
         existing = self.state_store.load(self.plan.identity.run_id)
-        if existing is not None:
-            if existing.phase == "submitted":
-                raise Grid5000StateError("run already has a recorded submission")
-            raise Grid5000StateError("run has an ambiguous submitting state")
+        _require_no_existing_submission(existing)
+        self._run_submission_preflight()
 
+        intent = Grid5000State(
+            identity=self.plan.identity,
+            phase="submitting",
+            scheduler_command=self.plan.scheduler_command,
+            submission_command=self.plan.submission_command,
+        )
+        self.state_store.create_submitting(intent)
+        job_id = self._submit_job()
+        self._save_submitted_state(job_id)
+        return Grid5000Submission(plan=self.plan, executed=True, job_id=job_id)
+
+    def _run_submission_preflight(self) -> None:
         self._run_checked(self.plan.remote_checkout_command, "remote checkout")
         self._run_checked(self.plan.policy_site_command, "site policy")
         self._run_checked(self.plan.policy_total_command, "total policy")
@@ -1053,20 +1234,16 @@ class Grid5000Operator:
                 "Grid'5000 home soft quota has insufficient safe headroom"
             )
 
-        intent = Grid5000State(
-            identity=self.plan.identity,
-            phase="submitting",
-            scheduler_command=self.plan.scheduler_command,
-            submission_command=self.plan.submission_command,
-        )
-        self.state_store.create_submitting(intent)
+    def _submit_job(self) -> int:
         result = self._run_checked(self.plan.submission_command, "OAR submission")
         try:
-            job_id = parse_job_id(result.stdout)
+            return parse_job_id(result.stdout)
         except Grid5000ConfigurationError as error:
             raise Grid5000ExecutionError(
                 "OAR submission returned an invalid job ID"
             ) from error
+
+    def _save_submitted_state(self, job_id: int) -> None:
         self.state_store.save(
             Grid5000State(
                 identity=self.plan.identity,
@@ -1076,7 +1253,14 @@ class Grid5000Operator:
                 submission_command=self.plan.submission_command,
             )
         )
-        return Grid5000Submission(plan=self.plan, executed=True, job_id=job_id)
+
+
+def _require_no_existing_submission(existing: Grid5000State | None) -> None:
+    if existing is None:
+        return
+    if existing.phase == "submitted":
+        raise Grid5000StateError("run already has a recorded submission")
+    raise Grid5000StateError("run has an ambiguous submitting state")
 
 
 __all__ = [

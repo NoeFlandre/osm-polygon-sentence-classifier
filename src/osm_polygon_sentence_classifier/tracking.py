@@ -47,19 +47,27 @@ def settings_for(
 
     directory = resolve_managed_path(config.data_root, TRACKING_SUBDIRECTORY)
     effective_project = config.project_name if project is None else project
-    if not isinstance(effective_project, str) or not effective_project.strip():
-        raise TrackingError("Trackio project must be a non-empty string")
-    if "\n" in effective_project or "\r" in effective_project:
-        raise TrackingError("Trackio project must be a single-line string")
+    _validate_project_name(effective_project)
     if effective_project in V2_TRACKIO_PROJECTS:
-        return TrackioSettings(
-            project=effective_project,
-            directory=directory,
-            space_id=V2_TRACKIO_SPACE_ID,
-            bucket_id=V2_TRACKIO_BUCKET_ID,
-            static_space_id=V2_TRACKIO_STATIC_SPACE_ID,
-        )
+        return _v2_settings(effective_project, directory)
     return TrackioSettings(project=effective_project, directory=directory)
+
+
+def _validate_project_name(value: object) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise TrackingError("Trackio project must be a non-empty string")
+    if "\n" in value or "\r" in value:
+        raise TrackingError("Trackio project must be a single-line string")
+
+
+def _v2_settings(project: str, directory: Path) -> TrackioSettings:
+    return TrackioSettings(
+        project=project,
+        directory=directory,
+        space_id=V2_TRACKIO_SPACE_ID,
+        bucket_id=V2_TRACKIO_BUCKET_ID,
+        static_space_id=V2_TRACKIO_STATIC_SPACE_ID,
+    )
 
 
 def ensure_trackio_resources(
@@ -102,43 +110,52 @@ def restore_static_project_snapshot(settings: TrackioSettings) -> None:
 
     try:
         settings.directory.mkdir(parents=True, exist_ok=True)
-        project_stem = re.sub(r"[^A-Za-z0-9_-]+", "_", settings.project).strip("_")
-        if not project_stem:
-            raise TrackingError("Trackio project name cannot produce a local filename")
-        files = [
-            (
-                "metrics.parquet",
-                settings.directory / f"{project_stem}.parquet",
-            ),
-            (
-                "aux/system_metrics.parquet",
-                settings.directory / f"{project_stem}_system.parquet",
-            ),
-            (
-                "aux/configs.parquet",
-                settings.directory / f"{project_stem}_configs.parquet",
-            ),
-            (
-                "aux/traces.parquet",
-                settings.directory / f"{project_stem}_traces.parquet",
-            ),
-        ]
-        configure_huggingface_http()
-        hub = import_module("huggingface_hub")
-        download = getattr(hub, "download_bucket_files", None)
-        if not callable(download):
-            raise TrackingError("Hugging Face bucket download is unavailable")
-        download(settings.bucket_id, files, raise_on_missing_files=False)
-        trackio = import_module("trackio")
-        storage = getattr(trackio, "SQLiteStorage", None)
-        import_from_parquet = getattr(storage, "import_from_parquet", None)
-        if not callable(import_from_parquet):
-            raise TrackingError("Trackio Parquet import is unavailable")
-        import_from_parquet()
+        files = _snapshot_files(settings)
+        _download_snapshot(settings.bucket_id, files)
+        _import_snapshot()
     except TrackingError:
         raise
     except Exception as error:
         raise TrackingError("Trackio static snapshot restoration failed") from error
+
+
+def _snapshot_files(settings: TrackioSettings) -> list[tuple[str, Path]]:
+    project_stem = re.sub(r"[^A-Za-z0-9_-]+", "_", settings.project).strip("_")
+    if not project_stem:
+        raise TrackingError("Trackio project name cannot produce a local filename")
+    return [
+        ("metrics.parquet", settings.directory / f"{project_stem}.parquet"),
+        (
+            "aux/system_metrics.parquet",
+            settings.directory / f"{project_stem}_system.parquet",
+        ),
+        (
+            "aux/configs.parquet",
+            settings.directory / f"{project_stem}_configs.parquet",
+        ),
+        (
+            "aux/traces.parquet",
+            settings.directory / f"{project_stem}_traces.parquet",
+        ),
+    ]
+
+
+def _download_snapshot(bucket_id: str, files: list[tuple[str, Path]]) -> None:
+    configure_huggingface_http()
+    hub = import_module("huggingface_hub")
+    download = getattr(hub, "download_bucket_files", None)
+    if not callable(download):
+        raise TrackingError("Hugging Face bucket download is unavailable")
+    download(bucket_id, files, raise_on_missing_files=False)
+
+
+def _import_snapshot() -> None:
+    trackio = import_module("trackio")
+    storage = getattr(trackio, "SQLiteStorage", None)
+    import_from_parquet = getattr(storage, "import_from_parquet", None)
+    if not callable(import_from_parquet):
+        raise TrackingError("Trackio Parquet import is unavailable")
+    import_from_parquet()
 
 
 def _current_local_run(trackio: Any) -> Any | None:

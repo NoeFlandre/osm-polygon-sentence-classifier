@@ -21,8 +21,27 @@ def test_justfile_exposes_the_documented_quality_recipes() -> None:
         "test",
         "docs",
         "check",
+        "crap",
+        "mutation",
     ):
         assert f"{recipe}:" in content
+
+
+def test_mutation_and_crap_tools_are_locked_and_configured() -> None:
+    pyproject = _text("pyproject.toml")
+
+    assert '"mutmut>=3.7,<4"' in pyproject
+    assert '"coverage>=7,<8"' in pyproject
+    assert '"radon>=6,<7"' in pyproject
+    assert "[tool.mutmut]" in pyproject
+    assert 'source_paths = ["src/osm_polygon_sentence_classifier"]' in pyproject
+    for pattern in (
+        '"\\\\bcast\\\\("',
+        '"ensure_ascii=False"',
+        '"allow_nan=False"',
+        "'.encode(\"utf-8\")'",
+    ):
+        assert pattern in pyproject
 
 
 def test_justfile_exposes_safe_docker_build_and_smoke_recipes() -> None:
@@ -48,6 +67,12 @@ def test_dockerfile_uses_the_locked_training_runtime_as_a_non_root_user() -> Non
         'CMD ["python", "-m", '
         '"osm_polygon_sentence_classifier.grid5000_worker", "--help"]' in content
     )
+
+
+def test_docker_guide_documents_the_default_worker_command() -> None:
+    content = _text("docs/guides/docker.md")
+
+    assert "python -m osm_polygon_sentence_classifier.grid5000_worker --help" in content
 
 
 def test_dockerignore_excludes_project_data_credentials_and_unrelated_slides() -> None:

@@ -13,6 +13,12 @@ test:
 docs:
     uv run mkdocs build --strict --site-dir site
 
+crap:
+    uv run python scripts/quality/crap.py
+
+mutation:
+    uv run mutmut run --max-children 4
+
 docker-build image="osm-polygon-sentence-classifier:local":
     docker build --platform linux/amd64 --tag "{{image}}" .
 

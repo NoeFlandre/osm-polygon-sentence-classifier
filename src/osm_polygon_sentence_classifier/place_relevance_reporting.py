@@ -51,13 +51,23 @@ def _safe_scalar(value: object) -> bool:
 def _safe_mapping(value: object) -> dict[str, object]:
     if not isinstance(value, Mapping):
         return {}
-    return {
-        key: item
-        for key, item in sorted(value.items())
-        if isinstance(key, str)
-        and not any(part in key.casefold() for part in _SENSITIVE_KEY_PARTS)
-        and _safe_scalar(item)
-    }
+    safe: dict[str, object] = {}
+    for key, item in sorted(value.items()):
+        safe_item = _safe_mapping_item(key, item)
+        if safe_item is not None:
+            safe_key, safe_value = safe_item
+            safe[safe_key] = safe_value
+    return safe
+
+
+def _safe_mapping_item(key: object, value: object) -> tuple[str, object] | None:
+    if not isinstance(key, str):
+        return None
+    if any(part in key.casefold() for part in _SENSITIVE_KEY_PARTS):
+        return None
+    if not _safe_scalar(value):
+        return None
+    return key, value
 
 
 def _safe_text(value: object, fallback: str) -> str:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import cast
+from typing import TypeGuard, cast
 
 
 def _format_metric(metrics: Mapping[str, object], name: str) -> str:
@@ -21,55 +21,44 @@ def _format_count(metrics: Mapping[str, object], name: str) -> str:
     return "—"
 
 
-def render_public_documents(
+def _public_specification(
     state: Mapping[str, object],
-    *,
-    rows: Sequence[Mapping[str, object]],
-    study_id: str,
-    tracking_space_id: str,
-    study_title: str | None = None,
-    study_introduction: str | None = None,
-    evaluation_note: str | None = None,
-    root_scope: str | None = None,
-    include_root_readme: bool = True,
-) -> dict[str, str]:
-    """Render the public study README and machine-readable manifests."""
-
+) -> tuple[Mapping[str, object], str]:
     specification = state.get("specification")
     fingerprint = state.get("fingerprint")
-    if not isinstance(specification, Mapping) or not isinstance(fingerprint, str):
+    if not _is_string_mapping(specification) or not isinstance(fingerprint, str):
         raise ValueError("ablation study state lacks its public specification")
-    status = str(state.get("phase", "running"))
-    study_status_label = "Completed" if status == "completed" else "In-progress"
-    source_commit = specification.get("source_commit", "not recorded")
-    model_revision = specification.get("model_revision", "not recorded")
-    dataset_revision = specification.get("dataset_revision", "not recorded")
-    effective_title = study_title or "Landuse classifier ablation study"
-    effective_introduction = study_introduction or (
-        "This study measures controlled changes to the landuse sentence classifier."
-    )
-    effective_evaluation_note = evaluation_note or (
-        "Results are validation results; this study has no held-out test set."
-    )
-    effective_root_scope = root_scope or "landuse sentence-classification task."
-    definition_rows = [
+    return specification, fingerprint
+
+
+def _is_string_mapping(value: object) -> TypeGuard[Mapping[str, object]]:
+    return isinstance(value, Mapping)
+
+
+def _definition_rows(specification: Mapping[str, object]) -> list[str]:
+    rows = [
         "| Ablation | Change | Maximum length | Learning rate | "
         "Trainable layers | Class weighting |",
         "|---|---|---:|---:|---|---|",
     ]
-    raw_definitions = specification.get("definitions", [])
-    if isinstance(raw_definitions, list):
-        for raw_definition in raw_definitions:
-            if not isinstance(raw_definition, Mapping):
-                continue
-            definition_rows.append(
-                f"| `{raw_definition.get('ablation_id', '—')}` | "
-                f"{raw_definition.get('label', '—')} | "
-                f"`{raw_definition.get('max_length', '—')}` | "
-                f"`{raw_definition.get('learning_rate', '—')}` | "
-                f"`{raw_definition.get('trainable_layers', '—')}` | "
-                f"`{raw_definition.get('class_weight_mode', '—')}` |"
-            )
+    raw_definitions = specification.get("definitions")
+    if not isinstance(raw_definitions, list):
+        return rows
+    for raw_definition in raw_definitions:
+        if not isinstance(raw_definition, Mapping):
+            continue
+        rows.append(
+            f"| `{raw_definition.get('ablation_id', '—')}` | "
+            f"{raw_definition.get('label', '—')} | "
+            f"`{raw_definition.get('max_length', '—')}` | "
+            f"`{raw_definition.get('learning_rate', '—')}` | "
+            f"`{raw_definition.get('trainable_layers', '—')}` | "
+            f"`{raw_definition.get('class_weight_mode', '—')}` |"
+        )
+    return rows
+
+
+def _result_rows(rows: Sequence[Mapping[str, object]], study_id: str) -> list[str]:
     table_rows = [
         "| Run name | Ablation | Seed | Status | Accuracy | Precision | "
         "Recall | Positive F1 | Macro F1 | Balanced accuracy | "
@@ -96,23 +85,79 @@ def render_public_documents(
             f"{_format_metric(metrics, 'eval_balanced_accuracy')} | "
             f"{support} | {model_cell} |"
         )
+    return table_rows
+
+
+def _source_commit_history(state: Mapping[str, object]) -> list[str]:
+    history = state.get("source_commit_history")
+    if not _is_string_list(history):
+        return []
+    return history
+
+
+def _is_string_list(value: object) -> TypeGuard[list[str]]:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _source_history_note(source_commit_history: Sequence[str]) -> str:
+    if not source_commit_history:
+        return ""
+    return (
+        "\n- Earlier source commits retained for historical run provenance: "
+        + ", ".join(f"`{item}`" for item in source_commit_history)
+    )
+
+
+def _status_label(status: str) -> str:
+    return "Completed" if status == "completed" else "In-progress"
+
+
+def _effective_text(value: str | None, default: str) -> str:
+    return value or default
+
+
+def render_public_documents(
+    state: Mapping[str, object],
+    *,
+    rows: Sequence[Mapping[str, object]],
+    study_id: str,
+    tracking_space_id: str,
+    study_title: str | None = None,
+    study_introduction: str | None = None,
+    evaluation_note: str | None = None,
+    root_scope: str | None = None,
+    include_root_readme: bool = True,
+) -> dict[str, str]:
+    """Render the public study README and machine-readable manifests."""
+
+    specification, fingerprint = _public_specification(state)
+    status = str(state.get("phase", "running"))
+    study_status_label = _status_label(status)
+    source_commit = specification.get("source_commit", "not recorded")
+    model_revision = specification.get("model_revision", "not recorded")
+    dataset_revision = specification.get("dataset_revision", "not recorded")
+    effective_title = _effective_text(study_title, "Landuse classifier ablation study")
+    effective_introduction = _effective_text(
+        study_introduction,
+        "This study measures controlled changes to the landuse sentence classifier.",
+    )
+    effective_evaluation_note = _effective_text(
+        evaluation_note,
+        "Results are validation results; this study has no held-out test set.",
+    )
+    effective_root_scope = _effective_text(
+        root_scope, "landuse sentence-classification task."
+    )
+    definition_rows = _definition_rows(specification)
+    table_rows = _result_rows(rows, study_id)
     results_payload = {
         "study_id": study_id,
         "fingerprint": fingerprint,
         "phase": status,
         "runs": rows,
     }
-    source_commit_history = state.get("source_commit_history", [])
-    if not isinstance(source_commit_history, list) or any(
-        not isinstance(item, str) for item in source_commit_history
-    ):
-        source_commit_history = []
-    source_history_note = (
-        "\n- Earlier source commits retained for historical run provenance: "
-        + ", ".join(f"`{item}`" for item in source_commit_history)
-        if source_commit_history
-        else ""
-    )
+    source_commit_history = _source_commit_history(state)
+    source_history_note = _source_history_note(source_commit_history)
     study_payload = {
         **dict(specification),
         "fingerprint": fingerprint,

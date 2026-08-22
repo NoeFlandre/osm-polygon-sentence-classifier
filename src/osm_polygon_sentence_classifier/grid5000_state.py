@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
@@ -74,23 +75,10 @@ class AutonomousRunState:
     updated_at: str = ""
 
     def __post_init__(self) -> None:
-        if _RUN_ID_PATTERN.fullmatch(self.run_id) is None:
-            raise StateError("run ID is invalid")
-        try:
-            phase = RunPhase(self.phase)
-        except ValueError as error:
-            raise StateError("run phase is invalid") from error
+        phase = _validated_phase(self.run_id, self.phase)
         object.__setattr__(self, "phase", phase)
-        if self.site is not None and (
-            not isinstance(self.site, str) or not self.site.strip()
-        ):
-            raise StateError("state site is invalid")
-        if self.job_id is not None and (
-            isinstance(self.job_id, bool)
-            or not isinstance(self.job_id, int)
-            or self.job_id <= 0
-        ):
-            raise StateError("state job ID is invalid")
+        _validate_state_site(self.site)
+        _validate_state_job_id(self.job_id)
         identity = _sanitize_mapping(self.identity)
         facts = _sanitize_mapping(self.facts or {})
         object.__setattr__(self, "identity", identity)
@@ -115,34 +103,11 @@ class AutonomousRunState:
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, object]) -> AutonomousRunState:
-        if payload.get("schema_version") != 1:
-            raise StateError("state schema version is unsupported")
-        try:
-            run_id = payload["run_id"]
-            phase = payload["phase"]
-            identity = payload["identity"]
-        except KeyError as error:
-            raise StateError("state document is incomplete") from error
-        if not isinstance(run_id, str) or not isinstance(phase, str):
-            raise StateError("state identity or phase is invalid")
-        if not isinstance(identity, Mapping):
-            raise StateError("state identity is invalid")
-        identity_mapping = cast(Mapping[str, object], identity)
-        site = payload.get("site")
-        if site is not None and not isinstance(site, str):
-            raise StateError("state site is invalid")
-        job_id = payload.get("job_id")
-        if job_id is not None and (
-            isinstance(job_id, bool) or not isinstance(job_id, int)
-        ):
-            raise StateError("state job ID is invalid")
-        facts = payload.get("facts", {})
-        if not isinstance(facts, Mapping):
-            raise StateError("state facts are invalid")
-        facts_mapping = cast(Mapping[str, object], facts)
-        updated_at = payload.get("updated_at")
-        if not isinstance(updated_at, str):
-            raise StateError("state timestamp is invalid")
+        run_id, phase, identity_mapping = _required_state_fields(payload)
+        site = _state_site(payload)
+        job_id = _state_job_id(payload)
+        facts_mapping = _state_facts(payload)
+        updated_at = _state_timestamp(payload)
         return cls(
             run_id=run_id,
             phase=phase,
@@ -152,6 +117,84 @@ class AutonomousRunState:
             facts=facts_mapping,
             updated_at=updated_at,
         )
+
+
+def _validated_phase(run_id: str, phase: RunPhase | str) -> RunPhase:
+    if _RUN_ID_PATTERN.fullmatch(run_id) is None:
+        raise StateError("run ID is invalid")
+    try:
+        return RunPhase(phase)
+    except ValueError as error:
+        raise StateError("run phase is invalid") from error
+
+
+def _validate_state_site(site: str | None) -> None:
+    if site is not None and (not isinstance(site, str) or not site.strip()):
+        raise StateError("state site is invalid")
+
+
+def _validate_state_job_id(job_id: int | None) -> None:
+    if job_id is not None and (
+        isinstance(job_id, bool) or not isinstance(job_id, int) or job_id <= 0
+    ):
+        raise StateError("state job ID is invalid")
+
+
+def _required_state_fields(
+    payload: Mapping[str, object],
+) -> tuple[str, str, Mapping[str, object]]:
+    _require_state_schema(payload)
+    run_id, phase, identity = _raw_required_state_fields(payload)
+    if not isinstance(run_id, str) or not isinstance(phase, str):
+        raise StateError("state identity or phase is invalid")
+    if not isinstance(identity, Mapping):
+        raise StateError("state identity is invalid")
+    return run_id, phase, cast(Mapping[str, object], identity)
+
+
+def _require_state_schema(payload: Mapping[str, object]) -> None:
+    if payload.get("schema_version") != 1:
+        raise StateError("state schema version is unsupported")
+
+
+def _raw_required_state_fields(
+    payload: Mapping[str, object],
+) -> tuple[object, object, object]:
+    try:
+        run_id = payload["run_id"]
+        phase = payload["phase"]
+        identity = payload["identity"]
+    except KeyError as error:
+        raise StateError("state document is incomplete") from error
+    return run_id, phase, identity
+
+
+def _state_site(payload: Mapping[str, object]) -> str | None:
+    site = payload.get("site")
+    if site is not None and not isinstance(site, str):
+        raise StateError("state site is invalid")
+    return site
+
+
+def _state_job_id(payload: Mapping[str, object]) -> int | None:
+    job_id = payload.get("job_id")
+    if job_id is not None and (isinstance(job_id, bool) or not isinstance(job_id, int)):
+        raise StateError("state job ID is invalid")
+    return job_id
+
+
+def _state_facts(payload: Mapping[str, object]) -> Mapping[str, object]:
+    facts = payload.get("facts", {})
+    if not isinstance(facts, Mapping):
+        raise StateError("state facts are invalid")
+    return cast(Mapping[str, object], facts)
+
+
+def _state_timestamp(payload: Mapping[str, object]) -> str:
+    updated_at = payload.get("updated_at")
+    if not isinstance(updated_at, str):
+        raise StateError("state timestamp is invalid")
+    return updated_at
 
 
 def _now() -> str:
@@ -170,17 +213,17 @@ def _parse_timestamp(value: str) -> None:
 def _sanitize_scalar(value: object) -> JSONValue:
     if value is None:
         return None
-    if isinstance(value, str):
-        return value
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, int):
+    if isinstance(value, (str, bool, int)):
         return value
     if isinstance(value, float):
-        if value != value or value in {float("inf"), float("-inf")}:
-            raise StateError("state facts must contain finite JSON values")
-        return value
+        return _finite_float(value)
     raise StateError("state facts must be JSON-compatible values")
+
+
+def _finite_float(value: float) -> float:
+    if not math.isfinite(value):
+        raise StateError("state facts must contain finite JSON values")
+    return value
 
 
 def _sanitize_mapping_value(value: Mapping[object, object]) -> dict[str, JSONValue]:
@@ -226,6 +269,110 @@ def _check_mode(path: Path, expected: int, label: str) -> None:
         raise StateSecurityError(f"{label} is missing or symlinked")
     if path.stat().st_mode & 0o777 != expected:
         raise StateSecurityError(f"{label} has unsafe permissions")
+
+
+def _read_state_document(path: Path) -> Mapping[str, object]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise StateError("state document cannot be read") from error
+    if isinstance(payload, Mapping) and payload.get("schema_version") is None:
+        raise LegacyAmbiguousStateError(
+            "legacy Grid'5000 state is ambiguous; reconcile before starting"
+        )
+    if not isinstance(payload, Mapping):
+        raise StateError("state document must be an object")
+    return cast(Mapping[str, object], payload)
+
+
+def _state_document_path(directory: Path) -> Path:
+    path = directory / "state.json"
+    if not path.exists() or path.is_symlink():
+        raise StateError("state document is missing or unsafe")
+    _check_mode(path, 0o600, "state document")
+    return path
+
+
+def _require_existing_run_directory(directory: Path) -> None:
+    if not directory.is_dir() or directory.is_symlink():
+        raise StateError("run state directory is missing or unsafe")
+    _check_mode(directory, 0o700, "run state directory")
+
+
+def _validated_event_name(event: str) -> str:
+    if not event or "\n" in event or "\r" in event:
+        raise StateError("event name is invalid")
+    return event
+
+
+def _event_payload(
+    event: str,
+    facts: Mapping[str, object] | None,
+) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "timestamp": _now(),
+        "event": event,
+        "facts": _sanitize_mapping(facts or {}),
+    }
+
+
+def _write_event(path: Path, payload: Mapping[str, object]) -> None:
+    if path.exists() and path.is_symlink():
+        raise StateSecurityError("events document cannot be a symlink")
+    try:
+        with path.open("a", encoding="utf-8") as handle:
+            os.chmod(path, 0o600)
+            handle.write(json.dumps(payload, sort_keys=True) + "\n")
+    except OSError as error:
+        raise StateError("event document cannot be written") from error
+
+
+def _legacy_state_path(
+    directory: Path,
+    active_job_ids: Sequence[int],
+) -> Path:
+    if active_job_ids:
+        raise LegacyAmbiguousStateError(
+            "legacy Grid'5000 state cannot be reconciled while jobs are active"
+        )
+    _check_mode(directory, 0o700, "legacy run state directory")
+    path = directory / "state.json"
+    if not path.is_file() or path.is_symlink():
+        raise StateError("legacy state document is missing or unsafe")
+    _check_mode(path, 0o600, "legacy state document")
+    return path
+
+
+def _read_legacy_state(path: Path) -> None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise StateError("legacy state document cannot be read") from error
+    if not isinstance(payload, Mapping) or payload.get("schema_version") is not None:
+        raise StateError("state is not a legacy document")
+
+
+def _legacy_archive_directory(root: Path) -> Path:
+    archive_root = root / "legacy-ambiguous"
+    if archive_root.exists():
+        _check_mode(archive_root, 0o700, "legacy archive directory")
+    else:
+        archive_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(archive_root, 0o700)
+    return archive_root
+
+
+def _archive_legacy_state(directory: Path, archive_root: Path, run_id: str) -> Path:
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    archived = archive_root / f"{run_id}-{stamp}"
+    if archived.exists():
+        raise StateError("legacy archive target already exists")
+    try:
+        shutil.move(str(directory), str(archived))
+    except OSError as error:
+        raise StateError("legacy state could not be archived") from error
+    return archived
 
 
 class AutonomousStateStore:
@@ -322,9 +469,7 @@ class AutonomousStateStore:
         """Atomically update an existing state document."""
 
         directory = self._directory(state.run_id)
-        if directory.is_symlink() or not directory.is_dir():
-            raise StateError("run state directory is missing or unsafe")
-        _check_mode(directory, 0o700, "run state directory")
+        _require_existing_run_directory(directory)
         self._write_state(directory, state)
 
     def load(self, run_id: str) -> AutonomousRunState | None:
@@ -336,20 +481,7 @@ class AutonomousStateStore:
         if directory.is_symlink():
             raise StateSecurityError("run state directory cannot be a symlink")
         _check_mode(directory, 0o700, "run state directory")
-        path = directory / "state.json"
-        if not path.exists() or path.is_symlink():
-            raise StateError("state document is missing or unsafe")
-        _check_mode(path, 0o600, "state document")
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
-            raise StateError("state document cannot be read") from error
-        if isinstance(payload, Mapping) and payload.get("schema_version") is None:
-            raise LegacyAmbiguousStateError(
-                "legacy Grid'5000 state is ambiguous; reconcile before starting"
-            )
-        if not isinstance(payload, Mapping):
-            raise StateError("state document must be an object")
+        payload = _read_state_document(_state_document_path(directory))
         state = AutonomousRunState.from_dict(payload)
         if state.run_id != run_id:
             raise StateError("state identity does not match its directory")
@@ -363,27 +495,10 @@ class AutonomousStateStore:
     ) -> None:
         """Append one credential-free JSON event."""
 
-        if not event or "\n" in event or "\r" in event:
-            raise StateError("event name is invalid")
+        event = _validated_event_name(event)
         directory = self._directory(run_id)
-        if not directory.is_dir() or directory.is_symlink():
-            raise StateError("run state directory is missing or unsafe")
-        _check_mode(directory, 0o700, "run state directory")
-        event_payload = {
-            "schema_version": 1,
-            "timestamp": _now(),
-            "event": event,
-            "facts": _sanitize_mapping(facts or {}),
-        }
-        path = directory / "events.jsonl"
-        if path.exists() and path.is_symlink():
-            raise StateSecurityError("events document cannot be a symlink")
-        try:
-            with path.open("a", encoding="utf-8") as handle:
-                os.chmod(path, 0o600)
-                handle.write(json.dumps(event_payload, sort_keys=True) + "\n")
-        except OSError as error:
-            raise StateError("event document cannot be written") from error
+        _require_existing_run_directory(directory)
+        _write_event(directory / "events.jsonl", _event_payload(event, facts))
 
     def reconcile_legacy(
         self,
@@ -394,39 +509,10 @@ class AutonomousStateStore:
         """Move legacy state to timestamped evidence only when the scheduler is idle."""
 
         directory = self._directory(run_id)
-        if active_job_ids:
-            raise LegacyAmbiguousStateError(
-                "legacy Grid'5000 state cannot be reconciled while jobs are active"
-            )
-        _check_mode(directory, 0o700, "legacy run state directory")
-        path = directory / "state.json"
-        if not path.is_file() or path.is_symlink():
-            raise StateError("legacy state document is missing or unsafe")
-        _check_mode(path, 0o600, "legacy state document")
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
-            raise StateError("legacy state document cannot be read") from error
-        if (
-            not isinstance(payload, Mapping)
-            or payload.get("schema_version") is not None
-        ):
-            raise StateError("state is not a legacy document")
-        archive_root = self.root / "legacy-ambiguous"
-        if archive_root.exists():
-            _check_mode(archive_root, 0o700, "legacy archive directory")
-        else:
-            archive_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-            os.chmod(archive_root, 0o700)
-        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        archived = archive_root / f"{run_id}-{stamp}"
-        if archived.exists():
-            raise StateError("legacy archive target already exists")
-        try:
-            shutil.move(str(directory), str(archived))
-        except OSError as error:
-            raise StateError("legacy state could not be archived") from error
-        return archived
+        path = _legacy_state_path(directory, active_job_ids)
+        _read_legacy_state(path)
+        archive_root = _legacy_archive_directory(self.root)
+        return _archive_legacy_state(directory, archive_root, run_id)
 
 
 __all__ = [

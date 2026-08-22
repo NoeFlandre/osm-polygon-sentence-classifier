@@ -127,63 +127,105 @@ class CheckpointManifestCallback:
                 return
             raise TrainingError("checkpoint model publication failed") from error
 
-    def on_save(self, args: Any, state: Any, control: Any, **kwargs: object) -> Any:
-        del kwargs
+    @staticmethod
+    def _checkpoint_save_inputs(args: Any, state: Any) -> tuple[Path, int]:
         output_directory = getattr(args, "output_dir", None)
         global_step = getattr(state, "global_step", None)
         if not isinstance(output_directory, str) or not isinstance(global_step, int):
             raise TrainingError("checkpoint save did not expose a valid step")
+        return Path(output_directory), global_step
+
+    def _write_checkpoint_manifest(self, checkpoint: Path, global_step: int) -> None:
         try:
             write_checkpoint_manifest(
-                Path(output_directory) / f"checkpoint-{global_step}",
+                checkpoint,
                 identity=self.identity,
                 global_step=global_step,
             )
         except CheckpointError as error:
             raise TrainingError("checkpoint manifest could not be written") from error
+
+    def _write_checkpoint_card(
+        self,
+        checkpoint: Path,
+        *,
+        state: Any,
+        global_step: int,
+    ) -> None:
+        try:
+            write_model_card(
+                checkpoint,
+                identity=self.identity,
+                training_metrics={
+                    **_training_metrics.latest_training_metrics(state),
+                    **_training_metrics.latest_evaluation_metrics(state),
+                },
+                checkpoint_step=global_step,
+                trackio_space_id=self.trackio_space_id,
+            )
+        except OSError as error:
+            raise TrainingError("checkpoint model card could not be written") from error
+
+    def _queue_checkpoint_publication(
+        self,
+        args: Any,
+        checkpoint: Path,
+    ) -> None:
+        run_as_future = getattr(self.hub_api, "run_as_future", None)
+        if not callable(run_as_future):
+            raise TrainingError(
+                "checkpoint publication API cannot queue background work"
+            )
+        self._pending_publications.append(
+            run_as_future(
+                publish_checkpoint_directory,
+                checkpoint,
+                self.model_repository_id,
+                identity=self.identity,
+                hub_api=self.hub_api,
+            )
+        )
+        if self._publication_limit_reached(args):
+            self._wait_for_next_publication()
+
+    def _publication_limit_reached(self, args: Any) -> bool:
+        save_total_limit = getattr(args, "save_total_limit", None)
+        return (
+            isinstance(save_total_limit, int)
+            and not isinstance(save_total_limit, bool)
+            and save_total_limit > 0
+            and len(self._pending_publications) >= save_total_limit
+        )
+
+    def _publish_remote_checkpoint(
+        self,
+        args: Any,
+        checkpoint: Path,
+        *,
+        state: Any,
+        global_step: int,
+    ) -> None:
+        if self.model_repository_id is None:
+            return
+        self._write_checkpoint_card(checkpoint, state=state, global_step=global_step)
+        if self.hub_api is None:
+            self._publish_checkpoint(checkpoint)
+            return
+        self._queue_checkpoint_publication(args, checkpoint)
+
+    def on_save(self, args: Any, state: Any, control: Any, **kwargs: object) -> Any:
+        del kwargs
+        output_directory, global_step = self._checkpoint_save_inputs(args, state)
+        checkpoint = output_directory / f"checkpoint-{global_step}"
+        self._write_checkpoint_manifest(checkpoint, global_step)
         remote_checkpoint = global_step % self.hub_checkpoint_steps == 0
-        if self.model_repository_id is not None and remote_checkpoint:
-            checkpoint = Path(output_directory) / f"checkpoint-{global_step}"
-            try:
-                write_model_card(
-                    checkpoint,
-                    identity=self.identity,
-                    training_metrics={
-                        **_training_metrics.latest_training_metrics(state),
-                        **_training_metrics.latest_evaluation_metrics(state),
-                    },
-                    checkpoint_step=global_step,
-                    trackio_space_id=self.trackio_space_id,
-                )
-            except OSError as error:
-                raise TrainingError(
-                    "checkpoint model card could not be written"
-                ) from error
-            if self.hub_api is None:
-                self._publish_checkpoint(checkpoint)
-            else:
-                run_as_future = getattr(self.hub_api, "run_as_future", None)
-                if not callable(run_as_future):
-                    raise TrainingError(
-                        "checkpoint publication API cannot queue background work"
-                    )
-                self._pending_publications.append(
-                    run_as_future(
-                        publish_checkpoint_directory,
-                        checkpoint,
-                        self.model_repository_id,
-                        identity=self.identity,
-                        hub_api=self.hub_api,
-                    )
-                )
-                save_total_limit = getattr(args, "save_total_limit", None)
-                if (
-                    isinstance(save_total_limit, int)
-                    and not isinstance(save_total_limit, bool)
-                    and save_total_limit > 0
-                    and len(self._pending_publications) >= save_total_limit
-                ):
-                    self._wait_for_next_publication()
+        if remote_checkpoint:
+            self._publish_remote_checkpoint(
+                args,
+                checkpoint,
+                state=state,
+                global_step=global_step,
+            )
         if self.tracking_settings is not None and remote_checkpoint:
             _sync_static_trackio(
                 self.tracking_settings,

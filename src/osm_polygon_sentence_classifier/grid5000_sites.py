@@ -60,22 +60,7 @@ class SiteRequirements:
     resume_persistent_free_bytes: int = DEFAULT_RESUME_PERSISTENT_FREE_BYTES
 
     def __post_init__(self) -> None:
-        if self.gpu_memory_mb <= 0:
-            raise Grid5000ConfigurationError("gpu_memory_mb must be positive")
-        if self.cuda_capability < (0, 0):
-            raise Grid5000ConfigurationError("cuda_capability must be non-negative")
-        if self.persistent_free_bytes < 0:
-            raise Grid5000ConfigurationError(
-                "persistent_free_bytes must be non-negative"
-            )
-        if self.resume_persistent_free_bytes < 0:
-            raise Grid5000ConfigurationError(
-                "resume_persistent_free_bytes must be non-negative"
-            )
-        if self.resume_persistent_free_bytes > self.persistent_free_bytes:
-            raise Grid5000ConfigurationError(
-                "resume_persistent_free_bytes cannot exceed persistent_free_bytes"
-            )
+        _validate_site_requirements(self)
 
     def for_checkpoint_continuation(self) -> SiteRequirements:
         """Relax only storage headroom for a run with a verified checkpoint."""
@@ -84,6 +69,38 @@ class SiteRequirements:
             self,
             persistent_free_bytes=self.resume_persistent_free_bytes,
         )
+
+
+def _validate_site_requirements(requirements: SiteRequirements) -> None:
+    _require_positive_gpu_memory(requirements.gpu_memory_mb)
+    _require_non_negative_capability(requirements.cuda_capability)
+    _require_non_negative_storage(
+        requirements.persistent_free_bytes,
+        "persistent_free_bytes",
+    )
+    _require_non_negative_storage(
+        requirements.resume_persistent_free_bytes,
+        "resume_persistent_free_bytes",
+    )
+    if requirements.resume_persistent_free_bytes > requirements.persistent_free_bytes:
+        raise Grid5000ConfigurationError(
+            "resume_persistent_free_bytes cannot exceed persistent_free_bytes"
+        )
+
+
+def _require_positive_gpu_memory(value: int) -> None:
+    if value <= 0:
+        raise Grid5000ConfigurationError("gpu_memory_mb must be positive")
+
+
+def _require_non_negative_capability(value: tuple[int, int]) -> None:
+    if value < (0, 0):
+        raise Grid5000ConfigurationError("cuda_capability must be non-negative")
+
+
+def _require_non_negative_storage(value: int, name: str) -> None:
+    if value < 0:
+        raise Grid5000ConfigurationError(f"{name} must be non-negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,9 +199,11 @@ def _coerce_non_negative_int(value: object) -> int | None:
         return None
     if isinstance(value, int):
         return value if value >= 0 else None
-    if isinstance(value, str) and value.isdigit():
-        return int(value)
-    return None
+    return _coerce_non_negative_string(value) if isinstance(value, str) else None
+
+
+def _coerce_non_negative_string(value: str) -> int | None:
+    return int(value) if value.isdigit() else None
 
 
 def _coerce_flag(value: object) -> bool:
@@ -206,30 +225,40 @@ def _coerce_jobs(value: object) -> int | None:
         return len(value)
     if value is None:
         return 0
-    if isinstance(value, str):
-        normalized = value.strip()
-        if not normalized or normalized.casefold() in {"no", "none"}:
-            return 0
-        if normalized == "0":
-            return 0
-        if normalized.isdigit():
-            return 1
-    return _coerce_non_negative_int(value)
+    return (
+        _coerce_job_string(value)
+        if isinstance(value, str)
+        else _coerce_non_negative_int(value)
+    )
+
+
+def _coerce_job_string(value: str) -> int | None:
+    normalized = value.strip()
+    if not normalized or normalized.casefold() in {"no", "none"}:
+        return 0
+    if normalized == "0":
+        return 0
+    if normalized.isdigit():
+        return 1
+    return None
 
 
 def _raw_records(payload: object) -> tuple[Mapping[str, object], ...]:
-    if isinstance(payload, Mapping):
-        records = (payload,) if "state" in payload else tuple(payload.values())
-    elif isinstance(payload, Sequence) and not isinstance(payload, (str, bytes)):
-        records = payload
-    else:
-        raise ValueError("oarnodes payload must be a mapping or sequence")
+    records = _records_from_payload(payload)
     parsed: list[Mapping[str, object]] = []
     for record in records:
         if not isinstance(record, Mapping):
             raise ValueError("oarnodes record must be a mapping")
         parsed.append(cast(Mapping[str, object], record))
     return tuple(parsed)
+
+
+def _records_from_payload(payload: object) -> Sequence[object]:
+    if isinstance(payload, Mapping):
+        return (payload,) if "state" in payload else tuple(payload.values())
+    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes)):
+        return payload
+    raise ValueError("oarnodes payload must be a mapping or sequence")
 
 
 def _coerce_capability_minor(record: Mapping[str, object]) -> int | None:
@@ -252,38 +281,58 @@ def parse_oarnodes_stdout(stdout: str) -> tuple[GpuResource, ...]:
         payload = json.loads(stdout)
     except json.JSONDecodeError as error:
         raise ValueError("invalid oarnodes JSON") from error
-    resources: list[GpuResource] = []
-    for record in _raw_records(payload):
-        if str(record.get("state", "")) != "Alive":
-            continue
-        gpu_count = _coerce_non_negative_int(record.get("gpu_count"))
-        gpu_memory = _coerce_non_negative_int(record.get("gpu_mem"))
-        capability_major = _coerce_non_negative_int(
-            record.get("gpu_compute_capability_major")
-        )
-        jobs = _coerce_jobs(record.get("jobs", 0))
-        if (
-            gpu_count is None
-            or gpu_count <= 0
-            or gpu_memory is None
-            or capability_major is None
-            or jobs is None
-        ):
-            continue
-        capability_minor = _coerce_capability_minor(record)
-        if capability_minor is None:
-            continue
-        resources.append(
-            GpuResource(
-                gpu_memory_mb=gpu_memory,
-                cuda_capability=(capability_major, capability_minor),
-                jobs_assigned=jobs,
-                production=_coerce_flag(record.get("production", "NO")),
-                exotic=_coerce_flag(record.get("exotic", "NO")),
-                cpu_architecture=_coerce_cpu_architecture(record.get("cpuarch")),
-            )
-        )
-    return tuple(resources)
+    return tuple(
+        resource
+        for record in _raw_records(payload)
+        if (resource := _resource_from_record(record)) is not None
+    )
+
+
+def _resource_from_record(record: Mapping[str, object]) -> GpuResource | None:
+    if str(record.get("state", "")) != "Alive":
+        return None
+    facts = _gpu_facts(record)
+    if facts is None:
+        return None
+    gpu_memory, capability_major, jobs = facts
+    capability_minor = _coerce_capability_minor(record)
+    if capability_minor is None:
+        return None
+    return GpuResource(
+        gpu_memory_mb=gpu_memory,
+        cuda_capability=(capability_major, capability_minor),
+        jobs_assigned=jobs,
+        production=_coerce_flag(record.get("production", "NO")),
+        exotic=_coerce_flag(record.get("exotic", "NO")),
+        cpu_architecture=_coerce_cpu_architecture(record.get("cpuarch")),
+    )
+
+
+def _gpu_facts(record: Mapping[str, object]) -> tuple[int, int, int] | None:
+    gpu_count = _coerce_non_negative_int(record.get("gpu_count"))
+    gpu_memory = _coerce_non_negative_int(record.get("gpu_mem"))
+    capability_major = _coerce_non_negative_int(
+        record.get("gpu_compute_capability_major")
+    )
+    jobs_value = record.get("jobs")
+    jobs = _coerce_jobs(jobs_value)
+    if not _valid_gpu_count(gpu_count):
+        return None
+    if not _present_gpu_facts(gpu_memory, capability_major, jobs):
+        return None
+    return cast(tuple[int, int, int], (gpu_memory, capability_major, jobs))
+
+
+def _valid_gpu_count(value: int | None) -> bool:
+    return value is not None and value > 0
+
+
+def _present_gpu_facts(
+    gpu_memory: int | None,
+    capability_major: int | None,
+    jobs: int | None,
+) -> bool:
+    return gpu_memory is not None and capability_major is not None and jobs is not None
 
 
 def choose_allocation(
@@ -294,35 +343,61 @@ def choose_allocation(
     """Derive safe OAR queue/type/property values from live GPU facts."""
 
     effective = requirements or SiteRequirements()
-    compatible = [
-        resource
-        for resource in resources
-        if resource.gpu_memory_mb >= effective.gpu_memory_mb
-        and resource.cuda_capability >= effective.cuda_capability
-        and resource.cpu_architecture == SUPPORTED_CPU_ARCHITECTURE
-    ]
+    compatible = _compatible_resources(resources, effective)
     if not compatible:
         return None
-    production = all(resource.production for resource in compatible)
-    matching = [
-        resource for resource in compatible if resource.production == production
+    return _allocation_for_compatible(compatible, effective)
+
+
+def _compatible_resources(
+    resources: Sequence[GpuResource], requirements: SiteRequirements
+) -> list[GpuResource]:
+    return [
+        resource
+        for resource in resources
+        if resource.gpu_memory_mb >= requirements.gpu_memory_mb
+        and resource.cuda_capability >= requirements.cuda_capability
+        and resource.cpu_architecture == SUPPORTED_CPU_ARCHITECTURE
     ]
+
+
+def _allocation_for_compatible(
+    compatible: list[GpuResource], requirements: SiteRequirements
+) -> dict[str, str]:
+    production = all(resource.production for resource in compatible)
+    matching = _matching_resources(compatible, production)
+    return _build_allocation(matching, requirements, production)
+
+
+def _build_allocation(
+    matching: list[GpuResource], requirements: SiteRequirements, production: bool
+) -> dict[str, str]:
     exotic = all(resource.exotic for resource in matching)
     production_value = "YES" if production else "NO"
-    capabilities = ", ".join(
-        f"'{major}.{minor}'"
-        for major, minor in sorted({resource.cuda_capability for resource in matching})
-    )
+    capabilities = _capability_expression(matching)
     return {
         "queue": "production" if production else "default",
         "resource_type": "exotic" if exotic else "standard",
         "resource_property": (
-            f"gpu_mem>={effective.gpu_memory_mb} "
+            f"gpu_mem>={requirements.gpu_memory_mb} "
             f"AND production='{production_value}' "
             f"AND cpuarch='{SUPPORTED_CPU_ARCHITECTURE}' "
             f"AND gpu_compute_capability IN ({capabilities})"
         ),
     }
+
+
+def _matching_resources(
+    resources: list[GpuResource], production: bool
+) -> list[GpuResource]:
+    return [resource for resource in resources if resource.production == production]
+
+
+def _capability_expression(resources: list[GpuResource]) -> str:
+    return ", ".join(
+        f"'{major}.{minor}'"
+        for major, minor in sorted({resource.cuda_capability for resource in resources})
+    )
 
 
 def _parse_single_site(
@@ -396,22 +471,41 @@ def probe_all_sites(
 ) -> tuple[SiteProbe, ...]:
     """Probe configured frontends concurrently while preserving site order."""
 
+    _validate_probe_arguments(sites, max_workers)
+    effective_runner = runner or SubprocessCommandRunner()
+    effective_requirements = requirements or SiteRequirements()
+    unique_sites = tuple(dict.fromkeys(sites))
+    return _probe_sites_concurrently(
+        unique_sites,
+        runner=effective_runner,
+        requirements=effective_requirements,
+        max_workers=max_workers,
+    )
+
+
+def _validate_probe_arguments(sites: Sequence[str], max_workers: int) -> None:
     if not sites:
         raise Grid5000ConfigurationError("at least one Grid'5000 site is required")
     if max_workers <= 0:
         raise Grid5000ConfigurationError("max_workers must be positive")
-    effective_runner = runner or SubprocessCommandRunner()
-    effective_requirements = requirements or SiteRequirements()
-    unique_sites = tuple(dict.fromkeys(sites))
-    with ThreadPoolExecutor(max_workers=min(max_workers, len(unique_sites))) as pool:
+
+
+def _probe_sites_concurrently(
+    sites: tuple[str, ...],
+    *,
+    runner: CommandRunner,
+    requirements: SiteRequirements,
+    max_workers: int,
+) -> tuple[SiteProbe, ...]:
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(sites))) as pool:
         futures = tuple(
             pool.submit(
                 probe_site,
                 site,
-                runner=effective_runner,
-                requirements=effective_requirements,
+                runner=runner,
+                requirements=requirements,
             )
-            for site in unique_sites
+            for site in sites
         )
         return tuple(future.result() for future in futures)
 
@@ -424,13 +518,7 @@ def select_site(
     """Choose one compatible site from factual observations only."""
 
     effective_requirements = requirements or SiteRequirements()
-    compatible = [
-        probe
-        for probe in probes
-        if probe.reachable
-        and probe.has_compatible(effective_requirements)
-        and probe.persistent_free_bytes >= effective_requirements.persistent_free_bytes
-    ]
+    compatible = _compatible_probes(probes, effective_requirements)
     if not compatible:
         raise RuntimeError("no compatible Grid'5000 site is available")
     return min(
@@ -440,6 +528,18 @@ def select_site(
             probe.name,
         ),
     )
+
+
+def _compatible_probes(
+    probes: Sequence[SiteProbe], requirements: SiteRequirements
+) -> list[SiteProbe]:
+    return [
+        probe
+        for probe in probes
+        if probe.reachable
+        and probe.has_compatible(requirements)
+        and probe.persistent_free_bytes >= requirements.persistent_free_bytes
+    ]
 
 
 __all__ = [

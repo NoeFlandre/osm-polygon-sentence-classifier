@@ -152,8 +152,8 @@ def _checkpoint_global_step(state_path: Path) -> int | None:
 def _load_completed_checkpoint(trainer: Any, checkpoint: Path) -> bool:
     """Load a checkpoint at or beyond ``max_steps`` without replaying data."""
 
-    max_steps = getattr(getattr(trainer, "args", None), "max_steps", None)
-    if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps <= 0:
+    max_steps = _trainer_max_steps(trainer)
+    if max_steps is None:
         return False
     state_path = checkpoint / "trainer_state.json"
     global_step = _checkpoint_global_step(state_path)
@@ -163,20 +163,41 @@ def _load_completed_checkpoint(trainer: Any, checkpoint: Path) -> bool:
     if not callable(load_checkpoint):
         return False
     load_checkpoint(str(checkpoint))
+    _restore_trainer_state(trainer, state_path)
+    _restore_callback_state(trainer)
+    return True
 
+
+def _trainer_max_steps(trainer: Any) -> int | None:
+    max_steps = getattr(getattr(trainer, "args", None), "max_steps", None)
+    if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps <= 0:
+        return None
+    return max_steps
+
+
+def _restore_trainer_state(trainer: Any, state_path: Path) -> None:
     state = getattr(trainer, "state", None)
     load_state = getattr(type(state), "load_from_json", None)
     if callable(load_state):
         trainer.state = load_state(str(state_path))
-    elif state is not None:
-        payload = json.loads(state_path.read_text(encoding="utf-8"))
-        for name in ("global_step", "epoch", "log_history"):
-            if isinstance(payload, Mapping) and name in payload:
-                setattr(state, name, payload[name])
+        return
+    if state is not None:
+        _restore_state_attributes(state, state_path)
+
+
+def _restore_state_attributes(state: Any, state_path: Path) -> None:
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        return
+    for name in ("global_step", "epoch", "log_history"):
+        if name in payload:
+            setattr(state, name, payload[name])
+
+
+def _restore_callback_state(trainer: Any) -> None:
     restore_callbacks = getattr(trainer, "_load_callback_state", None)
     if callable(restore_callbacks):
         restore_callbacks()
-    return True
 
 
 def run_trainer(trainer: Any, resume_from_checkpoint: Path | None) -> object:

@@ -169,3 +169,7 @@ def test_main_writes_review_artifacts_then_exits_with_status_two(
     assert calls == [result]
     output = capsys.readouterr().out
     assert "readiness: False" in output
+    assert (
+        "review_required_reasons: " + ", ".join(result.report.review_required_reasons)
+        in output
+    )

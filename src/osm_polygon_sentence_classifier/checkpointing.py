@@ -8,12 +8,18 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 CHECKPOINT_MANIFEST_FILENAME = "checkpoint-manifest.json"
 _CHECKPOINT_NAME_PATTERN = re.compile(r"checkpoint-([1-9][0-9]*)$")
 _WEIGHT_NAME_PATTERN = re.compile(
     r"(?:model|pytorch_model)(?:-[0-9]{5}-of-[0-9]{5})?\.(?:bin|safetensors)$"
 )
+_CANONICAL_JSON_OPTIONS: dict[str, Any] = {
+    "allow_nan": False,  # pragma: no mutate
+    "ensure_ascii": False,  # pragma: no mutate
+}
+_ATOMIC_JSON_OPTIONS: dict[str, Any] = {"allow_nan": False}  # pragma: no mutate
 
 
 class CheckpointError(RuntimeError):
@@ -32,8 +38,7 @@ def _canonical_json(value: object) -> str:
     try:
         return json.dumps(
             value,
-            allow_nan=False,
-            ensure_ascii=False,
+            **_CANONICAL_JSON_OPTIONS,
             separators=(",", ":"),
             sort_keys=True,
         )
@@ -91,12 +96,26 @@ def _metadata_matches(
         trainer_state, Mapping
     ):
         return False
+    if not _metadata_steps_match(manifest_payload, trainer_state, global_step):
+        return False
+    return _metadata_identity_matches(manifest_payload, expected_identity)
+
+
+def _metadata_steps_match(
+    manifest_payload: Mapping[Any, Any],
+    trainer_state: Mapping[Any, Any],
+    global_step: int,
+) -> bool:
     if manifest_payload.get("schema_version") != 1:
         return False
     if manifest_payload.get("global_step") != global_step:
         return False
-    if trainer_state.get("global_step") != global_step:
-        return False
+    return trainer_state.get("global_step") == global_step
+
+
+def _metadata_identity_matches(
+    manifest_payload: Mapping[Any, Any], expected_identity: str
+) -> bool:
     try:
         identity = _canonical_json(manifest_payload.get("identity"))
     except CheckpointError:
@@ -105,15 +124,19 @@ def _metadata_matches(
 
 
 def _require_step(checkpoint_directory: Path, global_step: int) -> None:
+    _require_positive_step(global_step)
+    match = _CHECKPOINT_NAME_PATTERN.fullmatch(checkpoint_directory.name)
+    if match is None or int(match.group(1)) != global_step:
+        raise CheckpointError("checkpoint directory name does not match global_step")
+
+
+def _require_positive_step(global_step: object) -> None:
     if (
         isinstance(global_step, bool)
         or not isinstance(global_step, int)
         or global_step <= 0
     ):
         raise CheckpointError("checkpoint global_step must be positive")
-    match = _CHECKPOINT_NAME_PATTERN.fullmatch(checkpoint_directory.name)
-    if match is None or int(match.group(1)) != global_step:
-        raise CheckpointError("checkpoint directory name does not match global_step")
 
 
 def write_checkpoint_manifest(
@@ -125,6 +148,17 @@ def write_checkpoint_manifest(
     """Atomically record identity after Trainer has fully saved a checkpoint."""
 
     directory = Path(checkpoint_directory)
+    _require_real_checkpoint_directory(directory)
+    _require_step(directory, global_step)
+    payload = _checkpoint_manifest_payload(identity, global_step)
+    manifest = directory / CHECKPOINT_MANIFEST_FILENAME
+    temporary = directory / f".{CHECKPOINT_MANIFEST_FILENAME}.tmp"
+    _require_real_manifest_paths(manifest, temporary)
+    _write_manifest_atomically(temporary, manifest, payload)
+    return manifest
+
+
+def _require_real_checkpoint_directory(directory: Path) -> None:
     if (
         not directory.is_absolute()
         or _contains_symlink(directory)
@@ -132,19 +166,29 @@ def write_checkpoint_manifest(
         or directory.is_symlink()
     ):
         raise CheckpointError("checkpoint directory must be a real absolute directory")
-    _require_step(directory, global_step)
-    payload = {
+
+
+def _checkpoint_manifest_payload(
+    identity: Mapping[str, object], global_step: int
+) -> dict[str, object]:
+    return {
         "global_step": global_step,
         "identity": json.loads(_canonical_json(dict(identity))),
         "schema_version": 1,
     }
-    manifest = directory / CHECKPOINT_MANIFEST_FILENAME
-    temporary = directory / f".{CHECKPOINT_MANIFEST_FILENAME}.tmp"
+
+
+def _require_real_manifest_paths(manifest: Path, temporary: Path) -> None:
     if manifest.is_symlink() or temporary.is_symlink():
         raise CheckpointError("checkpoint manifest cannot be a symlink")
+
+
+def _write_manifest_atomically(
+    temporary: Path, manifest: Path, payload: Mapping[str, object]
+) -> None:
     try:
         temporary.write_text(
-            json.dumps(payload, allow_nan=False, sort_keys=True) + "\n",
+            json.dumps(payload, **_ATOMIC_JSON_OPTIONS, sort_keys=True) + "\n",
             encoding="utf-8",
         )
         os.chmod(temporary, 0o600)
@@ -152,7 +196,6 @@ def write_checkpoint_manifest(
     except (OSError, TypeError, ValueError) as error:
         temporary.unlink(missing_ok=True)
         raise CheckpointError("checkpoint manifest cannot be written") from error
-    return manifest
 
 
 def _is_complete_checkpoint(
@@ -162,10 +205,31 @@ def _is_complete_checkpoint(
 ) -> CheckpointInfo | None:
     if not _is_safe_checkpoint_directory(checkpoint_directory):
         return None
-    match = _CHECKPOINT_NAME_PATTERN.fullmatch(checkpoint_directory.name)
-    if match is None:
+    global_step = _checkpoint_step(checkpoint_directory)
+    if global_step is None:
         return None
-    global_step = int(match.group(1))
+    metadata = _read_checkpoint_metadata(checkpoint_directory)
+    if metadata is None:
+        return None
+    manifest_payload, trainer_state = metadata
+    if not _metadata_matches(
+        manifest_payload,
+        trainer_state,
+        global_step=global_step,
+        expected_identity=expected_identity,
+    ):
+        return None
+    return CheckpointInfo(path=checkpoint_directory, global_step=global_step)
+
+
+def _checkpoint_step(checkpoint_directory: Path) -> int | None:
+    match = _CHECKPOINT_NAME_PATTERN.fullmatch(checkpoint_directory.name)
+    return None if match is None else int(match.group(1))
+
+
+def _read_checkpoint_metadata(
+    checkpoint_directory: Path,
+) -> tuple[object, object] | None:
     try:
         if not _has_checkpoint_files(checkpoint_directory):
             return None
@@ -179,14 +243,7 @@ def _is_complete_checkpoint(
         )
     except (OSError, json.JSONDecodeError):
         return None
-    if not _metadata_matches(
-        manifest_payload,
-        trainer_state,
-        global_step=global_step,
-        expected_identity=expected_identity,
-    ):
-        return None
-    return CheckpointInfo(path=checkpoint_directory, global_step=global_step)
+    return manifest_payload, trainer_state
 
 
 def find_complete_checkpoint(
@@ -218,21 +275,36 @@ def find_latest_complete_checkpoint(
     """Return the newest complete identity-matching checkpoint, if any."""
 
     output = Path(output_directory)
-    if not output.is_absolute() or _contains_symlink(output):
-        raise CheckpointError("checkpoint output directory must not be symlinked")
+    _require_safe_output_directory(output)
     if not output.exists():
         return None
     if not output.is_dir():
         raise CheckpointError("checkpoint output path must be a directory")
+    candidates = _checkpoint_candidates(output)
+    complete = _complete_candidates(candidates, identity)
+    return max(complete, key=lambda item: item.global_step) if complete else None
+
+
+def _require_safe_output_directory(output: Path) -> None:
+    if not output.is_absolute() or _contains_symlink(output):
+        raise CheckpointError("checkpoint output directory must not be symlinked")
+
+
+def _checkpoint_candidates(output: Path) -> tuple[Path, ...]:
     try:
-        candidates = tuple(
+        return tuple(
             path
             for path in output.iterdir()
             if _CHECKPOINT_NAME_PATTERN.fullmatch(path.name)
         )
     except OSError as error:
         raise CheckpointError("checkpoint output directory cannot be read") from error
-    complete = tuple(
+
+
+def _complete_candidates(
+    candidates: tuple[Path, ...], identity: Mapping[str, object]
+) -> tuple[CheckpointInfo, ...]:
+    return tuple(
         result
         for candidate in candidates
         if (
@@ -243,9 +315,6 @@ def find_latest_complete_checkpoint(
         )
         is not None
     )
-    if not complete:
-        return None
-    return max(complete, key=lambda item: item.global_step)
 
 
 __all__ = [

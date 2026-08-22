@@ -39,6 +39,7 @@ from .grid5000 import (
     Grid5000RunIdentity,
     SubprocessCommandRunner,
 )
+from .publication import ModelPublicationResult
 from .training import (
     TrainingConfig,
     TrainingError,
@@ -117,25 +118,78 @@ def _validate_checkout(
 
 
 def _validate_cuda(probe: CudaProbe) -> str:
+    values = _cuda_probe_values(probe)
+    return _validated_cuda_device(*values)
+
+
+def _cuda_probe_values(probe: CudaProbe) -> tuple[bool, int, str, tuple[int, int]]:
     try:
-        cuda_available, device_count, device_name, capability = probe()
+        return probe()
     except WorkerError:
         raise
     except Exception as error:
         raise WorkerError("CUDA preflight could not complete") from error
+
+
+def _validated_cuda_device(
+    cuda_available: bool,
+    device_count: int,
+    device_name: str,
+    capability: tuple[int, int],
+) -> str:
+    _require_cuda_available(cuda_available)
+    _require_one_cuda_device(device_count)
+    _require_cuda_device_name(device_name)
+    _require_cuda_capability(capability)
+    return device_name
+
+
+def _require_cuda_available(cuda_available: bool) -> None:
     if not cuda_available:
         raise WorkerError("CUDA is not available on the worker")
-    if device_count != 1:
+
+
+def _require_one_cuda_device(device_count: int) -> None:
+    if isinstance(device_count, bool) or device_count != 1:
         raise WorkerError("worker must expose exactly one CUDA GPU")
+
+
+def _require_cuda_device_name(device_name: str) -> None:
     if not device_name.strip():
         raise WorkerError("CUDA device name is missing")
+
+
+def _require_cuda_capability(capability: tuple[int, int]) -> None:
     if capability < MINIMUM_CUDA_CAPABILITY:
         minimum = ".".join(str(part) for part in MINIMUM_CUDA_CAPABILITY)
         actual = ".".join(str(part) for part in capability)
         raise WorkerError(
             f"CUDA compute capability {actual} is below the required {minimum}"
         )
-    return device_name
+
+
+def _validate_worker_platform(platform_name: str | None) -> None:
+    if (platform_name or sys.platform) != "linux":
+        raise WorkerError("Grid'5000 worker requires a Linux compute node")
+
+
+def _validate_worker_source_commit(source_commit: str) -> None:
+    if _REVISION_PATTERN.fullmatch(source_commit) is None:
+        raise WorkerError("expected source commit is not a pinned revision")
+
+
+def _worker_job_id(environ: Mapping[str, str]) -> int:
+    raw_job_id = environ.get("OAR_JOB_ID")
+    if raw_job_id is None or _JOB_ID_PATTERN.fullmatch(raw_job_id) is None:
+        raise WorkerError("OAR_JOB_ID must be one positive integer")
+    return int(raw_job_id)
+
+
+def _worker_checkout_path(checkout: Path) -> Path:
+    checkout_path = Path(checkout)
+    if not checkout_path.is_absolute() or checkout_path.is_symlink():
+        raise WorkerError("worker checkout must be an absolute non-symlink path")
+    return checkout_path
 
 
 def _has_hugging_face_auth(environ: Mapping[str, str]) -> bool:
@@ -160,25 +214,18 @@ def validate_compute_node(
 ) -> WorkerFacts:
     """Validate Linux, OAR identity, checkout exactness, and one CUDA GPU."""
 
-    effective_platform = platform_name or sys.platform
-    if effective_platform != "linux":
-        raise WorkerError("Grid'5000 worker requires a Linux compute node")
-    if _REVISION_PATTERN.fullmatch(expected_source_commit) is None:
-        raise WorkerError("expected source commit is not a pinned revision")
+    _validate_worker_platform(platform_name)
+    _validate_worker_source_commit(expected_source_commit)
     environment = os.environ if environ is None else environ
-    raw_job_id = environment.get("OAR_JOB_ID")
-    if raw_job_id is None or _JOB_ID_PATTERN.fullmatch(raw_job_id) is None:
-        raise WorkerError("OAR_JOB_ID must be one positive integer")
-    checkout_path = Path(checkout)
-    if not checkout_path.is_absolute() or checkout_path.is_symlink():
-        raise WorkerError("worker checkout must be an absolute non-symlink path")
+    job_id = _worker_job_id(environment)
+    checkout_path = _worker_checkout_path(checkout)
 
     runner = git_runner or SubprocessCommandRunner()
     _validate_checkout(checkout_path, expected_source_commit, runner)
     device_name = _validate_cuda(cuda_probe or _default_cuda_probe)
 
     return WorkerFacts(
-        job_id=int(raw_job_id),
+        job_id=job_id,
         source_commit=expected_source_commit,
         cuda_device_name=device_name,
     )
@@ -191,23 +238,42 @@ def _validated_worker_config(
     contract: DatasetContract,
     training_config: TrainingConfig | None,
 ) -> TrainingConfig:
+    _validate_worker_boundary(identity, expected_task_name, contract)
+    identity_config = _identity_training_config(identity)
+    if training_config is not None and training_config != identity_config:
+        raise WorkerError("worker training configuration does not match identity")
+    effective_config = training_config or identity_config
+    _validate_model_identity(effective_config, identity)
+    return effective_config
+
+
+def _validate_worker_boundary(
+    identity: Grid5000RunIdentity,
+    expected_task_name: str,
+    contract: DatasetContract,
+) -> None:
     if identity.task_name != expected_task_name:
         raise WorkerError("worker task name does not match its training boundary")
     if identity.dataset_revision != contract.provenance.repository_revision:
         raise WorkerError("worker dataset revision does not match the pinned contract")
+
+
+def _identity_training_config(identity: Grid5000RunIdentity) -> TrainingConfig:
     config_values: dict[str, Any] = dict(identity.training_config)
     try:
-        identity_config = TrainingConfig(**config_values)
+        return TrainingConfig(**config_values)
     except (TypeError, TrainingError) as error:
         raise WorkerError("worker training configuration is invalid") from error
-    if training_config is not None and training_config != identity_config:
-        raise WorkerError("worker training configuration does not match identity")
-    effective_config = training_config or identity_config
-    if effective_config.model_name_or_path != identity.model_name_or_path:
+
+
+def _validate_model_identity(
+    config: TrainingConfig,
+    identity: Grid5000RunIdentity,
+) -> None:
+    if config.model_name_or_path != identity.model_name_or_path:
         raise WorkerError("worker model identity does not match training configuration")
-    if effective_config.model_revision != identity.model_revision:
+    if config.model_revision != identity.model_revision:
         raise WorkerError("worker model revision does not match training configuration")
-    return effective_config
 
 
 def _require_worker_hugging_face_auth(
@@ -238,6 +304,106 @@ def _latest_worker_checkpoint(
     if require_checkpoint and checkpoint is None:
         raise WorkerError("no complete checkpoint is available for continuation")
     return checkpoint
+
+
+def _remote_project_config(data_root: Path) -> ProjectConfig:
+    try:
+        return ProjectConfig.for_remote_root(data_root)
+    except (ConfigurationError, Grid5000ConfigurationError) as error:
+        raise WorkerError("remote worker data root is unsafe") from error
+
+
+def _prefer_published_checkpoint(
+    checkpoint: CheckpointInfo,
+    *,
+    output_directory: Path,
+    identity: Grid5000RunIdentity,
+    project_config: ProjectConfig,
+) -> CheckpointInfo:
+    try:
+        published = latest_published_checkpoint(
+            identity.canonical_payload,
+            repository_id=project_config.target_model_repository_id,
+        )
+    except HubCheckpointError:
+        return checkpoint
+    if published is None or published.step <= checkpoint.global_step:
+        return checkpoint
+    try:
+        return restore_published_checkpoint(
+            output_directory,
+            identity=identity.canonical_payload,
+            repository_id=project_config.target_model_repository_id,
+        )
+    except HubCheckpointError as error:
+        raise WorkerError("newer published checkpoint could not be restored") from error
+
+
+def _resume_worker_checkpoint(
+    checkpoint: CheckpointInfo | None,
+    *,
+    identity: Grid5000RunIdentity,
+    output_directory: Path,
+    project_config: ProjectConfig,
+    training_config: TrainingConfig,
+    require_checkpoint: bool,
+) -> CheckpointInfo | None:
+    if not require_checkpoint:
+        return checkpoint
+    checkpoint = _maybe_prefer_published_checkpoint(
+        checkpoint,
+        output_directory=output_directory,
+        identity=identity,
+        project_config=project_config,
+        training_config=training_config,
+    )
+    if checkpoint is not None:
+        return checkpoint
+    return _restore_required_checkpoint(
+        output_directory,
+        identity=identity,
+        project_config=project_config,
+        training_config=training_config,
+    )
+
+
+def _maybe_prefer_published_checkpoint(
+    checkpoint: CheckpointInfo | None,
+    *,
+    output_directory: Path,
+    identity: Grid5000RunIdentity,
+    project_config: ProjectConfig,
+    training_config: TrainingConfig,
+) -> CheckpointInfo | None:
+    if checkpoint is None or not training_config.publish_to_hub:
+        return checkpoint
+    return _prefer_published_checkpoint(
+        checkpoint,
+        output_directory=output_directory,
+        identity=identity,
+        project_config=project_config,
+    )
+
+
+def _restore_required_checkpoint(
+    output_directory: Path,
+    *,
+    identity: Grid5000RunIdentity,
+    project_config: ProjectConfig,
+    training_config: TrainingConfig,
+) -> CheckpointInfo:
+    if not training_config.publish_to_hub:
+        raise WorkerError("no complete checkpoint is available for continuation")
+    try:
+        return restore_published_checkpoint(
+            output_directory,
+            identity=identity.canonical_payload,
+            repository_id=project_config.target_model_repository_id,
+        )
+    except HubCheckpointError as error:
+        raise WorkerError(
+            "no complete local or published checkpoint is available for continuation"
+        ) from error
 
 
 def _run_training_worker(
@@ -275,51 +441,21 @@ def _run_training_worker(
         cuda_probe=cuda_probe,
     )
     data_root = remote_data_root or Path.home() / REMOTE_DATA_SUBDIRECTORY
-    try:
-        project_config = ProjectConfig.for_remote_root(data_root)
-    except (ConfigurationError, Grid5000ConfigurationError) as error:
-        raise WorkerError("remote worker data root is unsafe") from error
+    project_config = _remote_project_config(data_root)
     output_directory = project_config.data_root / effective_config.output_subdirectory
     checkpoint = _latest_worker_checkpoint(
         output_directory,
         identity=identity,
         require_checkpoint=False,
     )
-    if require_checkpoint:
-        if checkpoint is not None and effective_config.publish_to_hub:
-            try:
-                published = latest_published_checkpoint(
-                    identity.canonical_payload,
-                    repository_id=project_config.target_model_repository_id,
-                )
-            except HubCheckpointError:
-                published = None
-            if published is not None and published.step > checkpoint.global_step:
-                try:
-                    checkpoint = restore_published_checkpoint(
-                        output_directory,
-                        identity=identity.canonical_payload,
-                        repository_id=project_config.target_model_repository_id,
-                    )
-                except HubCheckpointError as error:
-                    raise WorkerError(
-                        "newer published checkpoint could not be restored"
-                    ) from error
-        if checkpoint is None:
-            if not effective_config.publish_to_hub:
-                raise WorkerError(
-                    "no complete checkpoint is available for continuation"
-                )
-            try:
-                checkpoint = restore_published_checkpoint(
-                    output_directory,
-                    identity=identity.canonical_payload,
-                    repository_id=project_config.target_model_repository_id,
-                )
-            except HubCheckpointError as error:
-                raise WorkerError(
-                    "no complete local or published checkpoint is available for continuation"
-                ) from error
+    checkpoint = _resume_worker_checkpoint(
+        checkpoint,
+        identity=identity,
+        output_directory=output_directory,
+        project_config=project_config,
+        training_config=effective_config,
+        require_checkpoint=require_checkpoint,
+    )
     return train(
         config=effective_config,
         project_config=project_config,
@@ -402,23 +538,76 @@ def write_completion_manifest(
 ) -> Path:
     """Write one atomic, credential-free manifest after successful training."""
 
-    raw_data_root = Path(remote_data_root).expanduser()
-    raw_output_directory = Path(result.output_directory).expanduser()
-    if not raw_data_root.is_absolute() or not raw_output_directory.is_absolute():
-        raise WorkerError("completion paths must be absolute")
-    if _contains_symlink(raw_data_root) or _contains_symlink(raw_output_directory):
-        raise WorkerError("completion paths must not be symlinks")
-    data_root = raw_data_root.resolve()
-    output_directory = raw_output_directory.resolve()
-    if not output_directory.is_relative_to(data_root):
-        raise WorkerError("training output is outside the managed remote data root")
+    data_root, output_directory = _completion_directories(
+        result.output_directory,
+        remote_data_root,
+    )
     data_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(data_root, 0o700)
     manifest_path = data_root / "completion.json"
     if manifest_path.is_symlink():
         raise WorkerError("completion manifest cannot be a symlink")
+    payload = _completion_payload(identity, result, data_root, output_directory)
+    _write_completion_manifest(manifest_path, payload)
+    return manifest_path
+
+
+def _completion_directories(
+    output_path: Path,
+    remote_data_root: Path,
+) -> tuple[Path, Path]:
+    raw_data_root = Path(remote_data_root).expanduser()
+    raw_output_directory = Path(output_path).expanduser()
+    _require_absolute_completion_paths(raw_data_root, raw_output_directory)
+    _require_non_symlink_completion_paths(raw_data_root, raw_output_directory)
+    data_root = raw_data_root.resolve()
+    output_directory = raw_output_directory.resolve()
+    _require_output_inside_data_root(output_directory, data_root)
+    return data_root, output_directory
+
+
+def _require_absolute_completion_paths(data_root: Path, output_directory: Path) -> None:
+    if not data_root.is_absolute() or not output_directory.is_absolute():
+        raise WorkerError("completion paths must be absolute")
+
+
+def _require_non_symlink_completion_paths(
+    data_root: Path,
+    output_directory: Path,
+) -> None:
+    if _contains_symlink(data_root) or _contains_symlink(output_directory):
+        raise WorkerError("completion paths must not be symlinks")
+
+
+def _require_output_inside_data_root(
+    output_directory: Path,
+    data_root: Path,
+) -> None:
+    if not output_directory.is_relative_to(data_root):
+        raise WorkerError("training output is outside the managed remote data root")
+
+
+def _model_publication_payload(
+    publication: ModelPublicationResult | None,
+) -> dict[str, object] | None:
+    if publication is None:
+        return None
+    return {
+        "repository_id": publication.repository_id,
+        "commit_id": publication.commit_id,
+        "commit_url": publication.commit_url,
+        "files": list(publication.files),
+    }
+
+
+def _completion_payload(
+    identity: Grid5000RunIdentity,
+    result: TrainingResult,
+    data_root: Path,
+    output_directory: Path,
+) -> dict[str, object]:
     publication = result.model_publication
-    payload: dict[str, object] = {
+    return {
         "schema_version": 1,
         "run_id": identity.run_id,
         "source_commit": identity.source_commit,
@@ -426,19 +615,16 @@ def write_completion_manifest(
         "model_name_or_path": identity.model_name_or_path,
         "model_revision": identity.model_revision,
         "output_directory": str(output_directory.relative_to(data_root)),
-        "model_publication": (
-            {
-                "repository_id": publication.repository_id,
-                "commit_id": publication.commit_id,
-                "commit_url": publication.commit_url,
-                "files": list(publication.files),
-            }
-            if publication is not None
-            else None
-        ),
+        "model_publication": _model_publication_payload(publication),
         "tracking_space_id": result.tracking_space_id,
         "metrics": _safe_manifest_metrics(result.metrics),
     }
+
+
+def _write_completion_manifest(
+    manifest_path: Path,
+    payload: Mapping[str, object],
+) -> None:
     temporary = manifest_path.with_name(".completion.json.tmp")
     try:
         temporary.write_text(
@@ -450,7 +636,6 @@ def write_completion_manifest(
     except (OSError, TypeError, ValueError) as error:
         temporary.unlink(missing_ok=True)
         raise WorkerError("completion manifest cannot be written") from error
-    return manifest_path
 
 
 def _safe_manifest_metrics(metrics: Mapping[str, object] | None) -> dict[str, object]:
@@ -460,15 +645,30 @@ def _safe_manifest_metrics(metrics: Mapping[str, object] | None) -> dict[str, ob
         raise WorkerError("training metrics are invalid")
     safe_metrics: dict[str, object] = {}
     for key, value in metrics.items():
-        if not isinstance(key, str) or any(
-            part in key.casefold() for part in ("token", "secret", "password")
-        ):
-            continue
-        if isinstance(value, (bool, int, str)) or (
-            isinstance(value, float) and math.isfinite(value)
-        ):
-            safe_metrics[key] = value
+        safe_metric = _safe_metric_entry(key, value)
+        if safe_metric is not None:
+            safe_key, safe_value = safe_metric
+            safe_metrics[safe_key] = safe_value
     return safe_metrics
+
+
+def _safe_metric_key(key: object) -> bool:
+    return isinstance(key, str) and not any(
+        part in key.casefold() for part in ("token", "secret", "password")
+    )
+
+
+def _safe_metric_value(value: object) -> bool:
+    return isinstance(value, (bool, int, str)) or (
+        isinstance(value, float) and math.isfinite(value)
+    )
+
+
+def _safe_metric_entry(key: object, value: object) -> tuple[str, object] | None:
+    if not _safe_metric_key(key) or not _safe_metric_value(value):
+        return None
+    assert isinstance(key, str)
+    return key, value
 
 
 def _contains_symlink(path: Path) -> bool:
@@ -529,7 +729,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--source-commit", required=True)
     parser.add_argument(
         "--checkout-commit",
-        default=None,
         help="optional code checkout revision for an identity-preserving resume",
     )
     parser.add_argument("--dataset-revision", required=True)

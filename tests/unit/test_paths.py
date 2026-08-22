@@ -27,7 +27,10 @@ def test_absolute_or_traversal_paths_are_rejected(
     tmp_path: Path,
     candidate: str,
 ) -> None:
-    with pytest.raises(ManagedPathError, match="beneath the managed root"):
+    with pytest.raises(
+        ManagedPathError,
+        match=r"\Apath must remain beneath the managed root\Z",
+    ):
         resolve_managed_path(tmp_path / "approved", candidate)
 
 
@@ -38,7 +41,10 @@ def test_symlink_that_escapes_the_root_is_rejected(tmp_path: Path) -> None:
     outside.mkdir()
     (root / "escape").symlink_to(outside, target_is_directory=True)
 
-    with pytest.raises(ManagedPathError, match="beneath the managed root"):
+    with pytest.raises(
+        ManagedPathError,
+        match=r"\Apath must remain beneath the managed root\Z",
+    ):
         resolve_managed_path(root, "escape/file.json")
 
 
@@ -51,7 +57,10 @@ def test_symlinked_directory_component_is_rejected_even_when_it_stays_inside(
     target.mkdir()
     (root / "audit").symlink_to(target, target_is_directory=True)
 
-    with pytest.raises(ManagedPathError, match="symlink"):
+    with pytest.raises(
+        ManagedPathError,
+        match=r"\Asymlinked path components are not allowed\Z",
+    ):
         resolve_managed_path(root, "audit/landuse")
 
 
@@ -61,7 +70,10 @@ def test_symlink_loop_is_reported_as_a_managed_path_error(tmp_path: Path) -> Non
     loop = root / "loop"
     loop.symlink_to(loop)
 
-    with pytest.raises(ManagedPathError, match="symlink"):
+    with pytest.raises(
+        ManagedPathError,
+        match=r"\Asymlinked path components are not allowed\Z",
+    ):
         resolve_managed_path(root, "loop/file.json")
 
 

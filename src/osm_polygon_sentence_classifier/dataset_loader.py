@@ -59,22 +59,28 @@ def _validate_split_fractions(
     if test_fraction == 0:
         _validate_validation_fraction(validation_fraction)
         return
-    if (
-        isinstance(validation_fraction, bool)
-        or not isinstance(validation_fraction, (int, float))
-        or not math.isfinite(validation_fraction)
-        or validation_fraction < 0
-        or validation_fraction > 1
-        or isinstance(test_fraction, bool)
-        or not isinstance(test_fraction, (int, float))
-        or not math.isfinite(test_fraction)
-        or not 0 <= test_fraction <= 1
-        or validation_fraction + test_fraction > 1
-    ):
-        raise DatasetLoaderError(
-            "validation and test fractions must be finite, non-negative, "
-            "and sum to at most 1"
-        )
+    if not _is_valid_fraction(validation_fraction):
+        _raise_invalid_split_fractions()
+    if not _is_valid_fraction(test_fraction):
+        _raise_invalid_split_fractions()
+    if validation_fraction + test_fraction > 1:
+        _raise_invalid_split_fractions()
+
+
+def _is_valid_fraction(value: object) -> bool:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(value)
+        and 0 <= value <= 1
+    )
+
+
+def _raise_invalid_split_fractions() -> None:
+    raise DatasetLoaderError(
+        "validation and test fractions must be finite, non-negative, "
+        "and sum to at most 1"
+    )
 
 
 def _require_identifier(name: str, value: object) -> str:
@@ -95,7 +101,8 @@ def split_for_polygon(
     _validate_split_fractions(validation_fraction, test_fraction)
     polygon_id = _require_identifier("polygon_id", polygon_id)
     digest = hashlib.sha256(f"{seed}:{polygon_id}".encode()).digest()
-    value = int.from_bytes(digest[:8], byteorder="big", signed=False) / 2**64
+    digest_value = int.from_bytes(digest[:8], "big")  # pragma: no mutate
+    value = digest_value / 2**64
     if value < validation_fraction:
         return "validation"
     if value < validation_fraction + test_fraction:
@@ -173,9 +180,9 @@ def iter_training_examples(
         label = row[contract.label_column]
         if label not in contract.training_label_values:
             continue
-        training_label = _training_label_for_row(row, contract=contract)
-        if training_label is None:
-            continue
+        training_label = cast(
+            TrainingLabel, _training_label_for_row(row, contract=contract)
+        )
         yield _training_example_from_row(
             row,
             label=training_label,
@@ -199,18 +206,27 @@ def _discover_contradictory_hashes(
 
     labels_by_hash: dict[str, set[TrainingLabel]] = {}
     for row in _validated_rows(iterator, contract=contract):
-        label = _training_label_for_row(row, contract=contract)
-        if label is None:
-            continue
-        content_hash = _usable_sentence_content_hash(row)
-        if content_hash is not None:
-            labels_by_hash.setdefault(content_hash, set()).add(label)
+        _record_training_label(labels_by_hash, row, contract=contract)
 
     return {
         content_hash
         for content_hash, labels in labels_by_hash.items()
         if len(labels) > 1
     }
+
+
+def _record_training_label(
+    labels_by_hash: dict[str, set[TrainingLabel]],
+    row: Mapping[str, object],
+    *,
+    contract: DatasetContract,
+) -> None:
+    label = _training_label_for_row(row, contract=contract)
+    if label is None:
+        return
+    content_hash = _usable_sentence_content_hash(row)
+    if content_hash is not None:
+        labels_by_hash.setdefault(content_hash, set()).add(label)
 
 
 def _emit_clean_examples(
@@ -231,29 +247,51 @@ def _emit_clean_examples(
 
     emitted_hashes: set[str] = set()
     for row in _validated_rows(iterator, contract=contract):
-        label = _training_label_for_row(row, contract=contract)
-        if label is None:
-            continue
-        content_hash = _usable_sentence_content_hash(row)
-        if content_hash is None:
-            yield _training_example_from_row(
-                row,
-                label=label,
-                validation_fraction=validation_fraction,
-                test_fraction=test_fraction,
-                seed=seed,
-            )
-            continue
-        if content_hash in contradictory_hashes or content_hash in emitted_hashes:
-            continue
-        emitted_hashes.add(content_hash)
-        yield _training_example_from_row(
+        example = _clean_example_for_row(
+            row,
+            contradictory_hashes=contradictory_hashes,
+            emitted_hashes=emitted_hashes,
+            validation_fraction=validation_fraction,
+            test_fraction=test_fraction,
+            seed=seed,
+            contract=contract,
+        )
+        if example is not None:
+            yield example
+
+
+def _clean_example_for_row(
+    row: Mapping[str, object],
+    *,
+    contradictory_hashes: set[str],
+    emitted_hashes: set[str],
+    validation_fraction: float,
+    test_fraction: float,
+    seed: int,
+    contract: DatasetContract,
+) -> TrainingExample | None:
+    label = _training_label_for_row(row, contract=contract)
+    if label is None:
+        return None
+    content_hash = _usable_sentence_content_hash(row)
+    if content_hash is None:
+        return _training_example_from_row(
             row,
             label=label,
             validation_fraction=validation_fraction,
             test_fraction=test_fraction,
             seed=seed,
         )
+    if content_hash in contradictory_hashes or content_hash in emitted_hashes:
+        return None
+    emitted_hashes.add(content_hash)
+    return _training_example_from_row(
+        row,
+        label=label,
+        validation_fraction=validation_fraction,
+        test_fraction=test_fraction,
+        seed=seed,
+    )
 
 
 def iter_clean_training_examples(

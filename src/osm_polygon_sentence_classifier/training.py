@@ -137,44 +137,61 @@ def _validate_boolean_settings(config: TrainingConfig) -> None:
 
 
 def _validate_training_identity(config: TrainingConfig) -> None:
-    if (
-        not isinstance(config.model_name_or_path, str)
-        or not config.model_name_or_path.strip()
-    ):
+    _validate_model_name(config.model_name_or_path)
+    _validate_run_name(config.run_name)
+    _validate_model_revision(config.model_revision)
+    _validate_training_modes(config)
+    _validate_tracking_names(config)
+
+
+def _validate_model_name(value: object) -> None:
+    if not isinstance(value, str) or not value.strip():
         raise TrainingError("model_name_or_path must be a non-empty string")
-    if not isinstance(config.run_name, str) or not config.run_name.strip():
+
+
+def _validate_run_name(value: object) -> None:
+    if not isinstance(value, str) or not value.strip():
         raise TrainingError("run_name must be a non-empty string")
-    if config.model_revision is not None and (
-        not isinstance(config.model_revision, str)
-        or re.fullmatch(r"[0-9a-f]{40}", config.model_revision) is None
+
+
+def _validate_model_revision(value: object) -> None:
+    if value is not None and (
+        not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None
     ):
         raise TrainingError(
             "model_revision must be exactly 40 lowercase hexadecimal characters"
         )
+
+
+def _validate_training_modes(config: TrainingConfig) -> None:
     if config.trainable_layers not in {None, "head", "last2"}:
         raise TrainingError("trainable_layers must be head or last2")
     if config.class_weight_mode not in {None, "none", "balanced"}:
         raise TrainingError("class_weight_mode must be none or balanced")
     if config.eval_strategy not in {"steps", "epoch"}:
         raise TrainingError("eval_strategy must be steps or epoch")
+
+
+def _validate_tracking_names(config: TrainingConfig) -> None:
     for name in ("tracking_project", "artifact_namespace"):
         value = getattr(config, name)
-        if value is not None and (
-            not isinstance(value, str)
-            or not value.strip()
-            or "\n" in value
-            or "\r" in value
-        ):
-            raise TrainingError(f"{name} must be a non-empty single-line string")
+        if value is not None:
+            _validate_tracking_name(name, value)
+
+
+def _validate_tracking_name(name: str, value: object) -> None:
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or "\n" in value
+        or "\r" in value
+    ):
+        raise TrainingError(f"{name} must be a non-empty single-line string")
 
 
 def _normalize_training_paths(config: TrainingConfig) -> None:
     output_subdirectory = Path(config.output_subdirectory)
-    if (
-        not output_subdirectory.parts
-        or output_subdirectory.is_absolute()
-        or any(part in (".", "..") for part in output_subdirectory.parts)
-    ):
+    if not _is_clean_relative_path(output_subdirectory):
         raise TrainingError(
             "output_subdirectory must be a clean relative path beneath the "
             "managed data root"
@@ -183,36 +200,49 @@ def _normalize_training_paths(config: TrainingConfig) -> None:
 
     if config.artifact_namespace is not None:
         namespace = Path(config.artifact_namespace)
-        if (
-            not namespace.parts
-            or namespace.is_absolute()
-            or any(part in (".", "..") for part in namespace.parts)
-        ):
+        if not _is_clean_relative_path(namespace):
             raise TrainingError("artifact_namespace must be a clean relative path")
         object.__setattr__(config, "artifact_namespace", namespace.as_posix())
 
 
+def _is_clean_relative_path(path: Path) -> bool:
+    return (
+        bool(path.parts)
+        and not path.is_absolute()
+        and not any(part in (".", "..") for part in path.parts)
+    )
+
+
 def _validate_numeric_settings(config: TrainingConfig) -> None:
-    if (
-        isinstance(config.validation_fraction, bool)
-        or not isinstance(config.validation_fraction, (int, float))
-        or not math.isfinite(config.validation_fraction)
-        or not 0 <= config.validation_fraction <= 1
-    ):
+    _validate_fraction_settings(config)
+    _validate_positive_integer_settings(config)
+    _validate_learning_rate(config.learning_rate)
+
+
+def _is_finite_fraction(value: object) -> bool:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(value)
+        and 0 <= value <= 1
+    )
+
+
+def _validate_fraction_settings(config: TrainingConfig) -> None:
+    if not _is_finite_fraction(config.validation_fraction):
         raise TrainingError(
             "validation_fraction must be a finite number between 0 and 1"
         )
-    if (
-        isinstance(config.test_fraction, bool)
-        or not isinstance(config.test_fraction, (int, float))
-        or not math.isfinite(config.test_fraction)
-        or not 0 <= config.test_fraction <= 1
-        or config.validation_fraction + config.test_fraction > 1
+    if not _is_finite_fraction(config.test_fraction) or (
+        config.validation_fraction + config.test_fraction > 1
     ):
         raise TrainingError(
             "validation and test fractions must be finite, non-negative, "
             "and sum to at most 1"
         )
+
+
+def _validate_positive_integer_settings(config: TrainingConfig) -> None:
     for name in (
         "max_length",
         "max_steps",
@@ -225,15 +255,26 @@ def _validate_numeric_settings(config: TrainingConfig) -> None:
         "hub_checkpoint_steps",
     ):
         value = getattr(config, name)
-        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-            raise TrainingError(f"{name} must be a positive integer")
+        _validate_positive_integer(name, value)
+    _validate_checkpoint_interval(config)
+
+
+def _validate_positive_integer(name: str, value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise TrainingError(f"{name} must be a positive integer")
+
+
+def _validate_checkpoint_interval(config: TrainingConfig) -> None:
     if config.hub_checkpoint_steps % config.save_steps != 0:
         raise TrainingError("hub_checkpoint_steps must be a multiple of save_steps")
+
+
+def _validate_learning_rate(value: object) -> None:
     if (
-        isinstance(config.learning_rate, bool)
-        or not isinstance(config.learning_rate, (int, float))
-        or not math.isfinite(config.learning_rate)
-        or config.learning_rate <= 0
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value <= 0
     ):
         raise TrainingError("learning_rate must be a positive finite number")
 
@@ -307,23 +348,47 @@ def _prepare_checkpoint_resume(
     resume_from_checkpoint: Path | None,
     checkpoint_identity: Mapping[str, object] | None,
 ) -> tuple[Path | None, dict[str, object] | None]:
-    if resume_from_checkpoint is not None and checkpoint_identity is None:
-        raise TrainingError("checkpoint identity is required for resume")
+    _validate_checkpoint_resume_arguments(
+        resume_from_checkpoint=resume_from_checkpoint,
+        checkpoint_identity=checkpoint_identity,
+    )
     if checkpoint_identity is None:
         return resume_from_checkpoint, None
     identity = dict(checkpoint_identity)
     if resume_from_checkpoint is None:
         return None, identity
+    _validate_requested_checkpoint(
+        output_directory,
+        resume_from_checkpoint=resume_from_checkpoint,
+        identity=identity,
+    )
+    return resume_from_checkpoint, identity
+
+
+def _validate_checkpoint_resume_arguments(
+    *,
+    resume_from_checkpoint: Path | None,
+    checkpoint_identity: Mapping[str, object] | None,
+) -> None:
+    if resume_from_checkpoint is not None and checkpoint_identity is None:
+        raise TrainingError("checkpoint identity is required for resume")
+
+
+def _validate_requested_checkpoint(
+    output_directory: Path,
+    *,
+    resume_from_checkpoint: Path,
+    identity: Mapping[str, object],
+) -> None:
     try:
         selected = find_latest_complete_checkpoint(
             output_directory,
-            identity=identity,
+            identity=dict(identity),
         )
     except CheckpointError as error:
         raise TrainingError("checkpoint evidence is invalid") from error
     if selected is None or selected.path != resume_from_checkpoint:
         raise TrainingError("requested checkpoint is not a complete identity match")
-    return resume_from_checkpoint, identity
 
 
 def iter_split_training_records(
@@ -420,32 +485,55 @@ def _managed_training_environment(
     tracking_project: str | None = None,
 ) -> Iterator[None]:
     paths = ManagedPaths(config)
-    token = os.environ.get("HF_TOKEN", "").strip()
-    if not token:
-        token_path = (
-            Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface")))
-            / "token"
-        )
-        try:
-            token = token_path.read_text(encoding="utf-8").strip()
-        except OSError:
-            token = ""
-    values = {
-        "HF_HOME": str(paths.child("cache/huggingface")),
-        **settings_for(config, project=tracking_project).environment(),
-    }
-    if token:
-        values["HF_TOKEN"] = token
+    values = _training_environment_values(
+        config,
+        paths=paths,
+        tracking_project=tracking_project,
+    )
     previous = {name: os.environ.get(name) for name in values}
     os.environ.update(values)
     try:
         yield
     finally:
-        for name, value in previous.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
+        _restore_environment(previous)
+
+
+def _load_hugging_face_token() -> str:
+    token = os.environ.get("HF_TOKEN", "").strip()
+    if token:
+        return token
+    token_path = (
+        Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface")))
+        / "token"
+    )
+    try:
+        return token_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _training_environment_values(
+    config: ProjectConfig,
+    *,
+    paths: ManagedPaths,
+    tracking_project: str | None,
+) -> dict[str, str]:
+    values = {
+        "HF_HOME": str(paths.child("cache/huggingface")),
+        **settings_for(config, project=tracking_project).environment(),
+    }
+    token = _load_hugging_face_token()
+    if token:
+        values["HF_TOKEN"] = token
+    return values
+
+
+def _restore_environment(previous: Mapping[str, str | None]) -> None:
+    for name, value in previous.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
 
 
 def _evaluate_test_dataset(trainer: Any, test_dataset: Any) -> dict[str, object]:
@@ -497,16 +585,11 @@ def _publish_completed_model(
 
     if not config.publish_to_hub:
         return None
-    repository_readme = (
-        render_repository_readme(
-            identity=identity,
-            trackio_space_id=(
-                tracking.static_space_id if config.sync_trackio else None
-            ),
-        )
-        if config.artifact_namespace is None
-        or contract is WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT
-        else None
+    repository_readme = _repository_readme(
+        config=config,
+        contract=contract,
+        identity=identity,
+        tracking=tracking,
     )
     publication = publish_model_directory(
         output_directory,
@@ -514,28 +597,309 @@ def _publish_completed_model(
         identity=identity,
         repository_readme=repository_readme,
     )
-    is_worldwide_v2_baseline = config.artifact_namespace in {
-        None,
-        "studies/place-relevance-v2/baseline",
-    }
-    if contract is WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT and is_worldwide_v2_baseline:
-        try:
-            publish_study_documents(
-                project_config.target_model_repository_id,
-                render_place_relevance_study_documents(
-                    identity=identity,
-                    metrics=metrics,
-                    trackio_space_id=(
-                        tracking.static_space_id if config.sync_trackio else None
-                    ),
-                ),
-                hub_api=checkpoint_hub_api,
-            )
-        except ModelPublicationError as error:
-            raise TrainingError(
-                "worldwide V2 study documentation publication failed"
-            ) from error
+    if _is_worldwide_v2_baseline(config, contract):
+        _publish_worldwide_v2_documents(
+            project_config,
+            config=config,
+            identity=identity,
+            metrics=metrics,
+            tracking=tracking,
+            checkpoint_hub_api=checkpoint_hub_api,
+        )
     return publication
+
+
+def _repository_readme(
+    *,
+    config: TrainingConfig,
+    contract: DatasetContract,
+    identity: Mapping[str, object],
+    tracking: TrackioSettings,
+) -> str | None:
+    if config.artifact_namespace is not None and (
+        contract is not WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT
+    ):
+        return None
+    return render_repository_readme(
+        identity=identity,
+        trackio_space_id=(tracking.static_space_id if config.sync_trackio else None),
+    )
+
+
+def _is_worldwide_v2_baseline(
+    config: TrainingConfig, contract: DatasetContract
+) -> bool:
+    return contract is WORLDWIDE_PLACE_RELEVANCE_V2_CONTRACT and (
+        config.artifact_namespace in {None, "studies/place-relevance-v2/baseline"}
+    )
+
+
+def _publish_worldwide_v2_documents(
+    project_config: ProjectConfig,
+    *,
+    config: TrainingConfig,
+    identity: Mapping[str, object],
+    metrics: Mapping[str, object],
+    tracking: TrackioSettings,
+    checkpoint_hub_api: Any,
+) -> None:
+    try:
+        publish_study_documents(
+            project_config.target_model_repository_id,
+            render_place_relevance_study_documents(
+                identity=identity,
+                metrics=metrics,
+                trackio_space_id=(
+                    tracking.static_space_id if config.sync_trackio else None
+                ),
+            ),
+            hub_api=checkpoint_hub_api,
+        )
+    except ModelPublicationError as error:
+        raise TrainingError(
+            "worldwide V2 study documentation publication failed"
+        ) from error
+
+
+@dataclass(frozen=True, slots=True)
+class _TrainingContext:
+    config: TrainingConfig
+    project_config: ProjectConfig
+    contract: DatasetContract
+    rows_factory: Callable[[], Iterable[Mapping[str, object]]]
+    output_directory: Path
+    model_cache_directory: Path
+    tracking: TrackioSettings
+    resume_from_checkpoint: Path | None
+    checkpoint_identity: Mapping[str, object] | None
+
+
+def _effective_training_config(config: TrainingConfig | None) -> TrainingConfig:
+    return config or TrainingConfig()
+
+
+def _effective_project_config(config: ProjectConfig | None) -> ProjectConfig:
+    return config or ProjectConfig()
+
+
+def _effective_rows_factory(
+    rows_factory: Callable[[], Iterable[Mapping[str, object]]] | None,
+    *,
+    project_config: ProjectConfig,
+    contract: DatasetContract,
+) -> Callable[[], Iterable[Mapping[str, object]]]:
+    if rows_factory is not None:
+        return rows_factory
+
+    def load_rows() -> Iterable[Mapping[str, object]]:
+        return load_streaming_rows(config=project_config, contract=contract)
+
+    return load_rows
+
+
+def _training_context(
+    rows_factory: Callable[[], Iterable[Mapping[str, object]]] | None,
+    *,
+    config: TrainingConfig | None,
+    project_config: ProjectConfig | None,
+    contract: DatasetContract,
+    resume_from_checkpoint: Path | None,
+    checkpoint_identity: Mapping[str, object] | None,
+) -> _TrainingContext:
+    training_config = _effective_training_config(config)
+    effective_project_config = _effective_project_config(project_config)
+    paths = ManagedPaths(effective_project_config)
+    output_directory = paths.child(training_config.output_subdirectory)
+    tracking = settings_for(
+        effective_project_config,
+        project=training_config.tracking_project,
+    )
+    resume_from_checkpoint, checkpoint_identity = _prepare_checkpoint_resume(
+        output_directory,
+        resume_from_checkpoint=resume_from_checkpoint,
+        checkpoint_identity=checkpoint_identity,
+    )
+    return _TrainingContext(
+        config=training_config,
+        project_config=effective_project_config,
+        contract=contract,
+        rows_factory=_effective_rows_factory(
+            rows_factory,
+            project_config=effective_project_config,
+            contract=contract,
+        ),
+        output_directory=output_directory,
+        model_cache_directory=paths.child("cache/huggingface/models"),
+        tracking=tracking,
+        resume_from_checkpoint=resume_from_checkpoint,
+        checkpoint_identity=checkpoint_identity,
+    )
+
+
+def _restore_tracking_snapshot_if_needed(context: _TrainingContext) -> None:
+    if context.config.sync_trackio and context.config.tracking_project is not None:
+        restore_static_project_snapshot(context.tracking)
+
+
+def _tokenizer_kwargs(
+    config: TrainingConfig, cache_directory: Path
+) -> dict[str, object]:
+    kwargs: dict[str, object] = {
+        "cache_dir": str(cache_directory),
+        "use_fast": True,
+    }
+    if config.model_revision is not None:
+        kwargs["revision"] = config.model_revision
+    return kwargs
+
+
+def _load_tokenizer(
+    dependencies: _training_runtime.TrainingDependencies,
+    context: _TrainingContext,
+) -> Any:
+    return dependencies.auto_tokenizer.from_pretrained(
+        context.config.model_name_or_path,
+        **_tokenizer_kwargs(context.config, context.model_cache_directory),
+    )
+
+
+def _training_datasets(
+    dependencies: _training_runtime.TrainingDependencies,
+    context: _TrainingContext,
+    tokenizer: Any,
+) -> tuple[Any, Any, Any]:
+    train_dataset = _make_tokenized_dataset(
+        dependencies,
+        context.rows_factory,
+        split="train",
+        config=context.config,
+        contract=context.contract,
+        tokenizer=tokenizer,
+    )
+    validation_dataset = _make_tokenized_dataset(
+        dependencies,
+        context.rows_factory,
+        split="validation",
+        config=context.config,
+        contract=context.contract,
+        tokenizer=tokenizer,
+    )
+    test_dataset = None
+    if context.config.test_fraction > 0:
+        test_dataset = _make_tokenized_dataset(
+            dependencies,
+            context.rows_factory,
+            split="test",
+            config=context.config,
+            contract=context.contract,
+            tokenizer=tokenizer,
+        )
+    return train_dataset, validation_dataset, test_dataset
+
+
+def _model_kwargs(config: TrainingConfig, cache_directory: Path) -> dict[str, object]:
+    kwargs: dict[str, object] = {
+        "cache_dir": str(cache_directory),
+        "classifier_dropout": 0.0,
+        "num_labels": len(LABEL_TO_ID),
+        "id2label": ID_TO_LABEL,
+        "label2id": LABEL_TO_ID,
+    }
+    if config.model_revision is not None:
+        kwargs["revision"] = config.model_revision
+    return kwargs
+
+
+def _load_model(
+    dependencies: _training_runtime.TrainingDependencies,
+    context: _TrainingContext,
+) -> Any:
+    model = dependencies.auto_model_for_sequence_classification.from_pretrained(
+        context.config.model_name_or_path,
+        **_model_kwargs(context.config, context.model_cache_directory),
+    )
+    configure_trainable_layers(model, context.config.trainable_layers)
+    return model
+
+
+def _checkpoint_publication_api(context: _TrainingContext) -> Any:
+    if context.checkpoint_identity is None or not context.config.publish_to_hub:
+        return None
+    return _training_runtime.load_checkpoint_publication_api()
+
+
+def _build_training_trainer(
+    dependencies: _training_runtime.TrainingDependencies,
+    *,
+    context: _TrainingContext,
+    model: Any,
+    tokenizer: Any,
+    train_dataset: Any,
+    validation_dataset: Any,
+    checkpoint_hub_api: Any,
+) -> Any:
+    training_arguments = dependencies.training_arguments(
+        **_training_argument_values(
+            context.config,
+            output_directory=context.output_directory,
+            tracking_project=context.tracking.project,
+            trackio_space_id=None,
+            trackio_bucket_id=None,
+        )
+    )
+    return _training_runtime.build_trainer(
+        dependencies,
+        model=model,
+        training_arguments=training_arguments,
+        train_dataset=train_dataset,
+        validation_dataset=validation_dataset,
+        data_collator=dependencies.data_collator_with_padding(tokenizer=tokenizer),
+        checkpoint_identity=context.checkpoint_identity,
+        model_repository_id=(
+            context.project_config.target_model_repository_id
+            if context.config.publish_to_hub
+            else None
+        ),
+        trackio_space_id=(
+            context.tracking.static_space_id if context.config.sync_trackio else None
+        ),
+        tracking_settings=(context.tracking if context.config.sync_trackio else None),
+        hub_api=checkpoint_hub_api,
+        hub_checkpoint_steps=context.config.hub_checkpoint_steps,
+        class_weight_mode=context.config.class_weight_mode,
+    )
+
+
+def _finalize_training_outputs(
+    trainer: Any,
+    *,
+    context: _TrainingContext,
+    tokenizer: Any,
+    validation_dataset: Any,
+    test_dataset: Any,
+) -> tuple[Any, dict[str, object], dict[str, object]]:
+    train_output = _training_runtime.run_trainer(
+        trainer, context.resume_from_checkpoint
+    )
+    final_metrics = _training_metrics.metrics_for_model_card(train_output, trainer)
+    final_metrics.update(_evaluate_validation_dataset(trainer, validation_dataset))
+    final_metrics.update(_evaluate_test_dataset(trainer, test_dataset))
+    trainer.save_model(str(context.output_directory))
+    tokenizer.save_pretrained(str(context.output_directory))
+    model_card_identity = _model_card_identity(
+        context.checkpoint_identity,
+        config=context.config,
+        contract=context.contract,
+    )
+    _write_model_card(
+        context.output_directory,
+        identity=model_card_identity,
+        training_metrics=final_metrics,
+        trackio_space_id=(
+            context.tracking.static_space_id if context.config.sync_trackio else None
+        ),
+    )
+    return train_output, final_metrics, model_card_identity
 
 
 def _train_classifier(
@@ -557,169 +921,70 @@ def _train_classifier(
     are also performed at each complete checkpoint.
     """
 
-    training_config = config or TrainingConfig()
-    effective_project_config = project_config or ProjectConfig()
-    paths = ManagedPaths(effective_project_config)
-    output_directory = paths.child(training_config.output_subdirectory)
-    model_cache_directory = paths.child("cache/huggingface/models")
-    tracking = settings_for(
-        effective_project_config,
-        project=training_config.tracking_project,
-    )
-    resume_from_checkpoint, checkpoint_identity = _prepare_checkpoint_resume(
-        output_directory,
+    context = _training_context(
+        rows_factory,
+        config=config,
+        project_config=project_config,
+        contract=contract,
         resume_from_checkpoint=resume_from_checkpoint,
         checkpoint_identity=checkpoint_identity,
     )
-
-    effective_rows_factory = rows_factory
-    if effective_rows_factory is None:
-
-        def load_rows() -> Iterable[Mapping[str, object]]:
-            return load_streaming_rows(
-                config=effective_project_config,
-                contract=contract,
-            )
-
-        effective_rows_factory = load_rows
-
+    checkpoint_hub_api: Any
+    train_output: Any
+    final_metrics: dict[str, object]
+    model_publication: ModelPublicationResult | None
     with _managed_training_environment(
-        effective_project_config,
-        tracking_project=training_config.tracking_project,
+        context.project_config,
+        tracking_project=context.config.tracking_project,
     ):
-        if (
-            training_config.sync_trackio
-            and training_config.tracking_project is not None
-        ):
-            restore_static_project_snapshot(tracking)
+        _restore_tracking_snapshot_if_needed(context)
         dependencies = _training_runtime.load_training_dependencies()
-        tokenizer_kwargs: dict[str, object] = {
-            "cache_dir": str(model_cache_directory),
-            "use_fast": True,
-        }
-        if training_config.model_revision is not None:
-            tokenizer_kwargs["revision"] = training_config.model_revision
-        tokenizer = dependencies.auto_tokenizer.from_pretrained(
-            training_config.model_name_or_path,
-            **tokenizer_kwargs,
-        )
-        train_dataset = _make_tokenized_dataset(
+        tokenizer = _load_tokenizer(dependencies, context)
+        train_dataset, validation_dataset, test_dataset = _training_datasets(
             dependencies,
-            effective_rows_factory,
-            split="train",
-            config=training_config,
-            contract=contract,
-            tokenizer=tokenizer,
+            context,
+            tokenizer,
         )
-        validation_dataset = _make_tokenized_dataset(
+        model = _load_model(dependencies, context)
+        checkpoint_hub_api = _checkpoint_publication_api(context)
+        trainer = _build_training_trainer(
             dependencies,
-            effective_rows_factory,
-            split="validation",
-            config=training_config,
-            contract=contract,
-            tokenizer=tokenizer,
-        )
-        test_dataset = None
-        if training_config.test_fraction > 0:
-            test_dataset = _make_tokenized_dataset(
-                dependencies,
-                effective_rows_factory,
-                split="test",
-                config=training_config,
-                contract=contract,
-                tokenizer=tokenizer,
-            )
-        model_kwargs: dict[str, object] = {
-            "cache_dir": str(model_cache_directory),
-            "classifier_dropout": 0.0,
-            "num_labels": len(LABEL_TO_ID),
-            "id2label": ID_TO_LABEL,
-            "label2id": LABEL_TO_ID,
-        }
-        if training_config.model_revision is not None:
-            model_kwargs["revision"] = training_config.model_revision
-        model = dependencies.auto_model_for_sequence_classification.from_pretrained(
-            training_config.model_name_or_path,
-            **model_kwargs,
-        )
-        configure_trainable_layers(model, training_config.trainable_layers)
-        training_arguments = dependencies.training_arguments(
-            **_training_argument_values(
-                training_config,
-                output_directory=output_directory,
-                tracking_project=tracking.project,
-                trackio_space_id=None,
-                trackio_bucket_id=None,
-            )
-        )
-        data_collator = dependencies.data_collator_with_padding(tokenizer=tokenizer)
-        checkpoint_hub_api = None
-        if checkpoint_identity is not None and training_config.publish_to_hub:
-            checkpoint_hub_api = _training_runtime.load_checkpoint_publication_api()
-        trainer = _training_runtime.build_trainer(
-            dependencies,
+            context=context,
             model=model,
-            training_arguments=training_arguments,
+            tokenizer=tokenizer,
             train_dataset=train_dataset,
             validation_dataset=validation_dataset,
-            data_collator=data_collator,
-            checkpoint_identity=checkpoint_identity,
-            model_repository_id=(
-                effective_project_config.target_model_repository_id
-                if training_config.publish_to_hub
-                else None
-            ),
-            trackio_space_id=(
-                tracking.static_space_id if training_config.sync_trackio else None
-            ),
-            tracking_settings=(tracking if training_config.sync_trackio else None),
-            hub_api=checkpoint_hub_api,
-            hub_checkpoint_steps=training_config.hub_checkpoint_steps,
-            class_weight_mode=training_config.class_weight_mode,
-        )
-        train_output = _training_runtime.run_trainer(trainer, resume_from_checkpoint)
-        validation_metrics = _evaluate_validation_dataset(trainer, validation_dataset)
-        test_metrics = _evaluate_test_dataset(trainer, test_dataset)
-        trainer.save_model(str(output_directory))
-        tokenizer.save_pretrained(str(output_directory))
-        final_metrics = _training_metrics.metrics_for_model_card(train_output, trainer)
-        final_metrics.update(validation_metrics)
-        final_metrics.update(test_metrics)
-        model_card_identity = _model_card_identity(
-            checkpoint_identity,
-            config=training_config,
-            contract=contract,
-        )
-        _write_model_card(
-            output_directory,
-            identity=model_card_identity,
-            training_metrics=final_metrics,
-            trackio_space_id=(
-                tracking.static_space_id if training_config.sync_trackio else None
-            ),
-        )
-        model_publication = _publish_completed_model(
-            output_directory,
-            project_config=effective_project_config,
-            config=training_config,
-            contract=contract,
-            identity=model_card_identity,
-            metrics=final_metrics,
-            tracking=tracking,
             checkpoint_hub_api=checkpoint_hub_api,
         )
-        if training_config.sync_trackio:
+        train_output, final_metrics, model_card_identity = _finalize_training_outputs(
+            trainer,
+            context=context,
+            tokenizer=tokenizer,
+            validation_dataset=validation_dataset,
+            test_dataset=test_dataset,
+        )
+        model_publication = _publish_completed_model(
+            context.output_directory,
+            project_config=context.project_config,
+            config=context.config,
+            contract=context.contract,
+            identity=model_card_identity,
+            metrics=final_metrics,
+            tracking=context.tracking,
+            checkpoint_hub_api=checkpoint_hub_api,
+        )
+        if context.config.sync_trackio:
             _sync_static_trackio(
-                tracking,
+                context.tracking,
                 failure_message="Trackio static snapshot failed",
                 finalize=True,
             )
         tracking_space_id = (
-            tracking.static_space_id if training_config.sync_trackio else None
+            context.tracking.static_space_id if context.config.sync_trackio else None
         )
 
     return TrainingResult(
-        output_directory=output_directory,
+        output_directory=context.output_directory,
         train_output=train_output,
         model_publication=model_publication,
         tracking_space_id=tracking_space_id,

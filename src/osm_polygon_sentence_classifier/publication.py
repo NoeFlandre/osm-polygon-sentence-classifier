@@ -136,17 +136,25 @@ def _safe_scalar(value: object) -> bool:
     return isinstance(value, float) and math.isfinite(value)
 
 
+def _safe_metadata_item(key: object, value: object) -> tuple[str, object] | None:
+    if not isinstance(key, str):
+        return None
+    if any(part in key.lower() for part in _SENSITIVE_KEY_PARTS):
+        return None
+    if not _safe_scalar(value):
+        return None
+    return key, value
+
+
 def _safe_scalar_mapping(value: object) -> dict[str, object]:
     if not isinstance(value, Mapping):
         return {}
     safe: dict[str, object] = {}
     for key, item in value.items():
-        if (
-            isinstance(key, str)
-            and not any(part in key.lower() for part in _SENSITIVE_KEY_PARTS)
-            and _safe_scalar(item)
-        ):
-            safe[key] = item
+        safe_item = _safe_metadata_item(key, item)
+        if safe_item is not None:
+            safe_key, safe_value = safe_item
+            safe[safe_key] = safe_value
     return dict(sorted(safe.items()))
 
 
@@ -173,8 +181,6 @@ def _task_metadata(identity: Mapping[str, object]) -> tuple[str, str, str]:
     task_name = _safe_line(identity.get("task_name"), "landuse")
     if task_name == "place-relevance-v2":
         return task_name, "place relevance", "place-relevance"
-    if task_name == "landuse":
-        return task_name, "landuse", "landuse"
     return task_name, task_name.replace("-", " "), _slug(task_name, "task")
 
 
@@ -189,27 +195,72 @@ def _publication_run_id(identity: Mapping[str, object]) -> str:
         separators=(",", ":"),
         sort_keys=True,
     )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:20]
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[
+        :20
+    ]  # pragma: no mutate
+
+
+def _training_config_value(
+    identity: Mapping[str, object],
+    key: str,
+) -> object:
+    training_config = identity.get("training_config")
+    if isinstance(training_config, Mapping):
+        return training_config.get(key)
+    return None
+
+
+def _valid_artifact_namespace(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    if not value.strip():
+        return None
+    parts = tuple(value.strip("/").split("/"))
+    if any(part in {"", ".", ".."} for part in parts):
+        return None
+    return "/".join(parts)
 
 
 def _model_artifact_prefix(identity: Mapping[str, object]) -> str:
-    training_config = identity.get("training_config")
-    namespace = (
-        training_config.get("artifact_namespace")
-        if isinstance(training_config, Mapping)
-        else None
+    namespace = _valid_artifact_namespace(
+        _training_config_value(identity, "artifact_namespace")
     )
-    if isinstance(namespace, str) and namespace.strip():
-        parts = tuple(namespace.strip("/").split("/"))
-        if parts and all(part not in {"", ".", ".."} for part in parts):
-            return "/".join(parts) + f"/run-{_publication_run_id(identity)}"
-    run_name = (
-        training_config.get("run_name")
-        if isinstance(training_config, Mapping)
-        else None
-    )
-    experiment = _slug(run_name, "landuse")
+    if namespace is not None:
+        return f"{namespace}/run-{_publication_run_id(identity)}"
+    experiment = _slug(_training_config_value(identity, "run_name"), "landuse")
     return f"{_MODEL_EXPERIMENT_ROOT}/{experiment}/run-{_publication_run_id(identity)}"
+
+
+def _progress_text(checkpoint_step: int | None) -> str:
+    if (
+        isinstance(checkpoint_step, int)
+        and not isinstance(checkpoint_step, bool)
+        and checkpoint_step >= 0
+    ):
+        return f"checkpoint at step {checkpoint_step}"
+    return "final model"
+
+
+def _trackio_link(trackio_space_id: object) -> str | None:
+    if (
+        isinstance(trackio_space_id, str)
+        and trackio_space_id.strip()
+        and "\n" not in trackio_space_id
+        and "\r" not in trackio_space_id
+    ):
+        return "https://huggingface.co/spaces/" + trackio_space_id.strip()
+    return None
+
+
+def _tracking_section(trackio_space_id: str | None) -> str:
+    trackio_link = _trackio_link(trackio_space_id)
+    if trackio_link is None:
+        return "Trackio was not enabled for this run."
+    return (
+        f"[Open the Trackio dashboard]({trackio_link}). "
+        "Metrics are published as static snapshots after complete checkpoints "
+        "and final publication."
+    )
 
 
 def render_model_card(
@@ -228,30 +279,8 @@ def render_model_card(
     source_commit = _safe_line(identity.get("source_commit"), "not recorded")
     training_config = _safe_scalar_mapping(identity.get("training_config"))
     metrics = _safe_scalar_mapping(training_metrics)
-    if (
-        isinstance(checkpoint_step, int)
-        and not isinstance(checkpoint_step, bool)
-        and checkpoint_step >= 0
-    ):
-        progress = f"checkpoint at step {checkpoint_step}"
-    else:
-        progress = "final model"
-    trackio_link = None
-    if (
-        isinstance(trackio_space_id, str)
-        and trackio_space_id.strip()
-        and "\n" not in trackio_space_id
-        and "\r" not in trackio_space_id
-    ):
-        trackio_link = "https://huggingface.co/spaces/" + trackio_space_id.strip()
-
-    tracking_section = (
-        f"[Open the Trackio dashboard]({trackio_link}). "
-        "Metrics are published as static snapshots after complete checkpoints "
-        "and final publication."
-        if trackio_link is not None
-        else "Trackio was not enabled for this run."
-    )
+    progress = _progress_text(checkpoint_step)
+    tracking_section = _tracking_section(trackio_space_id)
     return (
         "---\n"
         "library_name: transformers\n"
@@ -299,14 +328,7 @@ def render_repository_readme(
     task_name, task_label, task_tag = _task_metadata(identity)
     model_name = _safe_line(identity.get("model_name_or_path"), "not recorded")
     model_revision = _safe_line(identity.get("model_revision"), "not pinned")
-    trackio_link = (
-        f"https://huggingface.co/spaces/{trackio_space_id.strip()}"
-        if isinstance(trackio_space_id, str)
-        and trackio_space_id.strip()
-        and "\n" not in trackio_space_id
-        and "\r" not in trackio_space_id
-        else None
-    )
+    trackio_link = _trackio_link(trackio_space_id)
     tracking_line = (
         f"- Current run Trackio dashboard: [{trackio_space_id}]({trackio_link})\n"
         if trackio_link is not None
@@ -391,31 +413,68 @@ def ensure_model_repository(
         ) from error
 
 
-def _final_model_files(directory: Path) -> tuple[Path, ...]:
-    if not directory.exists() or not directory.is_dir() or directory.is_symlink():
-        raise ModelPublicationError("model output must be a real directory")
+def _is_real_directory(directory: Path) -> bool:
+    return directory.exists() and directory.is_dir() and not directory.is_symlink()
+
+
+def _is_symlink(path: Path) -> bool:
+    return path.is_symlink()
+
+
+def _model_directory_entries(directory: Path) -> tuple[Path, ...]:
     try:
-        entries = tuple(directory.iterdir())
+        return tuple(directory.iterdir())
     except OSError as error:
         raise ModelPublicationError("model output cannot be read") from error
-    if any(path.is_symlink() for path in entries):
+
+
+def _require_no_model_symlinks(entries: Sequence[Path]) -> None:
+    if any(_is_symlink(path) for path in entries):
         raise ModelPublicationError("model output cannot contain symlinks")
-    files = tuple(sorted(path for path in entries if path.is_file()))
+
+
+def _regular_model_files(entries: Sequence[Path]) -> tuple[Path, ...]:
+    return tuple(sorted(path for path in entries if path.is_file()))
+
+
+def _model_output_files(directory: Path) -> tuple[Path, ...]:
+    if not _is_real_directory(directory):
+        raise ModelPublicationError("model output must be a real directory")
+    entries = _model_directory_entries(directory)
+    _require_no_model_symlinks(entries)
+    return _regular_model_files(entries)
+
+
+def _has_model_weights(names: set[str]) -> bool:
+    return any(_WEIGHT_PATTERN.fullmatch(name) for name in names)
+
+
+def _has_tokenizer_files(names: set[str]) -> bool:
+    return bool(
+        names
+        & {
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "spiece.model",
+            "sentencepiece.bpe.model",
+            "tokenizer.model",
+            "vocab.json",
+            "vocab.txt",
+        }
+    )
+
+
+def _validate_model_output_files(files: Sequence[Path]) -> None:
     names = {path.name for path in files}
     if "config.json" not in names:
         raise ModelPublicationError("model output is missing config.json")
-    if not any(_WEIGHT_PATTERN.fullmatch(name) for name in names):
+    if not _has_model_weights(names):
         raise ModelPublicationError("model output is missing model weights")
-    if not names & {
-        "tokenizer.json",
-        "tokenizer_config.json",
-        "spiece.model",
-        "sentencepiece.bpe.model",
-        "tokenizer.model",
-        "vocab.json",
-        "vocab.txt",
-    }:
+    if not _has_tokenizer_files(names):
         raise ModelPublicationError("model output is missing tokenizer files")
+
+
+def _publishable_model_files(files: Sequence[Path]) -> tuple[Path, ...]:
     selected = tuple(
         path
         for path in files
@@ -424,6 +483,12 @@ def _final_model_files(directory: Path) -> tuple[Path, ...]:
     if not selected:
         raise ModelPublicationError("model output contains no publishable files")
     return selected
+
+
+def _final_model_files(directory: Path) -> tuple[Path, ...]:
+    files = _model_output_files(directory)
+    _validate_model_output_files(files)
+    return _publishable_model_files(files)
 
 
 def _commit_facts(info: object) -> tuple[str, str]:
@@ -464,6 +529,53 @@ def _commit_publication(
     )
 
 
+def _repository_readme_operation(
+    repository_readme: str | None,
+    factory: OperationFactory,
+) -> tuple[object, str] | None:
+    if repository_readme is None:
+        return None
+    if not isinstance(repository_readme, str) or not repository_readme.strip():
+        raise ModelPublicationError("repository README must be non-empty")
+    return (
+        factory(
+            path_in_repo="README.md",
+            path_or_fileobj=repository_readme.encode(),
+        ),
+        "README.md",
+    )
+
+
+def _model_operations(
+    files: Sequence[Path],
+    *,
+    factory: OperationFactory,
+    artifact_prefix: str | None,
+    repository_readme: str | None,
+) -> tuple[list[object], list[str]]:
+    operations: list[object] = []
+    published_paths: list[str] = []
+    readme_operation = _repository_readme_operation(repository_readme, factory)
+    if readme_operation is not None:
+        operation, path_in_repo = readme_operation
+        operations.append(operation)
+        published_paths.append(path_in_repo)
+    for path in files:
+        path_in_repo = (
+            f"{artifact_prefix}/final/{path.name}"
+            if artifact_prefix is not None
+            else path.name
+        )
+        operations.append(
+            factory(
+                path_in_repo=path_in_repo,
+                path_or_fileobj=str(path),
+            )
+        )
+        published_paths.append(path_in_repo)
+    return operations, published_paths
+
+
 def publish_model_directory(
     directory: str | Path,
     repository_id: object,
@@ -479,33 +591,14 @@ def publish_model_directory(
     output_directory = Path(directory)
     files = _final_model_files(output_directory)
     factory = operation_factory or _default_operation_factory()
-    operations: list[object] = []
-    published_paths: list[str] = []
     artifact_prefix = _model_artifact_prefix(identity) if identity is not None else None
     try:
-        if repository_readme is not None:
-            if not isinstance(repository_readme, str) or not repository_readme.strip():
-                raise ModelPublicationError("repository README must be non-empty")
-            operations.append(
-                factory(
-                    path_in_repo="README.md",
-                    path_or_fileobj=repository_readme.encode("utf-8"),
-                )
-            )
-            published_paths.append("README.md")
-        for path in files:
-            path_in_repo = (
-                f"{artifact_prefix}/final/{path.name}"
-                if artifact_prefix is not None
-                else path.name
-            )
-            operations.append(
-                factory(
-                    path_in_repo=path_in_repo,
-                    path_or_fileobj=str(path),
-                )
-            )
-            published_paths.append(path_in_repo)
+        operations, published_paths = _model_operations(
+            files,
+            factory=factory,
+            artifact_prefix=artifact_prefix,
+            repository_readme=repository_readme,
+        )
     except Exception as error:
         raise ModelPublicationError(
             "Hugging Face model operations could not be constructed"
@@ -522,6 +615,75 @@ def publish_model_directory(
     )
 
 
+def _safe_study_path_parts(path: PurePosixPath) -> bool:
+    return (
+        not path.is_absolute()
+        and bool(path.parts)
+        and not any(part in {"", ".", ".."} for part in path.parts)
+    )
+
+
+def _safe_study_path_text(raw_path: object) -> bool:
+    if not isinstance(raw_path, str):
+        return False
+    return all(marker not in raw_path for marker in ("\\", "\n", "\r"))
+
+
+def _is_safe_study_document_path(raw_path: object, path: PurePosixPath) -> bool:
+    return _safe_study_path_parts(path) and _safe_study_path_text(raw_path)
+
+
+def _study_document_operation(
+    raw_path: str,
+    content: str,
+    factory: OperationFactory,
+) -> tuple[object, str]:
+    path = PurePosixPath(raw_path)
+    if not _is_safe_study_document_path(raw_path, path):
+        raise ModelPublicationError("study document path is unsafe")
+    if not isinstance(content, str) or not content.strip():
+        raise ModelPublicationError("study document content is empty")
+    normalized_path = path.as_posix()
+    return (
+        factory(
+            path_in_repo=normalized_path,
+            path_or_fileobj=content.encode(),
+        ),
+        normalized_path,
+    )
+
+
+def _study_operations(
+    documents: Mapping[str, str],
+    factory: OperationFactory,
+) -> tuple[list[object], list[str]]:
+    operations: list[object] = []
+    published_paths: list[str] = []
+    for raw_path, content in sorted(documents.items()):
+        operation, normalized_path = _study_document_operation(
+            raw_path,
+            content,
+            factory,
+        )
+        operations.append(operation)
+        published_paths.append(normalized_path)
+    return operations, published_paths
+
+
+def _safe_study_operations(
+    documents: Mapping[str, str],
+    factory: OperationFactory,
+) -> tuple[list[object], list[str]]:
+    try:
+        return _study_operations(documents, factory)
+    except ModelPublicationError:
+        raise
+    except Exception as error:
+        raise ModelPublicationError(
+            "study document operations could not be constructed"
+        ) from error
+
+
 def publish_study_documents(
     repository_id: object,
     documents: Mapping[str, str],
@@ -535,36 +697,7 @@ def publish_study_documents(
     if not documents:
         raise ModelPublicationError("study documents cannot be empty")
     factory = operation_factory or _default_operation_factory()
-    operations: list[object] = []
-    published_paths: list[str] = []
-    try:
-        for raw_path, content in sorted(documents.items()):
-            path = PurePosixPath(raw_path)
-            if (
-                not isinstance(raw_path, str)
-                or path.is_absolute()
-                or not path.parts
-                or any(part in {"", ".", ".."} for part in path.parts)
-                or "\\" in raw_path
-                or "\n" in raw_path
-                or "\r" in raw_path
-            ):
-                raise ModelPublicationError("study document path is unsafe")
-            if not isinstance(content, str) or not content.strip():
-                raise ModelPublicationError("study document content is empty")
-            operations.append(
-                factory(
-                    path_in_repo=path.as_posix(),
-                    path_or_fileobj=content.encode("utf-8"),
-                )
-            )
-            published_paths.append(path.as_posix())
-    except ModelPublicationError:
-        raise
-    except Exception as error:
-        raise ModelPublicationError(
-            "study document operations could not be constructed"
-        ) from error
+    operations, published_paths = _safe_study_operations(documents, factory)
 
     api = hub_api or _default_hub_api()
     return _commit_publication(
@@ -582,6 +715,15 @@ def _complete_checkpoint_files(
     *,
     identity: Mapping[str, object],
 ) -> tuple[Path, ...]:
+    _require_complete_checkpoint(directory, identity=identity)
+    return _checkpoint_output_files(directory)
+
+
+def _require_complete_checkpoint(
+    directory: Path,
+    *,
+    identity: Mapping[str, object],
+) -> None:
     try:
         selected = find_complete_checkpoint(
             directory,
@@ -591,18 +733,22 @@ def _complete_checkpoint_files(
         raise ModelPublicationError("checkpoint evidence is invalid") from error
     if selected is None:
         raise ModelPublicationError("model output is not a complete checkpoint")
+
+
+def _checkpoint_output_files(directory: Path) -> tuple[Path, ...]:
+    def is_publishable(path: Path) -> bool:
+        return (
+            path.is_file()
+            and not path.is_symlink()
+            and (
+                path.name in _ALLOWED_CHECKPOINT_NAMES
+                or _WEIGHT_PATTERN.fullmatch(path.name) is not None
+            )
+        )
+
     try:
         files = tuple(
-            sorted(
-                path
-                for path in directory.iterdir()
-                if path.is_file()
-                and not path.is_symlink()
-                and (
-                    path.name in _ALLOWED_CHECKPOINT_NAMES
-                    or _WEIGHT_PATTERN.fullmatch(path.name)
-                )
-            )
+            sorted(path for path in directory.iterdir() if is_publishable(path))
         )
     except OSError as error:
         raise ModelPublicationError("checkpoint output cannot be read") from error
@@ -624,6 +770,37 @@ def _checkpoint_path_in_repo(
     return f"{prefix}/checkpoints/step-{match.group(1)}/{path.name}"
 
 
+def _checkpoint_operations(
+    files: Sequence[Path],
+    checkpoint: Path,
+    *,
+    identity: Mapping[str, object],
+    factory: OperationFactory,
+) -> list[object]:
+    return [
+        factory(
+            path_in_repo=_checkpoint_path_in_repo(
+                path,
+                checkpoint,
+                identity=identity,
+            ),
+            path_or_fileobj=str(path),
+        )
+        for path in files
+    ]
+
+
+def _checkpoint_published_paths(
+    files: Sequence[Path],
+    checkpoint: Path,
+    *,
+    identity: Mapping[str, object],
+) -> tuple[str, ...]:
+    return tuple(
+        _checkpoint_path_in_repo(path, checkpoint, identity=identity) for path in files
+    )
+
+
 def publish_checkpoint_directory(
     directory: str | Path,
     repository_id: object,
@@ -638,26 +815,22 @@ def publish_checkpoint_directory(
     checkpoint = Path(directory)
     files = _complete_checkpoint_files(checkpoint, identity=identity)
     factory = operation_factory or _default_operation_factory()
-    operations: list[object] = []
     try:
-        for path in files:
-            operations.append(
-                factory(
-                    path_in_repo=_checkpoint_path_in_repo(
-                        path,
-                        checkpoint,
-                        identity=identity,
-                    ),
-                    path_or_fileobj=str(path),
-                )
-            )
+        operations = _checkpoint_operations(
+            files,
+            checkpoint,
+            identity=identity,
+            factory=factory,
+        )
     except Exception as error:
         raise ModelPublicationError(
             "Hugging Face checkpoint operations could not be constructed"
         ) from error
 
-    published_paths = tuple(
-        _checkpoint_path_in_repo(path, checkpoint, identity=identity) for path in files
+    published_paths = _checkpoint_published_paths(
+        files,
+        checkpoint,
+        identity=identity,
     )
     api = hub_api or _default_hub_api()
     return _commit_publication(

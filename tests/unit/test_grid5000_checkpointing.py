@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+import osm_polygon_sentence_classifier.grid5000_checkpointing as checkpointing
 from osm_polygon_sentence_classifier.grid5000 import Grid5000ExecutionError
 from osm_polygon_sentence_classifier.grid5000_checkpointing import (
     CheckpointProbeError,
@@ -121,3 +122,56 @@ def test_checkpoint_probe_does_not_retry_unexpected_errors() -> None:
 
     assert len(remote.calls) == 1
     assert sleeps == []
+
+
+def test_checkpoint_probe_detail_suffix_is_empty_without_an_error() -> None:
+    assert checkpointing._detail_suffix(None) == ""
+    assert checkpointing._detail_suffix(ValueError("   ")) == ""
+
+
+def test_checkpoint_probe_detail_suffix_is_bounded_to_240_characters() -> None:
+    detail = "x" * 241
+
+    assert checkpointing._detail_suffix(ValueError(detail)) == ": " + "x" * 240
+
+
+def test_checkpoint_probe_with_zero_attempts_has_no_exception_cause() -> None:
+    remote = _ProbeRemote([])
+
+    with pytest.raises(CheckpointProbeError) as caught:
+        probe_complete_checkpoint(
+            remote,
+            run_id="d" * 20,
+            output_subdirectory="models/landuse",
+            identity={"run_id": "d" * 20},
+            allow_failed_status=False,
+            site="nancy",
+            job_id=321,
+            poll_seconds=30.0,
+            emit=lambda _message: None,
+            sleep=lambda _seconds: None,
+            attempts=0,
+        )
+
+    assert caught.value.__cause__ is None
+
+
+def test_checkpoint_probe_does_not_exceed_the_attempt_budget() -> None:
+    remote = _ProbeRemote([Grid5000ExecutionError("connection timed out")])
+
+    with pytest.raises(CheckpointProbeError):
+        probe_complete_checkpoint(
+            remote,
+            run_id="e" * 20,
+            output_subdirectory="models/landuse",
+            identity={"run_id": "e" * 20},
+            allow_failed_status=False,
+            site="nancy",
+            job_id=654,
+            poll_seconds=30.0,
+            emit=lambda _message: None,
+            sleep=lambda _seconds: None,
+            attempts=1,
+        )
+
+    assert len(remote.calls) == 1

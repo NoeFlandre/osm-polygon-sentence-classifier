@@ -1,7 +1,9 @@
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
+import osm_polygon_sentence_classifier.config as config_module
 from osm_polygon_sentence_classifier import __version__
 from osm_polygon_sentence_classifier.config import (
     ConfigurationError,
@@ -50,8 +52,66 @@ def test_remote_config_rejects_a_root_outside_home(tmp_path: Path) -> None:
         ProjectConfig.for_remote_root(tmp_path)
 
 
-def test_config_is_immutable() -> None:
+@pytest.mark.parametrize(
+    "root",
+    [Path("relative-root"), Path.home() / ".." / "outside-root"],
+)
+def test_remote_config_rejects_relative_or_parent_traversal_roots(root: Path) -> None:
+    with pytest.raises(
+        ConfigurationError,
+        match=r"\Aremote data root must be an absolute home path\Z",
+    ):
+        ProjectConfig.for_remote_root(root)
+
+
+def test_remote_config_reports_a_resolution_failure_with_its_cause() -> None:
+    class _UnresolvablePath:
+        def resolve(self) -> Path:
+            raise RuntimeError("resolution loop")
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"\Aremote data root cannot be resolved\Z",
+    ) as caught:
+        config_module._resolved_remote_paths(cast(Any, _UnresolvablePath()))
+
+    assert isinstance(caught.value.__cause__, RuntimeError)
+
+
+def test_remote_config_rejects_the_filesystem_root_even_when_home_matches() -> None:
+    with pytest.raises(
+        ConfigurationError,
+        match=r"\Aremote data root must be beneath the remote home\Z",
+    ):
+        config_module._require_remote_home_child(Path("/"), Path("/"))
+
+
+def test_config_forwards_data_root_assignment_to_the_frozen_setter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = ProjectConfig()
+    replacement = Path.home() / "remote-project-data"
+    calls: list[tuple[ProjectConfig, str, object]] = []
+
+    def record_setattr(instance: ProjectConfig, name: str, value: object) -> None:
+        calls.append((instance, name, value))
+
+    monkeypatch.setattr(
+        config_module,
+        "_frozen_project_config_setattr",
+        record_setattr,
+    )
+
+    config.__setattr__("data_root", replacement)
+
+    assert calls == [(config, "data_root", replacement)]
+
+
+def test_config_rejects_assignment_to_other_attributes_with_exact_error() -> None:
     config = ProjectConfig()
 
-    with pytest.raises(AttributeError):
+    with pytest.raises(
+        AttributeError,
+        match=r"\Acannot assign to attribute 'task_name'\Z",
+    ):
         config.task_name = "polygon-relevance"  # type: ignore[misc]  # ty: ignore[invalid-assignment]

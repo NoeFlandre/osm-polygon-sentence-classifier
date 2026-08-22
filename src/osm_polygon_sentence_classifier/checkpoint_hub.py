@@ -31,6 +31,10 @@ _REQUIRED_FILES = frozenset(
         "rng_state.pth",
     }
 )
+_CANONICAL_JSON_OPTIONS: dict[str, Any] = {
+    "allow_nan": False,  # pragma: no mutate
+    "ensure_ascii": False,  # pragma: no mutate
+}
 
 
 class HubCheckpointError(RuntimeError):
@@ -54,8 +58,7 @@ def _canonical_json(value: object) -> str:
     try:
         return json.dumps(
             value,
-            allow_nan=False,
-            ensure_ascii=False,
+            **_CANONICAL_JSON_OPTIONS,
             separators=(",", ":"),
             sort_keys=True,
         )
@@ -101,21 +104,29 @@ def _default_manifest_loader(repository_id: str, path: str) -> Path:
 def _complete_step_files(
     paths: tuple[str, ...], *, root: str
 ) -> dict[int, tuple[str, ...]]:
+    grouped = _group_step_files(paths, root=root)
+    return {
+        step: tuple(sorted(names))
+        for step, names in grouped.items()
+        if _is_complete_step(names)
+    }
+
+
+def _group_step_files(paths: tuple[str, ...], *, root: str) -> dict[int, list[str]]:
     grouped: dict[int, list[str]] = {}
     for path in paths:
         match = _CHECKPOINT_ROOT_PATTERN.fullmatch(path)
         if match is None or match.group("root") != root:
             continue
         grouped.setdefault(int(match.group("step")), []).append(match.group("name"))
-    complete: dict[int, tuple[str, ...]] = {}
-    for step, names in grouped.items():
-        unique_names = frozenset(names)
-        if not unique_names >= _REQUIRED_FILES or not any(
-            _WEIGHT_PATTERN.fullmatch(name) for name in unique_names
-        ):
-            continue
-        complete[step] = tuple(sorted(unique_names))
-    return complete
+    return grouped
+
+
+def _is_complete_step(names: list[str]) -> bool:
+    unique_names = frozenset(names)
+    return _REQUIRED_FILES.issubset(unique_names) and any(
+        _WEIGHT_PATTERN.fullmatch(name) for name in unique_names
+    )
 
 
 def _manifest_matches(
@@ -145,11 +156,31 @@ def latest_published_checkpoint(
 ) -> PublishedCheckpoint | None:
     """Return the newest complete Hub checkpoint matching ``identity``."""
 
-    if not isinstance(repository_id, str) or not repository_id.strip():
-        raise HubCheckpointError("model repository ID is invalid")
+    _validate_repository_id(repository_id)
     prefix = _model_artifact_prefix(identity)
     root = f"{prefix}/checkpoints"
     api = hub_api or _default_api()
+    paths = _published_paths(api, repository_id, root)
+    complete_steps = _complete_step_files(paths, root=root)
+    if not complete_steps:
+        return None
+    load_manifest = manifest_loader or _default_manifest_loader
+    return _matching_published_checkpoint(
+        repository_id,
+        prefix=prefix,
+        root=root,
+        complete_steps=complete_steps,
+        load_manifest=load_manifest,
+        identity=identity,
+    )
+
+
+def _validate_repository_id(repository_id: str) -> None:
+    if not isinstance(repository_id, str) or not repository_id.strip():
+        raise HubCheckpointError("model repository ID is invalid")
+
+
+def _published_paths(api: Any, repository_id: str, root: str) -> tuple[str, ...]:
     try:
         entries = tuple(
             entry.path
@@ -164,11 +195,18 @@ def latest_published_checkpoint(
         raise HubCheckpointError(
             "published checkpoint inventory could not be read"
         ) from error
-    paths = tuple(path for path in entries if isinstance(path, str))
-    complete_steps = _complete_step_files(paths, root=root)
-    if not complete_steps:
-        return None
-    load_manifest = manifest_loader or _default_manifest_loader
+    return tuple(path for path in entries if isinstance(path, str))
+
+
+def _matching_published_checkpoint(
+    repository_id: str,
+    *,
+    prefix: str,
+    root: str,
+    complete_steps: dict[int, tuple[str, ...]],
+    load_manifest: ManifestLoader,
+    identity: Mapping[str, object],
+) -> PublishedCheckpoint | None:
     for step in sorted(complete_steps, reverse=True):
         manifest_path = f"{root}/step-{step}/checkpoint-manifest.json"
         try:
@@ -200,14 +238,27 @@ def restore_published_checkpoint(
     """Download the newest complete Hub checkpoint into a worker output dir."""
 
     output = Path(output_directory)
-    if not output.is_absolute() or output.is_symlink():
-        raise HubCheckpointError("checkpoint output directory is unsafe")
+    _validate_restore_output(output)
     checkpoint = latest_published_checkpoint(
         identity,
         repository_id=repository_id,
     )
     if checkpoint is None:
         raise HubCheckpointError("no complete published checkpoint matches the run")
+    return _restore_checkpoint(output, checkpoint, identity=identity)
+
+
+def _validate_restore_output(output: Path) -> None:
+    if not output.is_absolute() or output.is_symlink():
+        raise HubCheckpointError("checkpoint output directory is unsafe")
+
+
+def _restore_checkpoint(
+    output: Path,
+    checkpoint: PublishedCheckpoint,
+    *,
+    identity: Mapping[str, object],
+) -> CheckpointInfo:
     try:
         configure_huggingface_http()
         hub = import_module("huggingface_hub")
@@ -229,29 +280,50 @@ def restore_published_checkpoint(
             )
             if not isinstance(downloaded, (str, Path)):
                 raise HubCheckpointError("checkpoint download returned an invalid path")
-            source = Path(downloaded) / PurePosixPath(
-                checkpoint.prefix,
-                "checkpoints",
-                f"step-{checkpoint.step}",
-            )
-            if not source.is_dir() or not source.is_relative_to(Path(temporary)):
-                raise HubCheckpointError("checkpoint download path is unsafe")
+            source = _downloaded_checkpoint_source(downloaded, checkpoint, temporary)
             _reject_symlinks(source)
-            destination = output / f"checkpoint-{checkpoint.step}"
-            if destination.exists() or destination.is_symlink():
-                raise HubCheckpointError("checkpoint destination already exists")
-            shutil.copytree(source, destination)
-            restored = find_complete_checkpoint(
-                destination,
+            return _copy_and_validate_checkpoint(
+                source,
+                output,
+                checkpoint.step,
                 identity=identity,
             )
-            if restored is None:
-                raise HubCheckpointError("downloaded checkpoint failed validation")
-            return restored
     except HubCheckpointError:
         raise
     except Exception as error:
         raise HubCheckpointError("published checkpoint restoration failed") from error
+
+
+def _downloaded_checkpoint_source(
+    downloaded: str | Path,
+    checkpoint: PublishedCheckpoint,
+    temporary: str,
+) -> Path:
+    source = Path(downloaded) / PurePosixPath(
+        checkpoint.prefix,
+        "checkpoints",
+        f"step-{checkpoint.step}",
+    )
+    if not source.is_dir() or not source.is_relative_to(Path(temporary)):
+        raise HubCheckpointError("checkpoint download path is unsafe")
+    return source
+
+
+def _copy_and_validate_checkpoint(
+    source: Path,
+    output: Path,
+    step: int,
+    *,
+    identity: Mapping[str, object],
+) -> CheckpointInfo:
+    destination = output / f"checkpoint-{step}"
+    if destination.exists() or destination.is_symlink():
+        raise HubCheckpointError("checkpoint destination already exists")
+    shutil.copytree(source, destination)
+    restored = find_complete_checkpoint(destination, identity=identity)
+    if restored is None:
+        raise HubCheckpointError("downloaded checkpoint failed validation")
+    return restored
 
 
 __all__ = [
